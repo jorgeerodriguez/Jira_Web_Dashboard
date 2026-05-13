@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jira Morning Report</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Jira Morning Report</h1>
+    <p class="subtitle">Local dashboard scaffold for upcoming Jira metrics.</p>
+
+    <section class="grid" aria-label="Metrics placeholders">
+      <article class="card">
+        <h2>Open Issues</h2>
+        <p id="open-issues">--</p>
+      </article>
+      <article class="card">
+        <h2>Created (24h)</h2>
+        <p id="created-24h">--</p>
+      </article>
+      <article class="card">
+        <h2>Resolved (24h)</h2>
+        <p id="resolved-24h">--</p>
+      </article>
+      <article class="card">
+        <h2>SLA Breaches</h2>
+        <p id="sla-breaches">--</p>
+      </article>
+    </section>
+
+    <p class="note">Next step: wire this page to Jira API data.</p>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
