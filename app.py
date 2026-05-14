@@ -1,3 +1,5 @@
+# Python version 3.15.5
+
 from datetime import date, timedelta, datetime
 import random
 
