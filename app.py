@@ -774,7 +774,7 @@ elif selected == "👤  Distribution per Business Leader":
 # ── Word of the Month ─────────────────────────────────────────────────────────────
 elif selected == "💬  Word of the Month":
     st.title("💬 Word of the Month")
-    st.caption("Trending terms from ticket summaries for the selected month range.")
+    st.caption("Trending terms from ticket summaries and sentiment signals from ticket comments for the selected month range.")
 
     if build_word_of_the_month_visuals is None:
         st.error("word_of_the_month_report module could not be loaded.")
@@ -822,6 +822,12 @@ elif selected == "💬  Word of the Month":
         st.plotly_chart(words["bar_fig"], use_container_width=True)
     with col2:
         st.plotly_chart(words["treemap_fig"], use_container_width=True)
+
+    if words.get("sentiment_fig") is not None:
+        st.plotly_chart(words["sentiment_fig"], use_container_width=True)
+
+    if words.get("wordcloud_fig") is not None:
+        st.pyplot(words["wordcloud_fig"], clear_figure=True, use_container_width=True)
 
     st.subheader(f"🏆 Word of the Month: **{words['top_word'].upper()}**")
     st.caption(f"Appeared {words['top_frequency']} times across ticket summaries in the selected range.")
@@ -916,3 +922,7 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
                     )
                 },
             )
+
+        if sla.get("scatter_fig") is not None:
+            st.subheader("Breached Ticket Distribution by Assignee and Business Lead")
+            st.plotly_chart(sla["scatter_fig"], use_container_width=True)

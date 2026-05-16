@@ -41,6 +41,7 @@ def _empty_payload() -> dict[str, Any]:
         "box_fig": None,
         "heatmap_fig": None,
         "trend_fig": None,
+        "scatter_fig": None,
         "detail_df": pd.DataFrame(),
         "breached_df": pd.DataFrame(),
     }
@@ -144,6 +145,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
     target_end_col = _first_existing_column(df, ["target_end_date", "project_due_date", "Target End Date"])
     key_col = _first_existing_column(df, ["key", "Key", "ticket", "Ticket"])
     summary_col = _first_existing_column(df, ["summary", "Summary"])
+    lead_col = _first_existing_column(df, ["bussiness_lead", "business_lead", "Business Lead"])
 
     # Exclude CAR project tickets from SLA analysis.
     car_mask = pd.Series(False, index=df.index)
@@ -437,6 +439,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
             c for c in [
                 key_col,
                 summary_col,
+                lead_col,
                 "priority_label",
                 "assignee_label",
                 "elapsed_days",
@@ -450,6 +453,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
     breached_df.columns = [
         "Ticket" if c == key_col else
         "Summary" if c == summary_col else
+        "Business Lead" if c == lead_col else
         "Priority" if c == "priority_label" else
         "Assignee" if c == "assignee_label" else
         "Elapsed Days" if c == "elapsed_days" else
@@ -462,6 +466,46 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
         breached_df["Ticket"] = breached_df["Ticket"].astype(str).apply(lambda t: f"{JIRA_BROWSE_BASE_URL}{t}")
     if "Summary" in breached_df.columns:
         breached_df["Summary"] = breached_df["Summary"].fillna("").astype(str).str[:180]
+
+    # Scatter plot at the bottom for breached tickets grouped by assignee and business lead when available.
+    scatter_fig = None
+    if not breached_df.empty:
+        scatter_source = breached_df.copy()
+        if "Business Lead" not in scatter_source.columns:
+            scatter_source["Business Lead"] = "No Business Lead"
+        scatter_source["Business Lead"] = scatter_source["Business Lead"].fillna("No Business Lead").astype(str).str.strip()
+        scatter_source["Assignee"] = scatter_source["Assignee"].fillna("Unassigned").astype(str).str.strip()
+
+        scatter_agg = (
+            scatter_source.groupby(["Assignee", "Business Lead"], as_index=False)
+            .agg(
+                Breached_Tickets=("Ticket", "size"),
+                Avg_Elapsed_Days=("Elapsed Days", "mean"),
+                Avg_Risk_Score=("Risk Score", "mean"),
+                Avg_SLA_Target_Days=("SLA Target Days", "mean"),
+            )
+        )
+
+        scatter_fig = px.scatter(
+            scatter_agg,
+            x="Assignee",
+            y="Business Lead",
+            size="Breached_Tickets",
+            color="Avg_Risk_Score",
+            color_continuous_scale="RdYlGn_r",
+            size_max=34,
+            title="Breached Tickets by Assignee and Business Lead",
+            hover_name="Assignee",
+            hover_data={
+                "Breached_Tickets": True,
+                "Avg_Elapsed_Days": ":.1f",
+                "Avg_SLA_Target_Days": ":.1f",
+                "Avg_Risk_Score": ":.2f",
+                "Business Lead": True,
+            },
+        )
+        scatter_fig.update_layout(height=480, xaxis_title="Assignee", yaxis_title="Business Lead")
+        scatter_fig.update_xaxes(tickangle=45)
 
     return {
         "total_tickets": total_tickets,
@@ -478,6 +522,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
         "box_fig": box_fig,
         "heatmap_fig": heatmap_fig,
         "trend_fig": trend_fig,
+        "scatter_fig": scatter_fig,
         "detail_df": detail_df,
         "breached_df": breached_df,
         "priority_summary_df": priority_summary,
