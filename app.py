@@ -80,9 +80,10 @@ try:
 except ImportError:
     build_word_of_the_month_visuals = None
 try:
-    from service_level_agreement_report import build_sla_visuals
+    from service_level_agreement_report import build_sla_visuals, PRIORITY_SLA_DAYS
 except ImportError:
     build_sla_visuals = None
+    PRIORITY_SLA_DAYS = {}
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -455,13 +456,6 @@ elif selected == "⚡  Velocity":
                 st.plotly_chart(vel["heat_backlog_fig"], use_container_width=True)
 
         st.plotly_chart(vel["compare_fig"], use_container_width=True)
-
-
-# ── In Progress ─────────────────────────────────────────────────────────────────
-elif selected == "🛡️  SLA (Service Level Agreements)":
-    st.title("🛡️ SLA (Service Level Agreements)")
-    st.caption("Track SLA performance, breaches, and at-risk tickets.")
-    _placeholder("SLA (Service Level Agreements)")
 
 
 # ── In Progress ─────────────────────────────────────────────────────────────────
@@ -841,6 +835,29 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
     st.title("🛡️ SLA (Service Level Agreements)")
     st.caption("Priority-based SLA performance for the last 90 days.")
 
+    if PRIORITY_SLA_DAYS:
+        sla_box_html = """
+        <div style="
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 14px;
+            padding: 0.85rem 1rem;
+            background: linear-gradient(180deg, rgba(248,250,252,0.95), rgba(241,245,249,0.95));
+            margin: 0.25rem 0 1rem 0;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+        ">
+            <div style="font-size: 0.92rem; font-weight: 700; color: #0f172a; margin-bottom: 0.35rem;">
+                SLA reference thresholds by priority
+            </div>
+            <div style="font-size: 0.84rem; color: #334155; line-height: 1.55;">
+                All priorities currently use <strong>90 days</strong> as the baseline reference point.<br/>
+                <span style="color:#475569;">
+                    Blocker: 90 · Highest: 90 · Critical: 90 · Urgent: 90 · High: 90 · Medium: 90 · Low: 90 · Lowest: 90
+                </span>
+            </div>
+        </div>
+        """
+        st.markdown(sla_box_html, unsafe_allow_html=True)
+
     if build_sla_visuals is None:
         st.error("service_level_agreement_report module could not be loaded.")
         st.stop()
@@ -874,7 +891,17 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
             st.plotly_chart(sla["trend_fig"], use_container_width=True)
 
         st.subheader("SLA Detail")
-        st.dataframe(sla["detail_df"], use_container_width=True)
+        st.dataframe(
+            sla["detail_df"],
+            use_container_width=True,
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )
 
         if isinstance(sla.get("breached_df"), pd.DataFrame) and not sla["breached_df"].empty:
             st.subheader("Breached Tickets")

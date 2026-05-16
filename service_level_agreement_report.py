@@ -11,16 +11,17 @@ TIME_PERIOD_DAYS = 90
 JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
 
 # Practical PE-team SLA baselines when no ticket-specific deadline exists.
-# These are intentionally conservative so leadership can see risk earlier.
+# All priorities currently use 90 days, but this structure is intentionally
+# kept priority-specific so it can be tuned later without changing the report logic.
 PRIORITY_SLA_DAYS = {
-    "blocker": 1,
-    "highest": 2,
-    "critical": 3,
-    "urgent": 3,
-    "high": 7,
-    "medium": 14,
-    "low": 30,
-    "lowest": 45,
+    "blocker": 90,
+    "highest": 90,
+    "critical": 90,
+    "urgent": 90,
+    "high": 90,
+    "medium": 90,
+    "low": 90,
+    "lowest": 90,
 }
 
 
@@ -85,7 +86,7 @@ def _canonical_priority(value: Any) -> str:
 
 
 def _priority_sla_days(priority: str) -> int:
-    return PRIORITY_SLA_DAYS.get(priority.lower(), 21)
+    return PRIORITY_SLA_DAYS.get(priority.lower(), 90)
 
 
 def _safe_datetime(series: pd.Series) -> pd.Series:
@@ -128,12 +129,37 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
     df["assignee_label"] = df["assignee_name"].apply(lambda x: _normalize_text(x, "Unassigned"))
     df["status_label"] = df["status"].apply(lambda x: _normalize_text(x, "Unknown"))
 
+    allowed_statuses = {
+        "in progress",
+        "on hold",
+        "blocked",
+        "to do",
+        "validating",
+        "tech discovery required",
+    }
+
     created_col = _first_existing_column(df, ["created", "Created"])
     updated_col = _first_existing_column(df, ["updated", "Updated", "last_updated"])
     resolved_col = _first_existing_column(df, ["resolved", "resolutiondate", "resolved_date", "completed_date", "done_date"])
     target_end_col = _first_existing_column(df, ["target_end_date", "project_due_date", "Target End Date"])
     key_col = _first_existing_column(df, ["key", "Key", "ticket", "Ticket"])
     summary_col = _first_existing_column(df, ["summary", "Summary"])
+
+    # Exclude CAR project tickets from SLA analysis.
+    car_mask = pd.Series(False, index=df.index)
+    if "project_name" in df.columns:
+        car_mask = car_mask | df["project_name"].astype(str).str.strip().str.upper().eq("CAR")
+    if "project_key" in df.columns:
+        car_mask = car_mask | df["project_key"].astype(str).str.strip().str.upper().eq("CAR")
+    if key_col is not None:
+        car_mask = car_mask | df[key_col].astype(str).str.strip().str.upper().str.startswith("CAR-")
+    df = df[~car_mask].copy()
+    if df.empty:
+        return _empty_payload()
+
+    df = df[df["status_label"].str.lower().isin(allowed_statuses)].copy()
+    if df.empty:
+        return _empty_payload()
 
     df["created_dt"] = _safe_datetime(df[created_col])
     if updated_col is not None:
@@ -348,8 +374,10 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
     )
     trend_fig.update_layout(height=380, xaxis_title="Week", yaxis_title="Ticket Count", legend_title_text="Metric")
 
-    # Detail table for leadership.
-    detail_df = df[
+    # Detail table for leadership (focus on actionable tickets only).
+    detail_source = df[df["sla_status"].isin(["At Risk", "Breached"])].copy()
+
+    detail_df = detail_source[
         [
             c for c in [
                 key_col,
@@ -389,6 +417,18 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
         detail_df["Ticket"] = detail_df["Ticket"].astype(str).apply(lambda t: f"{JIRA_BROWSE_BASE_URL}{t}")
     if "Summary" in detail_df.columns:
         detail_df["Summary"] = detail_df["Summary"].fillna("").astype(str).str[:180]
+
+    # Keep urgent-first ordering for leadership review.
+    if "SLA Status" in detail_df.columns:
+        status_order_map = {"Breached": 0, "At Risk": 1}
+        detail_df["__status_sort"] = detail_df["SLA Status"].map(status_order_map).fillna(99)
+    else:
+        detail_df["__status_sort"] = 99
+    if "Risk Score" in detail_df.columns:
+        detail_df = detail_df.sort_values(["__status_sort", "Risk Score"], ascending=[True, False])
+    else:
+        detail_df = detail_df.sort_values(["__status_sort"], ascending=[True])
+    detail_df = detail_df.drop(columns=["__status_sort"])
 
     breached_df = df[df["sla_status"] == "Breached"].copy()
     breached_df = breached_df.sort_values(["risk_score", "elapsed_days"], ascending=[False, False])
