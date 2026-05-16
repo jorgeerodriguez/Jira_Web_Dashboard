@@ -62,3 +62,5 @@ Werkzeug==3.1.8
 xgboost==3.2.0
 xlrd==2.0.2
 zipp==3.23.1
+google-cloud-aiplatform==2.0.0
+google-cloud-logging==3.0.0

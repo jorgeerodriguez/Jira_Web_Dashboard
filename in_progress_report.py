@@ -27,13 +27,69 @@ def _empty_payload() -> dict:
 
 
 def _harmonic_estimate(avg_days: float, tickets: int) -> float:
-    if tickets <= 0 or avg_days <= 0:
+    try:
+        avg = float(avg_days)
+    except (TypeError, ValueError):
         return 0.0
-    return sum(avg_days / i for i in range(1, tickets + 1))
+
+    try:
+        total_tickets = int(tickets)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if total_tickets <= 0 or avg <= 0:
+        return 0.0
+
+    tot = 0.0
+    for x in range(1, total_tickets + 1):
+        tot += avg / x
+    return tot
 
 
 def _normalize_assignee(series: pd.Series) -> pd.Series:
     return series.fillna("Unassigned").astype(str).str.strip()
+
+
+def _safe_weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    values = pd.to_numeric(values, errors="coerce")
+    weights = pd.to_numeric(weights, errors="coerce")
+    mask = values.notna() & weights.notna() & (weights > 0)
+    if not mask.any():
+        return 0.0
+
+    values = values[mask]
+    weights = weights[mask]
+    weight_sum = float(weights.sum())
+    if weight_sum <= 0:
+        return 0.0
+    return float((values * weights).sum() / weight_sum)
+
+
+def _project_execution_days(group: pd.DataFrame) -> pd.Series:
+    values = pd.to_numeric(group["execution_days"], errors="coerce").dropna()
+    if values.empty:
+        return pd.Series(
+            {
+                "execution_velocity_value": 0.0,
+                "execution_velocity_weighted": 0.0,
+                "execution_velocity_median": 0.0,
+                "done_ticket_count_90d": 0,
+            }
+        )
+
+    recency_days = pd.to_numeric(group.loc[values.index, "recency_days"], errors="coerce").fillna(0)
+    weights = 1 / (1 + (recency_days / 30.0))
+    weighted_mean = _safe_weighted_mean(values, weights)
+    median_value = float(values.median())
+
+    return pd.Series(
+        {
+            "execution_velocity_value": float(max(median_value, 0.0)),
+            "execution_velocity_weighted": float(max(weighted_mean, 0.0)),
+            "execution_velocity_median": float(max(median_value, 0.0)),
+            "done_ticket_count_90d": int(len(values)),
+        }
+    )
 
 
 def _get_done_window(df: pd.DataFrame) -> pd.DataFrame:
@@ -49,7 +105,7 @@ def _get_done_window(df: pd.DataFrame) -> pd.DataFrame:
                 cutoff = pd.Timestamp.now(tz=date_tz).normalize() - pd.Timedelta(days=TIME_PERIOD_DAYS)
             else:
                 cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=TIME_PERIOD_DAYS)
-            done_df = done_df[done_df[date_col].isna() | (done_df[date_col] >= cutoff)].copy()
+            done_df = done_df[done_df[date_col] >= cutoff].copy()
             break
     return done_df
 
@@ -66,7 +122,7 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     if df_issues is None or df_issues.empty:
         return _empty_payload()
 
-    required = {"status", "assignee_name", "velocity_days", "velocity_backlog_days"}
+    required = {"status", "assignee_name", "velocity_days", "velocity_backlog_days", "issuetype"}
     if not required.issubset(df_issues.columns):
         return _empty_payload()
 
@@ -74,7 +130,7 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     df["assignee_name"] = _normalize_assignee(df["assignee_name"])
     excluded_lower = {x.lower() for x in EXCLUDED_ASSIGNEES}
 
-    in_progress_df = df[df["status"].astype(str).str.lower().eq("in progress")].copy()
+    in_progress_df = df[df["status"].astype(str).str.lower().eq("in progress") & df['issuetype'].astype(str).str.lower().ne('feature')].copy()
     in_progress_df = in_progress_df[~in_progress_df["assignee_name"].str.lower().isin(excluded_lower)].copy()
 
     key_col = _first_existing_column(in_progress_df, ["key", "Key", "ticket", "Ticket"])
@@ -175,105 +231,75 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
         return _empty_payload()
 
     done_df = _get_done_window(df)
-    done_df["velocity_days"] = pd.to_numeric(done_df["velocity_days"], errors="coerce")
-    done_df["velocity_backlog_days"] = pd.to_numeric(done_df["velocity_backlog_days"], errors="coerce")
+    done_df = done_df[~done_df["assignee_name"].str.lower().isin(excluded_lower)].copy()
 
-    priority_col = "priority"
-    if priority_col not in done_df.columns:
-        done_df[priority_col] = "Unknown"
-    done_df[priority_col] = done_df[priority_col].fillna("Unknown").astype(str)
+    expected_start_col = _first_existing_column(
+        done_df,
+        [
+            "planned_start_date",
+            "target_start_date",
+            "expected_start_date",
+            "expected_start",
+            "Expected Start Date",
+            "project_start_date",
+            "start_date",
+            "created",
+        ],
+    )
+    done_updated_col = _first_existing_column(done_df, ["updated", "Updated", "last_updated"])
 
-    backlog_type_df = done_df[done_df["velocity_backlog_days"] > 0][
-        ["assignee_name", priority_col, "velocity_backlog_days"]
-    ].copy()
-    backlog_type_df["velocity_type"] = "* Backlog Velocity"
-    backlog_type_df.rename(columns={"velocity_backlog_days": "velocity_value"}, inplace=True)
+    if expected_start_col is not None and done_updated_col is not None:
+        start_dt = pd.to_datetime(done_df[expected_start_col], errors="coerce", utc=True)
+        end_dt = pd.to_datetime(done_df[done_updated_col], errors="coerce", utc=True)
+        done_df["execution_days"] = (end_dt - start_dt).dt.total_seconds() / 86400.0
+        done_df["execution_days"] = pd.to_numeric(done_df["execution_days"], errors="coerce")
+        done_df = done_df[done_df["execution_days"] >= 0].copy()
+    else:
+        # Fallback for datasets that don't expose expected-start/updated fields.
+        done_df["execution_days"] = pd.to_numeric(done_df["velocity_days"], errors="coerce")
 
-    execution_type_df = done_df[done_df["velocity_days"] > 0][
-        ["assignee_name", priority_col, "velocity_days"]
-    ].copy()
-    execution_type_df["velocity_type"] = "Execution Velocity"
-    execution_type_df.rename(columns={"velocity_days": "velocity_value"}, inplace=True)
+    done_df = done_df[done_df["execution_days"] > 0].copy()
+    done_df["recency_days"] = (
+        pd.Timestamp.now(tz="UTC") - pd.to_datetime(done_df[done_updated_col], errors="coerce", utc=True)
+    ).dt.total_seconds() / 86400.0
+    done_df["recency_days"] = pd.to_numeric(done_df["recency_days"], errors="coerce").fillna(0).clip(lower=0)
 
-    combined_velocity = pd.concat([backlog_type_df, execution_type_df], ignore_index=True)
-    combined_velocity = combined_velocity[
-        ~combined_velocity["assignee_name"].str.lower().isin(excluded_lower)
-    ].copy()
-
-    if combined_velocity.empty:
+    if done_df.empty:
         global_exec_avg = 0.0
-        global_backlog_avg = 0.0
-        velocity_comparison_df = pd.DataFrame(columns=[
+        execution_avg_df = pd.DataFrame(columns=[
             "assignee_name",
-            "backlog_velocity_value",
             "execution_velocity_value",
-            "complexity_days",
+            "execution_velocity_weighted",
+            "execution_velocity_median",
+            "done_ticket_count_90d",
         ])
     else:
-        assignees = sorted(combined_velocity["assignee_name"].dropna().unique().tolist())
-        velocity_types = ["* Backlog Velocity", "Execution Velocity"]
-        priorities = sorted(combined_velocity[priority_col].dropna().unique().tolist())
+        global_stats = _project_execution_days(done_df)
+        global_exec_avg = float(global_stats["execution_velocity_value"])
+        execution_avg_df = done_df.groupby("assignee_name").apply(_project_execution_days).reset_index()
 
-        full_index = pd.MultiIndex.from_product(
-            [assignees, velocity_types, priorities],
-            names=["assignee_name", "velocity_type", priority_col],
-        )
-
-        avg_by_combo = (
-            combined_velocity.groupby(["assignee_name", "velocity_type", priority_col], as_index=False)[
-                "velocity_value"
-            ].mean()
-        )
-        avg_by_combo = avg_by_combo.set_index(["assignee_name", "velocity_type", priority_col]).reindex(full_index).reset_index()
-
-        overall_avg = float(combined_velocity["velocity_value"].mean()) if not combined_velocity.empty else 0.0
-        avg_by_combo["velocity_value"] = avg_by_combo["velocity_value"].fillna(overall_avg)
-
-        summary_by_assignee = (
-            avg_by_combo.groupby(["assignee_name", "velocity_type"], as_index=False)["velocity_value"]
-            .mean()
-        )
-
-        backlog_df = summary_by_assignee[
-            summary_by_assignee["velocity_type"] == "* Backlog Velocity"
-        ][["assignee_name", "velocity_value"]].rename(columns={"velocity_value": "backlog_velocity_value"})
-
-        execution_df = summary_by_assignee[
-            summary_by_assignee["velocity_type"] == "Execution Velocity"
-        ][["assignee_name", "velocity_value"]].rename(columns={"velocity_value": "execution_velocity_value"})
-
-        velocity_comparison_df = pd.merge(backlog_df, execution_df, on="assignee_name", how="outer")
-        velocity_comparison_df["complexity_days"] = (
-            velocity_comparison_df["execution_velocity_value"] - velocity_comparison_df["backlog_velocity_value"]
-        )
-
-        global_exec_avg = float(velocity_comparison_df["execution_velocity_value"].mean())
-        global_backlog_avg = float(velocity_comparison_df["backlog_velocity_value"].mean())
-
-    velocity_comparison_df = backlog_counts.merge(velocity_comparison_df, on="assignee_name", how="left")
+    velocity_comparison_df = backlog_counts.merge(execution_avg_df, on="assignee_name", how="left")
     velocity_comparison_df = velocity_comparison_df.rename(
         columns={"total_tickets_in_progress": "total_tickets_in_backlog"}
     )
     velocity_comparison_df["execution_velocity_value"] = velocity_comparison_df[
         "execution_velocity_value"
     ].fillna(global_exec_avg)
-    velocity_comparison_df["backlog_velocity_value"] = velocity_comparison_df[
-        "backlog_velocity_value"
-    ].fillna(global_backlog_avg)
-    velocity_comparison_df["complexity_days"] = velocity_comparison_df["complexity_days"].fillna(
-        velocity_comparison_df["execution_velocity_value"] - velocity_comparison_df["backlog_velocity_value"]
+    velocity_comparison_df["execution_velocity_weighted"] = velocity_comparison_df[
+        "execution_velocity_weighted"
+    ].fillna(global_exec_avg)
+    velocity_comparison_df["execution_velocity_median"] = velocity_comparison_df[
+        "execution_velocity_median"
+    ].fillna(global_exec_avg)
+    velocity_comparison_df["done_ticket_count_90d"] = (
+        velocity_comparison_df["done_ticket_count_90d"].fillna(0).astype(int)
     )
-    velocity_comparison_df["complexity_days"] = velocity_comparison_df["complexity_days"].abs()
+    velocity_comparison_df["complexity_days"] = velocity_comparison_df["execution_velocity_value"]
 
-    # Iterate through each row
-    for idx, row in velocity_comparison_df.iterrows():
-        if row["total_tickets_in_backlog"] > 0:
-            TOT = 0
-            for x in range(1, int(row["total_tickets_in_backlog"]) + 1):
-                TOT = TOT + row["execution_velocity_value"] / x
-            velocity_comparison_df.at[idx, "estimated_total_velocity_execution_days"] = TOT
-        else:
-            velocity_comparison_df.at[idx, "estimated_total_velocity_execution_days"] = 0
+    # Predicted completion days = in-progress count * individual median execution days from Done tickets.
+    velocity_comparison_df["estimated_total_velocity_execution_days"] = (
+        velocity_comparison_df["total_tickets_in_backlog"] * velocity_comparison_df["execution_velocity_value"]
+    )
 
     velocity_comparison_df["average_total_velocity_backlog_days"] = velocity_comparison_df[
         "estimated_total_velocity_execution_days"
@@ -292,20 +318,25 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
             return "Low"
         return "None"
 
-    summary["load_bucket"] = summary["complexity_days"].apply(load_bucket)
-    summary["estimated_total_days_detail"] = (
-        summary["total_tickets_in_progress"] * summary["complexity_days"]
-    )
-    summary = summary.sort_values("complexity_days", ascending=False)
+    summary["load_bucket"] = summary["average_total_velocity_backlog_days"].apply(load_bucket)
+    summary["estimated_total_days_detail"] = summary["average_total_velocity_backlog_days"]
+    summary = summary.sort_values("average_total_velocity_backlog_days", ascending=False)
 
     load_fig = px.bar(
         summary,
         y="assignee_name",
-        x="complexity_days",
+        x="average_total_velocity_backlog_days",
         color="load_bucket",
         orientation="h",
-        title="Complexity Days by Assignee",
-        hover_data=["total_tickets_in_progress", "execution_velocity_value", "average_total_velocity_backlog_days"],
+        title="Estimated Completion Days by Assignee",
+        hover_data=[
+            "total_tickets_in_progress",
+            "execution_velocity_value",
+            "execution_velocity_weighted",
+            "execution_velocity_median",
+            "done_ticket_count_90d",
+            "average_total_velocity_backlog_days",
+        ],
         color_discrete_map={
             "Critical": "#dc2626",
             "High": "#f97316",
@@ -314,20 +345,26 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
             "None": "#94a3b8",
         },
     )
-    load_fig.update_layout(height=460, xaxis_title="Complexity Days", yaxis_title="Assignee")
+    load_fig.update_layout(height=460, xaxis_title="Estimated Total Days", yaxis_title="Assignee")
 
     scatter_fig = px.scatter(
         summary,
         x="total_tickets_in_progress",
-        y="complexity_days",
+        y="average_total_velocity_backlog_days",
         size="average_total_velocity_backlog_days",
         color="average_total_velocity_backlog_days",
         color_continuous_scale="RdYlGn_r",
         hover_name="assignee_name",
-        hover_data=["execution_velocity_value", "backlog_velocity_value", "average_total_velocity_backlog_days"],
-        title="In Progress Size vs Complexity Days",
+        hover_data=[
+            "execution_velocity_value",
+            "execution_velocity_weighted",
+            "execution_velocity_median",
+            "done_ticket_count_90d",
+            "average_total_velocity_backlog_days",
+        ],
+        title="In Progress Size vs Estimated Completion Days",
     )
-    scatter_fig.update_layout(height=380, xaxis_title="In Progress Tickets", yaxis_title="Complexity Days")
+    scatter_fig.update_layout(height=380, xaxis_title="In Progress Tickets", yaxis_title="Estimated Total Days")
 
     dist = (
         summary["load_bucket"]
@@ -356,21 +393,27 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
         [
             "assignee_name",
             "total_tickets_in_progress",
-            "complexity_days",
+            "execution_velocity_weighted",
+            "execution_velocity_median",
+            "execution_velocity_value",
+            "average_total_velocity_backlog_days",
             "load_bucket",
         ]
     ].copy()
     detail_df.columns = [
         "Assignee",
         "In Progress",
-        "Complexity Days",
+        "Weighted Avg Execution Days",
+        "Median Execution Days",
+        "Avg Execution Days (90d)",
+        "Estimated Total Days",
         "Load",
     ]
 
     return {
         "total_in_progress": int(summary["total_tickets_in_progress"].sum()),
         "total_estimated_days": float(summary["average_total_velocity_backlog_days"].sum()),
-        "avg_velocity": float(summary["complexity_days"].mean()),
+        "avg_velocity": float(summary["execution_velocity_value"].mean()),
         "critical_assignees": int((summary["average_total_velocity_backlog_days"] > 90).sum()),
         "load_fig": load_fig,
         "scatter_fig": scatter_fig,
