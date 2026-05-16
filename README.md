@@ -7,10 +7,29 @@ This dashboard now uses **Python + Streamlit** instead of static HTML/JS.
 From project root:
 
 ```bash
-.venv/bin/python -m streamlit run jira_morning_report_site/app.py
+.venv/bin/python -m streamlit run app.py
 ```
 
 Then open: http://localhost:8501
+
+## Jira credentials (publish-ready)
+
+Use one of these options (in priority order):
+
+1. **Streamlit secrets**: `.streamlit/secrets.toml`
+2. **Environment variables / `.env`**
+3. **`config.json` fallback** (legacy, local only)
+
+Required values:
+
+- `jira_server`
+- `jira_email`
+- `jira_api_token`
+
+Templates are included:
+
+- `.streamlit/secrets.toml.example`
+- `.env.example`
 
 ## Where to add Jira logic
 

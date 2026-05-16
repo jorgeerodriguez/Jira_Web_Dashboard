@@ -2,8 +2,10 @@ import sys
 
 try:
     from Load_Configuration import load_config
+    from Load_Configuration import load_config_details
 except ModuleNotFoundError:
     from jira_morning_report_site.Load_Configuration import load_config
+    from jira_morning_report_site.Load_Configuration import load_config_details
 
 
 def validate_jira_connection():
@@ -18,9 +20,15 @@ def validate_jira_connection():
     except ModuleNotFoundError:
         return 1, "Missing dependency: jira. Install with: pip install jira", None
 
-    config = load_config()
+    config_details = load_config_details()
+    config = config_details.get("config")
+    source = config_details.get("source")
     if config is None:
-        return 1, "Configuration load failed. Please fix config.json and retry.", None
+        return (
+            1,
+            "Configuration load failed. Set Jira credentials in Streamlit secrets or .env (config.json is fallback only).",
+            None,
+        )
 
     jira_server = config.get("jira_server")
     jira_email = config.get("jira_email")
@@ -37,11 +45,11 @@ def validate_jira_connection():
     try:
         if auth_type == "pat":
             jira = JIRA(options=jira_options, basic_auth=(jira_email, jira_token))
-            return 0, f"Successfully connected to Jira at {jira_server} using Personal Access Token.", jira
+            return 0, f"Successfully connected to Jira at {jira_server} using Personal Access Token ({source}).", jira
 
         if auth_type == "basic":
             jira = JIRA(options=jira_options, basic_auth=(jira_username, jira_password))
-            return 0, f"Successfully connected to Jira at {jira_server} using Basic Authentication.", jira
+            return 0, f"Successfully connected to Jira at {jira_server} using Basic Authentication ({source}).", jira
         
         return 1, f"Invalid authentication type selected: {auth_type}", None
     except Exception as err:
