@@ -158,6 +158,8 @@ env.bak/
 venv.bak/
 config.json
 config*.*
+secrets*.*
+
 
 
 # Spyder project settings

@@ -12,11 +12,6 @@ import streamlit as st
 from metrics import load_metrics
 
 try:
-    from Load_Configuration import load_config_details
-except ModuleNotFoundError:
-    from jira_morning_report_site.Load_Configuration import load_config_details
-
-try:
     from validate_and_connect_to_jira import validate_jira_connection
 except ModuleNotFoundError:
     from jira_morning_report_site.validate_and_connect_to_jira import validate_jira_connection
@@ -118,37 +113,6 @@ with st.sidebar:
     st.title("📊 PE Morning Report")
     st.caption("Platform Engineering · Jira Dashboard")
     st.divider()
-
-    cfg_details = load_config_details()
-    cfg_source = cfg_details.get("source")
-    source_label = {
-        "streamlit_secrets": "Streamlit secrets",
-        "environment": ".env / environment variables",
-        "config_json": "config.json (legacy fallback)",
-    }
-
-    if cfg_source:
-        if cfg_source == "config_json":
-            st.warning("⚠️ Credentials loaded from config.json. For publishing, move them to Streamlit secrets or .env.")
-        else:
-            st.caption(f"🔐 Jira credentials source: **{source_label.get(cfg_source, cfg_source)}**")
-    else:
-        st.error("❌ Jira credentials not found. Configure Streamlit secrets or .env before publishing.")
-
-    with st.expander("Credential setup (publish-ready)"):
-        st.markdown(
-            """
-            **Recommended order**
-            1. `.streamlit/secrets.toml`
-            2. `.env` (or environment variables)
-            3. `config.json` (local fallback only)
-
-            Required keys:
-            - `jira_server`
-            - `jira_email`
-            - `jira_api_token`
-            """
-        )
 
     # Jira connection controls
     validate_color = (
