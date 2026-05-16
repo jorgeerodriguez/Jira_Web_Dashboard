@@ -18,9 +18,11 @@ def _empty_payload() -> dict:
         "total_estimated_days": 0.0,
         "avg_velocity": 0.0,
         "critical_assignees": 0,
+        "missing_target_end_dates": 0,
         "load_fig": None,
         "scatter_fig": None,
         "distribution_fig": None,
+        "target_timeline_fig": None,
         "detail_df": pd.DataFrame(),
         "tickets_df": pd.DataFrame(),
     }
@@ -389,6 +391,70 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     )
     distribution_fig.update_layout(height=380)
 
+    target_timeline_df = in_progress_df[[target_end_select_col, key_col]].copy()
+    target_timeline_df["target_end_dt"] = pd.to_datetime(target_timeline_df[target_end_select_col], errors="coerce")
+
+    missing_target_end_dates = int(target_timeline_df["target_end_dt"].isna().sum())
+    target_timeline_fig = None
+
+    valid_timeline_df = target_timeline_df[target_timeline_df["target_end_dt"].notna()].copy()
+    if not valid_timeline_df.empty:
+        valid_timeline_df["days_to_target"] = (
+            valid_timeline_df["target_end_dt"].dt.date.apply(lambda d: (d - today_date_only).days)
+        )
+
+        def due_bucket(days_to_target: int) -> str:
+            if days_to_target < 0:
+                return "Overdue"
+            if days_to_target <= 14:
+                return "Due in 14 Days"
+            if days_to_target <= 30:
+                return "Due in 30 Days"
+            return "Due Later"
+
+        valid_timeline_df["Due Bucket"] = valid_timeline_df["days_to_target"].apply(due_bucket)
+
+        target_timeline_fig = px.histogram(
+            valid_timeline_df,
+            x="target_end_dt",
+            color="Due Bucket",
+            nbins=max(8, min(36, int(valid_timeline_df["target_end_dt"].nunique()))),
+            title="In Progress Ticket Distribution Over Time (Target End Date)",
+            labels={"target_end_dt": "Target End Date", "count": "Tickets"},
+            color_discrete_map={
+                "Overdue": "#dc2626",
+                "Due in 14 Days": "#f97316",
+                "Due in 30 Days": "#facc15",
+                "Due Later": "#16a34a",
+            },
+        )
+        today_x = pd.Timestamp(today_date_only).strftime("%Y-%m-%d")
+        target_timeline_fig.add_vline(
+            x=today_x,
+            line_width=2,
+            line_dash="dash",
+            line_color="#334155",
+        )
+        target_timeline_fig.add_annotation(
+            x=today_x,
+            y=1,
+            xref="x",
+            yref="paper",
+            text="Today",
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"color": "#334155"},
+        )
+        target_timeline_fig.update_layout(
+            barmode="stack",
+            height=420,
+            xaxis_title="Target End Date",
+            yaxis_title="Ticket Count",
+            legend_title="Due Bucket",
+        )
+        target_timeline_fig.update_xaxes(rangeslider_visible=True)
+
     detail_df = summary[
         [
             "assignee_name",
@@ -415,9 +481,11 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
         "total_estimated_days": float(summary["average_total_velocity_backlog_days"].sum()),
         "avg_velocity": float(summary["execution_velocity_value"].mean()),
         "critical_assignees": int((summary["average_total_velocity_backlog_days"] > 90).sum()),
+        "missing_target_end_dates": missing_target_end_dates,
         "load_fig": load_fig,
         "scatter_fig": scatter_fig,
         "distribution_fig": distribution_fig,
+        "target_timeline_fig": target_timeline_fig,
         "detail_df": detail_df,
         "tickets_df": tickets_df,
     }

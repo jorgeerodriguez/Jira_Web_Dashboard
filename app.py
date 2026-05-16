@@ -79,6 +79,10 @@ try:
     from word_of_the_month_report import build_word_of_the_month_visuals
 except ImportError:
     build_word_of_the_month_visuals = None
+try:
+    from service_level_agreement_report import build_sla_visuals
+except ImportError:
+    build_sla_visuals = None
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -209,6 +213,7 @@ with st.sidebar:
         "📊  Distribution of Ticket's Age",
         "👤  Distribution per Business Leader",
         "💬  Word of the Month",
+        "🛡️  SLA (Service Level Agreements)",
     ]
 
     selected = st.radio(
@@ -453,6 +458,13 @@ elif selected == "⚡  Velocity":
 
 
 # ── In Progress ─────────────────────────────────────────────────────────────────
+elif selected == "🛡️  SLA (Service Level Agreements)":
+    st.title("🛡️ SLA (Service Level Agreements)")
+    st.caption("Track SLA performance, breaches, and at-risk tickets.")
+    _placeholder("SLA (Service Level Agreements)")
+
+
+# ── In Progress ─────────────────────────────────────────────────────────────────
 elif selected == "🔄  In Progress":
     st.title("🔄 In Progress")
     st.caption("Leadership view of current in-progress workload and estimated completion effort.")
@@ -463,11 +475,12 @@ elif selected == "🔄  In Progress":
     if ip["load_fig"] is None:
         st.info("📥 Fetch Jira tickets from the sidebar to see In Progress visuals.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total In Progress", f"{ip['total_in_progress']:,}")
         c2.metric("Estimated Total Days", f"{ip['total_estimated_days']:.0f}")
         c3.metric("Avg Days / Ticket", f"{ip['avg_velocity']:.1f}")
         c4.metric("Critical Assignees", f"{ip['critical_assignees']}")
+        c5.metric("Missing Target End Date", f"{ip['missing_target_end_dates']}")
 
         st.divider()
         st.plotly_chart(ip["load_fig"], use_container_width=True)
@@ -477,6 +490,10 @@ elif selected == "🔄  In Progress":
             st.plotly_chart(ip["scatter_fig"], use_container_width=True)
         with col2:
             st.plotly_chart(ip["distribution_fig"], use_container_width=True)
+
+        if ip.get("target_timeline_fig") is not None:
+            st.subheader("Target End Date Timeline")
+            st.plotly_chart(ip["target_timeline_fig"], use_container_width=True)
 
         st.subheader("In Progress Workload Detail")
         st.dataframe(ip["detail_df"], use_container_width=True)
@@ -817,3 +834,58 @@ elif selected == "💬  Word of the Month":
 
     with st.expander("View summary table"):
         st.dataframe(words["summary_df"], use_container_width=True)
+
+
+# ── SLA ─────────────────────────────────────────────────────────────────────────
+elif selected == "🛡️  SLA (Service Level Agreements)":
+    st.title("🛡️ SLA (Service Level Agreements)")
+    st.caption("Priority-based SLA performance for the last 90 days.")
+
+    if build_sla_visuals is None:
+        st.error("service_level_agreement_report module could not be loaded.")
+        st.stop()
+
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    sla = build_sla_visuals(df_issues, time_period_days=90)
+
+    if sla["status_fig"] is None:
+        st.info("📥 Fetch Jira tickets from the sidebar to see SLA visuals.")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tickets in SLA Window", f"{sla['total_tickets']:,}")
+        c2.metric("Breach Rate", f"{sla['breach_rate']:.1f}%")
+        c3.metric("At Risk", f"{sla['at_risk']:,}")
+        c4.metric("Median Elapsed Days", f"{sla['median_elapsed_days']:.1f}")
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.plotly_chart(sla["status_fig"], use_container_width=True)
+        with col2:
+            st.plotly_chart(sla["priority_fig"], use_container_width=True)
+
+        st.plotly_chart(sla["box_fig"], use_container_width=True)
+
+        col3, col4 = st.columns(2)
+        with col3:
+            st.plotly_chart(sla["heatmap_fig"], use_container_width=True)
+        with col4:
+            st.plotly_chart(sla["trend_fig"], use_container_width=True)
+
+        st.subheader("SLA Detail")
+        st.dataframe(sla["detail_df"], use_container_width=True)
+
+        if isinstance(sla.get("breached_df"), pd.DataFrame) and not sla["breached_df"].empty:
+            st.subheader("Breached Tickets")
+            st.dataframe(
+                sla["breached_df"],
+                use_container_width=True,
+                column_config={
+                    "Ticket": st.column_config.LinkColumn(
+                        "Ticket",
+                        help="Open Jira ticket",
+                        display_text=r".*/([^/]+)$",
+                    )
+                },
+            )
