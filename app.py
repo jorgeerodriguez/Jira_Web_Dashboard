@@ -148,7 +148,7 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state["jira_validation_code"] == 0:
-        st.caption(f"✅ {st.session_state['jira_validation_message']}")
+        st.caption("✅ Jira connection validated successfully.")
     elif st.session_state["jira_validation_code"] == 1:
         st.caption(f"❌ {st.session_state['jira_validation_message']}")
 
