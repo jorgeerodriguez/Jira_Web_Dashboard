@@ -159,6 +159,8 @@ venv.bak/
 config.json
 config*.*
 secrets*.*
+./backup/*.*
+/backup/
 
 
 
