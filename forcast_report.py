@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 
 def mean_absolute_error(y_true, y_pred):
@@ -63,6 +64,235 @@ def _forecast_future(model, initial_data, steps: int) -> list:
     return future_values
 
 
+def _build_supervised_ts_features(series: pd.Series, lags: int = 6) -> pd.DataFrame:
+    df = pd.DataFrame({"y": series.astype(float)})
+    for lag in range(1, lags + 1):
+        df[f"lag_{lag}"] = df["y"].shift(lag)
+
+    idx = pd.to_datetime(df.index)
+    month_angle = 2 * np.pi * idx.month / 12.0
+    df["month_sin"] = np.sin(month_angle)
+    df["month_cos"] = np.cos(month_angle)
+    df["trend"] = np.arange(len(df), dtype=float)
+    df = df.dropna()
+    return df
+
+
+def _recursive_ts_forecast(model, history: list[float], start_date: pd.Timestamp, periods: int, lags: int = 6) -> np.ndarray:
+    preds = []
+    hist = list(history)
+
+    for step in range(1, periods + 1):
+        forecast_date = start_date + pd.DateOffset(months=step)
+        month_angle = 2 * np.pi * forecast_date.month / 12.0
+        row = {f"lag_{i}": hist[-i] for i in range(1, lags + 1)}
+        row["month_sin"] = float(np.sin(month_angle))
+        row["month_cos"] = float(np.cos(month_angle))
+        row["trend"] = float(len(hist))
+        x = pd.DataFrame([row])
+        pred = float(model.predict(x)[0])
+        pred = max(pred, 0.0)
+        preds.append(pred)
+        hist.append(pred)
+
+    return np.array(preds, dtype=float)
+
+
+def _build_ml_comparison_visuals(all_data: pd.DataFrame, periods: int) -> dict:
+    payload = {
+        "ml_comparison_fig": None,
+        "ml_future_fig": None,
+        "ml_best_model": None,
+        "ml_best_mae": None,
+        "ml_error": None,
+    }
+
+    series = (
+        all_data.set_index("date")["completed"]
+        .sort_index()
+        .astype(float)
+        .clip(lower=0)
+    )
+
+    lags = 6
+    if len(series) < lags + 8:
+        payload["ml_error"] = "Need more monthly history for advanced ML model comparison."
+        return payload
+
+    supervised = _build_supervised_ts_features(series, lags=lags)
+    if len(supervised) < 8:
+        payload["ml_error"] = "Not enough data after lag feature creation for advanced ML comparison."
+        return payload
+
+    split_idx = max(int(len(supervised) * 0.8), 6)
+    split_idx = min(split_idx, len(supervised) - 2)
+    if split_idx <= 0:
+        payload["ml_error"] = "Not enough data to create train/test windows for advanced ML comparison."
+        return payload
+
+    train_df = supervised.iloc[:split_idx]
+    test_df = supervised.iloc[split_idx:]
+
+    feature_cols = [c for c in supervised.columns if c != "y"]
+    X_train, y_train = train_df[feature_cols], train_df["y"]
+    X_test, y_test = test_df[feature_cols], test_df["y"]
+
+    models = {
+        "XGBoost (Lag+Seasonality)": XGBRegressor(
+            objective="reg:squarederror",
+            n_estimators=400,
+            max_depth=3,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+        ),
+        "Random Forest (Lag+Seasonality)": RandomForestRegressor(
+            n_estimators=500,
+            random_state=42,
+        ),
+    }
+
+    eval_rows = []
+    backtest_preds = {}
+    fitted_models = {}
+
+    for model_name, model in models.items():
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        backtest_preds[model_name] = preds
+        eval_rows.append(
+            {
+                "model": model_name,
+                "mae": mean_absolute_error(y_test, preds),
+                "mse": mean_squared_error(y_test, preds),
+            }
+        )
+
+        # Refit on full history for future projection.
+        model.fit(supervised[feature_cols], supervised["y"])
+        fitted_models[model_name] = model
+
+    eval_df = pd.DataFrame(eval_rows).sort_values("mae")
+    best_model_name = str(eval_df.iloc[0]["model"])
+    best_mae = float(eval_df.iloc[0]["mae"])
+
+    # Backtest comparison figure
+    comparison_fig = go.Figure()
+    comparison_fig.add_trace(
+        go.Scatter(
+            x=y_test.index,
+            y=y_test.values,
+            mode="lines+markers",
+            name="Actual",
+            line=dict(color="#2563eb", width=2.5),
+        )
+    )
+
+    color_map = {
+        "XGBoost (Lag+Seasonality)": "#16a34a",
+        "Random Forest (Lag+Seasonality)": "#f97316",
+    }
+    for model_name, preds in backtest_preds.items():
+        comparison_fig.add_trace(
+            go.Scatter(
+                x=y_test.index,
+                y=preds,
+                mode="lines+markers",
+                name=model_name,
+                line=dict(color=color_map.get(model_name, "#64748b"), dash="dot", width=2),
+            )
+        )
+
+    comparison_fig.update_layout(
+        title="Advanced ML Backtest Comparison (Completed Tickets)",
+        xaxis_title="Month",
+        yaxis_title="Tickets Completed",
+        height=420,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    # Future projections by model + ensemble
+    future_index = pd.date_range(start=series.index[-1] + pd.DateOffset(months=1), periods=periods, freq="MS")
+    future_preds = {}
+    history_values = series.values.tolist()
+
+    for model_name, fitted in fitted_models.items():
+        future_preds[model_name] = _recursive_ts_forecast(
+            fitted,
+            history=history_values,
+            start_date=series.index[-1],
+            periods=periods,
+            lags=lags,
+        )
+
+    pred_stack = np.vstack([v for v in future_preds.values()])
+    ensemble_pred = np.mean(pred_stack, axis=0)
+
+    ml_future_fig = go.Figure()
+    hist_tail = series.tail(min(18, len(series)))
+    ml_future_fig.add_trace(
+        go.Scatter(
+            x=hist_tail.index,
+            y=hist_tail.values,
+            mode="lines+markers",
+            name="Historical Completed",
+            line=dict(color="#1d4ed8", width=2.5),
+        )
+    )
+
+    for model_name, preds in future_preds.items():
+        ml_future_fig.add_trace(
+            go.Scatter(
+                x=future_index,
+                y=preds,
+                mode="lines+markers",
+                name=model_name,
+                line=dict(color=color_map.get(model_name, "#64748b"), width=2, dash="dot"),
+            )
+        )
+
+    lower = np.maximum(ensemble_pred - best_mae, 0)
+    upper = ensemble_pred + best_mae
+    ml_future_fig.add_trace(
+        go.Scatter(
+            x=list(future_index) + list(future_index[::-1]),
+            y=list(upper) + list(lower[::-1]),
+            fill="toself",
+            fillcolor="rgba(249,115,22,0.12)",
+            line=dict(color="rgba(255,255,255,0)"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    ml_future_fig.add_trace(
+        go.Scatter(
+            x=future_index,
+            y=ensemble_pred,
+            mode="lines+markers",
+            name="Ensemble Forecast",
+            line=dict(color="#ea580c", width=3),
+            marker=dict(size=8, symbol="diamond"),
+        )
+    )
+
+    ml_future_fig.update_layout(
+        title=f"Advanced Forecast (Best MAE: {best_mae:.1f}, Best Model: {best_model_name})",
+        xaxis_title="Month",
+        yaxis_title="Tickets Completed",
+        height=460,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    payload["ml_comparison_fig"] = comparison_fig
+    payload["ml_future_fig"] = ml_future_fig
+    payload["ml_best_model"] = best_model_name
+    payload["ml_best_mae"] = best_mae
+    return payload
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def build_forecast_visuals(df_issues: pd.DataFrame, periods: int = 4) -> dict:
@@ -89,6 +319,11 @@ def build_forecast_visuals(df_issues: pd.DataFrame, periods: int = 4) -> dict:
         "future_low": None,
         "future_mid": None,
         "future_high": None,
+        "ml_comparison_fig": None,
+        "ml_future_fig": None,
+        "ml_best_model": None,
+        "ml_best_mae": None,
+        "ml_error": None,
         "error_message": None,
     }
 
@@ -279,15 +514,24 @@ def build_forecast_visuals(df_issues: pd.DataFrame, periods: int = 4) -> dict:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
 
-    return {
+    ml_payload = _build_ml_comparison_visuals(all_data.reset_index(), periods=periods)
+
+    result = {
         "forecast_fig": fig,
         "mse": mse,
         "mae": mae,
         "future_low": future_low,
         "future_mid": future_mid,
         "future_high": future_high,
+        "ml_comparison_fig": ml_payload["ml_comparison_fig"],
+        "ml_future_fig": ml_payload["ml_future_fig"],
+        "ml_best_model": ml_payload["ml_best_model"],
+        "ml_best_mae": ml_payload["ml_best_mae"],
+        "ml_error": ml_payload["ml_error"],
         "error_message": None,
     }
+
+    return result
 
 
 

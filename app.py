@@ -631,7 +631,7 @@ elif selected == "🗂️  Backlog":
 # ── Forecast ─────────────────────────────────────────────────────────────────────
 elif selected == "🔮  Forecast":
     st.title("🔮 Forecast")
-    st.caption("XGBoost model trained on historical ticket completion data to project future throughput.")
+    st.caption("XGBoost baseline plus advanced lag+seasonality ML forecasting to project future throughput.")
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     if df_issues is None or (isinstance(df_issues, pd.DataFrame) and df_issues.empty):
@@ -676,6 +676,22 @@ elif selected == "🔮  Forecast":
                 "🟦 Actual · 🟢 Model on test data (dotted) · 🟠 Future forecast · "
                 "Shaded band = ±MAE confidence interval"
             )
+
+            st.divider()
+            st.subheader("Advanced Forecasting (Model Comparison)")
+
+            if fc.get("ml_error"):
+                st.info(f"ℹ️ {fc['ml_error']}")
+            else:
+                a1, a2 = st.columns(2)
+                a1.metric("Best Advanced Model", fc.get("ml_best_model", "N/A"))
+                a2.metric("Best Advanced MAE", f"{fc.get('ml_best_mae', 0):.1f} tickets")
+
+                if fc.get("ml_comparison_fig") is not None:
+                    st.plotly_chart(fc["ml_comparison_fig"], use_container_width=True)
+
+                if fc.get("ml_future_fig") is not None:
+                    st.plotly_chart(fc["ml_future_fig"], use_container_width=True)
 
 
 # ── Distribution of Ticket's Age ─────────────────────────────────────────────────
