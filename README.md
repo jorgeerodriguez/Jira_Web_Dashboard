@@ -12,6 +12,28 @@ From project root:
 
 Then open: http://localhost:8501
 
+## Run locally with Docker
+
+Build the image from the project root:
+
+```bash
+docker build -t jira-web-dashboard:local .
+```
+
+Run the container with your local environment file:
+
+```bash
+docker run --rm -p 8501:8080 --env-file .env jira-web-dashboard:local
+```
+
+Then open: http://localhost:8501
+
+Notes:
+
+- The container listens on port `8080` internally.
+- Keep secrets out of the image. Use `.env`, Docker `-e`, or Streamlit secrets mounted at runtime.
+- `config.json` and `.streamlit/secrets.toml` are excluded from the image build context.
+
 ## Jira credentials (publish-ready)
 
 Use one of these options (in priority order):
