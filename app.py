@@ -84,6 +84,18 @@ try:
 except ImportError:
     build_sla_visuals = None
     PRIORITY_SLA_DAYS = {}
+try:
+    from probability_completion_report import (
+        build_completion_on_time_model,
+        predict_completion_probability,
+        build_probability_curve,
+        build_probability_training_detail_table,
+    )
+except ImportError:
+    build_completion_on_time_model = None
+    predict_completion_probability = None
+    build_probability_curve = None
+    build_probability_training_detail_table = None
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -215,6 +227,7 @@ with st.sidebar:
         "👤  Distribution per Business Leader",
         "💬  Word of the Month",
         "🛡️  SLA (Service Level Agreements)",
+        "🎯  Probability of completion on time",
     ]
 
     selected = st.radio(
@@ -942,3 +955,141 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         if sla.get("scatter_fig") is not None:
             st.subheader("Breached Ticket Distribution by Assignee and Business Lead")
             st.plotly_chart(sla["scatter_fig"], use_container_width=True)
+
+
+# ── Probability of completion on time ─────────────────────────────────────────
+elif selected == "🎯  Probability of completion on time":
+    st.title("🎯 Probability of completion on time")
+    st.caption(
+        "AI/ML prediction using a tree-based classifier trained on the last 90 days, "
+        "assignee velocity by priority, and backlog pressure signals."
+    )
+
+    if (
+        build_completion_on_time_model is None
+        or predict_completion_probability is None
+        or build_probability_curve is None
+        or build_probability_training_detail_table is None
+    ):
+        st.error("probability_completion_report module could not be loaded.")
+        st.stop()
+
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    if df_issues is None or (isinstance(df_issues, pd.DataFrame) and df_issues.empty):
+        st.info("📥 Fetch Jira tickets from the sidebar to run on-time completion probability.")
+        st.stop()
+
+    with st.spinner("Training model using last 90 days of Done tickets and backlog signals…"):
+        prob_payload = build_completion_on_time_model(df_issues, lookback_days=90)
+
+    if prob_payload.get("error_message"):
+        st.warning(f"⚠️ {prob_payload['error_message']}")
+        st.stop()
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Training rows (last 90d)", f"{prob_payload['training_rows']:,}")
+    k2.metric("Historical on-time rate", f"{prob_payload['on_time_rate'] * 100:.1f}%")
+    k3.metric("Training accuracy", f"{prob_payload['training_accuracy'] * 100:.1f}%")
+
+    if prob_payload.get("model_name"):
+        st.caption(f"Selected model: {prob_payload['model_name']}")
+
+    if prob_payload.get("accuracy_target_met"):
+        st.success("Training accuracy target met (≥ 90%).")
+    else:
+        st.info("Training accuracy target of 90% was not reached; the app is using the best available fitted model.")
+
+    pr_col, as_col, dt_col = st.columns(3)
+    with pr_col:
+        priority_value = st.selectbox(
+            "Priority",
+            options=prob_payload["priority_options"],
+            index=0 if prob_payload["priority_options"] else None,
+        )
+    with as_col:
+        assignee_value = st.selectbox(
+            "Assignee",
+            options=prob_payload["assignee_options"],
+            index=0 if prob_payload["assignee_options"] else None,
+        )
+    with dt_col:
+        expected_date = st.date_input(
+            "Expected completion date",
+            value=date.today() + timedelta(days=30),
+            min_value=date.today(),
+        )
+
+    if not priority_value or not assignee_value:
+        st.info("Select a priority and assignee to score completion probability.")
+        st.stop()
+
+    prediction = predict_completion_probability(
+        prob_payload["model_bundle"],
+        priority_value=priority_value,
+        assignee_value=assignee_value,
+        expected_completion_date=expected_date,
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("On-time Probability", f"{prediction['probability'] * 100:.1f}%")
+    c2.metric("Confidence Band", prediction["risk_band"])
+    c3.metric("Days Until Target", f"{prediction['budget_days']}")
+
+    g1, g2 = st.columns([1, 2])
+    with g1:
+        st.plotly_chart(prediction["gauge_fig"], use_container_width=True)
+    with g2:
+        curve_fig = build_probability_curve(
+            prob_payload["model_bundle"],
+            priority_value=priority_value,
+            assignee_value=assignee_value,
+            start_date=date.today(),
+            horizon_days=120,
+        )
+        st.plotly_chart(curve_fig, use_container_width=True)
+
+    with st.expander("Model feature snapshot"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Priority": priority_value,
+                        "Assignee": assignee_value,
+                        "Expected Completion Date": expected_date,
+                        "Assignee Velocity (90d)": round(prediction["assignee_velocity_90"], 2),
+                        "Priority Velocity (90d)": round(prediction["priority_velocity_90"], 2),
+                        "Assignee Historical On-Time Rate": f"{prediction['assignee_on_time_rate_90'] * 100:.1f}%",
+                        "Priority Historical On-Time Rate": f"{prediction['priority_on_time_rate_90'] * 100:.1f}%",
+                        "Assignee Open Backlog": int(prediction["assignee_backlog_open"]),
+                        "Assignee Priority Backlog": int(prediction["assignee_priority_backlog"]),
+                    }
+                ]
+            ),
+            use_container_width=True,
+        )
+
+    st.subheader("Learning Opportunities from Recent Completed Tickets")
+    st.caption(
+        "Done tickets from the last 90 days for the selected assignee, using Updated date as Completed Date."
+    )
+
+    detail_df = build_probability_training_detail_table(
+        df_issues,
+        lookback_days=90,
+        assignee_filter=assignee_value,
+    )
+
+    if detail_df.empty:
+        st.info("No qualifying Done tickets found for the selected assignee in the last 90 days.")
+    else:
+        st.dataframe(
+            detail_df,
+            use_container_width=True,
+            column_config={
+                "Ticket No": st.column_config.LinkColumn(
+                    "Ticket No",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )

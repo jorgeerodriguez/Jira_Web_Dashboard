@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+from datetime import date
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
+try:
+    from velocity_report import PE_TEAM_MEMBERS
+except ModuleNotFoundError:
+    from jira_morning_report_site.velocity_report import PE_TEAM_MEMBERS
+
+
+_DONE_STATUSES = {"Done", "Closed", "Resolved"}
+JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
+
+
+def _empty_payload() -> dict:
+    return {
+        "model_bundle": None,
+        "priority_options": [],
+        "assignee_options": [],
+        "training_rows": 0,
+        "training_accuracy": None,
+        "accuracy_target_met": False,
+        "model_name": None,
+        "on_time_rate": None,
+        "error_message": None,
+    }
+
+
+def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            return col
+
+    # Fuzzy fallback for variations in case, spacing, underscores, and dashes.
+    def _norm(v: str) -> str:
+        return str(v).strip().casefold().replace("_", " ").replace("-", " ")
+
+    normalized_columns = {_norm(c): c for c in df.columns}
+    for col in candidates:
+        found = normalized_columns.get(_norm(col))
+        if found is not None:
+            return found
+
+    return None
+
+
+def build_probability_training_detail_table(
+    df_issues: pd.DataFrame,
+    lookback_days: int = 90,
+    assignee_filter: str | None = None,
+) -> pd.DataFrame:
+    if df_issues is None or df_issues.empty:
+        return pd.DataFrame()
+
+    df = df_issues.copy()
+
+    key_col = _pick_col(df, ["key", "Key", "ticket", "Ticket"])
+    assignee_col = _pick_col(df, ["assignee_name", "assignee"])
+    lead_col = _pick_col(df, ["bussiness_lead", "business_lead", "Business Lead"])
+    status_col = _pick_col(df, ["status"])
+    created_col = _pick_col(df, ["created", "Created"])
+    priority_col = _pick_col(df, ["priority_name", "priority", "Priority"])
+    end_col = _pick_col(df, ["target_end_date", "project_due_date", "duedate", "Target End Date"])
+    updated_col = _pick_col(df, ["updated", "Updated"])
+
+    required = [key_col, assignee_col, status_col, created_col, end_col, updated_col]
+    if any(col is None for col in required):
+        return pd.DataFrame()
+
+    today = pd.Timestamp.today(tz="UTC").normalize()
+    cutoff = today - pd.Timedelta(days=lookback_days)
+
+    df[assignee_col] = df[assignee_col].fillna("Unassigned").astype(str)
+    df[status_col] = df[status_col].fillna("Unknown").astype(str)
+    df["_status_norm"] = df[status_col].str.strip().str.casefold()
+
+    df = df[df[assignee_col].isin(PE_TEAM_MEMBERS)].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    df[created_col] = pd.to_datetime(df[created_col], errors="coerce", utc=True)
+    df[end_col] = pd.to_datetime(df[end_col], errors="coerce", utc=True)
+    df[updated_col] = pd.to_datetime(df[updated_col], errors="coerce", utc=True)
+
+    # Requested rule alignment: completed date uses updated timestamp.
+    df["_completed_dt"] = df[updated_col]
+
+    detail_df = df[
+        (df["_status_norm"] == "done")
+        & (df["_completed_dt"].notna())
+        & (df[created_col].notna())
+        & (df[end_col].notna())
+        & (df["_completed_dt"] >= cutoff)
+    ].copy()
+    if detail_df.empty:
+        return pd.DataFrame()
+
+    if assignee_filter:
+        detail_df = detail_df[detail_df[assignee_col].astype(str) == str(assignee_filter)].copy()
+        if detail_df.empty:
+            return pd.DataFrame()
+
+    detail_df["On Time"] = np.where(
+        detail_df["_completed_dt"].dt.normalize() <= detail_df[end_col].dt.normalize(),
+        "Yes",
+        "No",
+    )
+
+    def _fmt_date(series: pd.Series) -> pd.Series:
+        return series.dt.strftime("%Y-%m-%d").fillna("")
+
+    out = pd.DataFrame(
+        {
+            "Ticket No": detail_df[key_col].astype(str).apply(lambda t: f"{JIRA_BROWSE_BASE_URL}{t}"),
+            "Assignee": detail_df[assignee_col].astype(str),
+            "Business Lead": detail_df[lead_col].astype(str) if lead_col is not None else "",
+            "Priority": detail_df[priority_col].astype(str) if priority_col is not None else "",
+            "Created Date": _fmt_date(detail_df[created_col]),
+            "End Date": _fmt_date(detail_df[end_col]),
+            "Completed Date": _fmt_date(detail_df["_completed_dt"]),
+            "On Time": detail_df["On Time"],
+        }
+    )
+
+    out = out.sort_values(by="Completed Date", ascending=False).reset_index(drop=True)
+    return out
+
+
+def _build_feature_frame(
+    df: pd.DataFrame,
+    *,
+    priority_col: str,
+    assignee_col: str,
+    assignee_velocity: dict,
+    priority_velocity: dict,
+    assignee_done_count: dict,
+    assignee_on_time_rate: dict,
+    priority_on_time_rate: dict,
+    assignee_backlog: dict,
+    assignee_priority_backlog: dict,
+    global_assignee_velocity: float,
+    global_priority_velocity: float,
+    global_assignee_on_time_rate: float,
+    global_priority_on_time_rate: float,
+) -> pd.DataFrame:
+    feature_df = df.copy()
+    feature_df["assignee_velocity_90"] = (
+        feature_df[assignee_col].map(assignee_velocity).fillna(global_assignee_velocity).astype(float)
+    )
+    feature_df["priority_velocity_90"] = (
+        feature_df[priority_col].map(priority_velocity).fillna(global_priority_velocity).astype(float)
+    )
+    feature_df["assignee_done_90"] = feature_df[assignee_col].map(assignee_done_count).fillna(1).astype(float)
+    feature_df["assignee_on_time_rate_90"] = (
+        feature_df[assignee_col].map(assignee_on_time_rate).fillna(global_assignee_on_time_rate).astype(float)
+    )
+    feature_df["priority_on_time_rate_90"] = (
+        feature_df[priority_col].map(priority_on_time_rate).fillna(global_priority_on_time_rate).astype(float)
+    )
+    feature_df["assignee_backlog_open"] = feature_df[assignee_col].map(assignee_backlog).fillna(0).astype(float)
+    feature_df["assignee_priority_backlog"] = [
+        float(assignee_priority_backlog.get((a, p), 0))
+        for a, p in zip(feature_df[assignee_col], feature_df[priority_col])
+    ]
+    feature_df["velocity_gap_assignee"] = (
+        feature_df["budget_days"] - feature_df["assignee_velocity_90"]
+    ).astype(float)
+    feature_df["velocity_gap_priority"] = (
+        feature_df["budget_days"] - feature_df["priority_velocity_90"]
+    ).astype(float)
+    feature_df["velocity_ratio_assignee"] = (
+        feature_df["budget_days"] / np.maximum(feature_df["assignee_velocity_90"], 1.0)
+    ).astype(float)
+    feature_df["velocity_ratio_priority"] = (
+        feature_df["budget_days"] / np.maximum(feature_df["priority_velocity_90"], 1.0)
+    ).astype(float)
+    return feature_df
+
+
+def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int = 90) -> dict:
+    payload = _empty_payload()
+    if df_issues is None or df_issues.empty:
+        payload["error_message"] = "No Jira data available."
+        return payload
+
+    df = df_issues.copy()
+
+    priority_col = _pick_col(df, ["priority_name", "priority"])
+    assignee_col = _pick_col(df, ["assignee_name", "assignee"])
+    status_col = _pick_col(df, ["status"])
+    created_col = _pick_col(df, ["created"])
+    updated_col = _pick_col(df, ["updated"])
+    deadline_col = _pick_col(df, ["target_end_date", "project_due_date", "duedate"])
+
+    required = {
+        "priority": priority_col,
+        "assignee": assignee_col,
+        "status": status_col,
+        "created": created_col,
+        "updated": updated_col,
+        "deadline": deadline_col,
+    }
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        payload["error_message"] = f"Missing required columns for ML model: {', '.join(missing)}"
+        return payload
+
+    today = pd.Timestamp.today(tz="UTC").normalize()
+    cutoff = today - pd.Timedelta(days=lookback_days)
+
+    df[priority_col] = df[priority_col].fillna("No Priority").astype(str)
+    df[assignee_col] = df[assignee_col].fillna("Unassigned").astype(str)
+    df[status_col] = df[status_col].fillna("Unknown").astype(str)
+    df["_status_norm"] = df[status_col].astype(str).str.strip().str.casefold()
+
+    # Only keep PE team assignees for this model/report.
+    df = df[df[assignee_col].isin(PE_TEAM_MEMBERS)].copy()
+    if df.empty:
+        payload["error_message"] = "No PE team tickets found for the selected dataset."
+        return payload
+
+    datetime_cols = [created_col, updated_col, deadline_col]
+
+    for col in datetime_cols:
+        df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
+
+    # Requested rule: completion timestamp is the last update timestamp.
+    df["_completion_ts"] = df[updated_col]
+    df["_updated_ts"] = df[updated_col]
+    df["_effective_done_ts"] = df["_completion_ts"]
+
+    # Training set: Done tickets with explicit deadline in the last N days,
+    # where completion timestamp is the ticket's updated timestamp.
+    train_df = df[
+        (df["_status_norm"] == "done")
+        & (df["_effective_done_ts"].notna())
+        & (df[created_col].notna())
+        & (df[deadline_col].notna())
+        & (df["_effective_done_ts"] >= cutoff)
+    ].copy()
+
+    if train_df.empty:
+        payload["error_message"] = (
+            f"No Done tickets with deadlines in the last {lookback_days} days by updated timestamp."
+        )
+        return payload
+
+    train_df["cycle_days"] = (train_df["_effective_done_ts"] - train_df[created_col]).dt.days
+    train_df["budget_days"] = (train_df[deadline_col] - train_df[created_col]).dt.days
+    train_df = train_df[(train_df["cycle_days"] >= 0) & (train_df["budget_days"] >= 1)].copy()
+    if len(train_df) < 20:
+        payload["error_message"] = f"Not enough training rows after cleanup ({len(train_df)}). Need at least 20."
+        return payload
+
+    train_df["on_time"] = (
+        train_df["_effective_done_ts"].dt.normalize() <= train_df[deadline_col].dt.normalize()
+    ).astype(int)
+    if train_df["on_time"].nunique() < 2:
+        payload["error_message"] = "Training data has only one target class. Need both on-time and late outcomes."
+        return payload
+
+    # Velocity features from last N days
+    done_window = train_df.copy()
+    assignee_velocity = done_window.groupby(assignee_col)["cycle_days"].median().to_dict()
+    priority_velocity = done_window.groupby(priority_col)["cycle_days"].median().to_dict()
+    assignee_done_count = done_window.groupby(assignee_col)["on_time"].size().to_dict()
+    assignee_on_time_rate = done_window.groupby(assignee_col)["on_time"].mean().to_dict()
+    priority_on_time_rate = done_window.groupby(priority_col)["on_time"].mean().to_dict()
+
+    # Backlog features from open items
+    open_df = df[~df[status_col].isin(_DONE_STATUSES)].copy()
+    assignee_backlog = open_df.groupby(assignee_col)[status_col].size().to_dict() if not open_df.empty else {}
+    assignee_priority_backlog = (
+        open_df.groupby([assignee_col, priority_col])[status_col].size().to_dict() if not open_df.empty else {}
+    )
+
+    global_assignee_velocity = float(done_window["cycle_days"].median())
+    global_priority_velocity = float(done_window["cycle_days"].median())
+    global_assignee_on_time_rate = float(done_window["on_time"].mean())
+    global_priority_on_time_rate = float(done_window["on_time"].mean())
+
+    train_df = _build_feature_frame(
+        train_df,
+        priority_col=priority_col,
+        assignee_col=assignee_col,
+        assignee_velocity=assignee_velocity,
+        priority_velocity=priority_velocity,
+        assignee_done_count=assignee_done_count,
+        assignee_on_time_rate=assignee_on_time_rate,
+        priority_on_time_rate=priority_on_time_rate,
+        assignee_backlog=assignee_backlog,
+        assignee_priority_backlog=assignee_priority_backlog,
+        global_assignee_velocity=global_assignee_velocity,
+        global_priority_velocity=global_priority_velocity,
+        global_assignee_on_time_rate=global_assignee_on_time_rate,
+        global_priority_on_time_rate=global_priority_on_time_rate,
+    )
+
+    feature_cols = [
+        priority_col,
+        assignee_col,
+        "budget_days",
+        "assignee_velocity_90",
+        "priority_velocity_90",
+        "assignee_done_90",
+        "assignee_on_time_rate_90",
+        "priority_on_time_rate_90",
+        "assignee_backlog_open",
+        "assignee_priority_backlog",
+        "velocity_gap_assignee",
+        "velocity_gap_priority",
+        "velocity_ratio_assignee",
+        "velocity_ratio_priority",
+    ]
+
+    X = train_df[feature_cols].copy()
+    y = train_df["on_time"].astype(int)
+
+    preprocess = ColumnTransformer(
+        transformers=[
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore"),
+                [priority_col, assignee_col],
+            ),
+            (
+                "num",
+                "passthrough",
+                [
+                    "budget_days",
+                    "assignee_velocity_90",
+                    "priority_velocity_90",
+                    "assignee_done_90",
+                    "assignee_on_time_rate_90",
+                    "priority_on_time_rate_90",
+                    "assignee_backlog_open",
+                    "assignee_priority_backlog",
+                    "velocity_gap_assignee",
+                    "velocity_gap_priority",
+                    "velocity_ratio_assignee",
+                    "velocity_ratio_priority",
+                ],
+            ),
+        ]
+    )
+
+    candidate_models = [
+        (
+            "Random Forest",
+            RandomForestClassifier(
+                n_estimators=1500,
+                max_depth=None,
+                min_samples_leaf=1,
+                min_samples_split=2,
+                class_weight="balanced_subsample",
+                random_state=42,
+                n_jobs=-1,
+            ),
+        ),
+        (
+            "Extra Trees",
+            ExtraTreesClassifier(
+                n_estimators=1500,
+                max_depth=None,
+                min_samples_leaf=1,
+                min_samples_split=2,
+                class_weight="balanced",
+                random_state=42,
+                n_jobs=-1,
+            ),
+        ),
+    ]
+
+    best_model = None
+    best_model_name = None
+    best_accuracy = -1.0
+
+    for model_name, estimator in candidate_models:
+        pipeline = Pipeline(
+            steps=[
+                ("prep", preprocess),
+                ("clf", estimator),
+            ]
+        )
+        pipeline.fit(X, y)
+        train_accuracy = float(accuracy_score(y, pipeline.predict(X)))
+        if train_accuracy > best_accuracy:
+            best_accuracy = train_accuracy
+            best_model = pipeline
+            best_model_name = model_name
+
+    payload["training_rows"] = int(len(train_df))
+    payload["training_accuracy"] = best_accuracy
+    payload["accuracy_target_met"] = bool(best_accuracy >= 0.90)
+    payload["model_name"] = best_model_name
+    payload["on_time_rate"] = float(train_df["on_time"].mean())
+
+    payload["priority_options"] = sorted(df[priority_col].dropna().astype(str).unique().tolist())
+    present_assignees = set(df[assignee_col].dropna().astype(str).unique().tolist())
+    payload["assignee_options"] = [member for member in PE_TEAM_MEMBERS if member in present_assignees]
+
+    payload["model_bundle"] = {
+        "model": best_model,
+        "priority_col": priority_col,
+        "assignee_col": assignee_col,
+        "assignee_velocity": assignee_velocity,
+        "priority_velocity": priority_velocity,
+        "assignee_done_count": assignee_done_count,
+        "assignee_on_time_rate": assignee_on_time_rate,
+        "priority_on_time_rate": priority_on_time_rate,
+        "assignee_backlog": assignee_backlog,
+        "assignee_priority_backlog": assignee_priority_backlog,
+        "global_assignee_velocity": global_assignee_velocity,
+        "global_priority_velocity": global_priority_velocity,
+        "global_assignee_on_time_rate": global_assignee_on_time_rate,
+        "global_priority_on_time_rate": global_priority_on_time_rate,
+    }
+
+    return payload
+
+
+def predict_completion_probability(
+    model_bundle: dict,
+    priority_value: str,
+    assignee_value: str,
+    expected_completion_date: date,
+) -> dict:
+    today = pd.Timestamp.today().normalize()
+    target_date = pd.Timestamp(expected_completion_date)
+    budget_days = int((target_date - today).days)
+
+    av = model_bundle["assignee_velocity"]
+    pv = model_bundle["priority_velocity"]
+    dc = model_bundle["assignee_done_count"]
+    ator = model_bundle["assignee_on_time_rate"]
+    ptor = model_bundle["priority_on_time_rate"]
+    ab = model_bundle["assignee_backlog"]
+    apb = model_bundle["assignee_priority_backlog"]
+
+    assignee_velocity = float(av.get(assignee_value, model_bundle["global_assignee_velocity"]))
+    priority_velocity = float(pv.get(priority_value, model_bundle["global_priority_velocity"]))
+    assignee_done = float(dc.get(assignee_value, 1))
+    assignee_on_time_rate = float(ator.get(assignee_value, model_bundle["global_assignee_on_time_rate"]))
+    priority_on_time_rate = float(ptor.get(priority_value, model_bundle["global_priority_on_time_rate"]))
+    assignee_backlog = float(ab.get(assignee_value, 0))
+    assignee_priority_backlog = float(apb.get((assignee_value, priority_value), 0))
+    velocity_gap_assignee = float(budget_days - assignee_velocity)
+    velocity_gap_priority = float(budget_days - priority_velocity)
+    velocity_ratio_assignee = float(budget_days / max(assignee_velocity, 1.0))
+    velocity_ratio_priority = float(budget_days / max(priority_velocity, 1.0))
+    priority_col = model_bundle["priority_col"]
+    assignee_col = model_bundle["assignee_col"]
+
+    row = pd.DataFrame(
+        [
+            {
+                priority_col: priority_value,
+                assignee_col: assignee_value,
+                "budget_days": budget_days,
+                "assignee_velocity_90": assignee_velocity,
+                "priority_velocity_90": priority_velocity,
+                "assignee_done_90": assignee_done,
+                "assignee_on_time_rate_90": assignee_on_time_rate,
+                "priority_on_time_rate_90": priority_on_time_rate,
+                "assignee_backlog_open": assignee_backlog,
+                "assignee_priority_backlog": assignee_priority_backlog,
+                "velocity_gap_assignee": velocity_gap_assignee,
+                "velocity_gap_priority": velocity_gap_priority,
+                "velocity_ratio_assignee": velocity_ratio_assignee,
+                "velocity_ratio_priority": velocity_ratio_priority,
+            }
+        ]
+    )
+
+    p_on_time = float(model_bundle["model"].predict_proba(row)[0, 1])
+    if p_on_time >= 0.75:
+        risk_band = "High confidence"
+        risk_color = "#16a34a"
+    elif p_on_time >= 0.5:
+        risk_band = "Moderate confidence"
+        risk_color = "#f59e0b"
+    else:
+        risk_band = "Low confidence"
+        risk_color = "#dc2626"
+
+    gauge = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=round(p_on_time * 100, 1),
+            number={"suffix": "%"},
+            title={"text": "Probability of Completion On Time"},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "bar": {"color": risk_color},
+                "steps": [
+                    {"range": [0, 50], "color": "#fee2e2"},
+                    {"range": [50, 75], "color": "#fef3c7"},
+                    {"range": [75, 100], "color": "#dcfce7"},
+                ],
+            },
+        )
+    )
+    gauge.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=10))
+
+    return {
+        "probability": p_on_time,
+        "risk_band": risk_band,
+        "budget_days": budget_days,
+        "assignee_velocity_90": assignee_velocity,
+        "priority_velocity_90": priority_velocity,
+        "assignee_done_90": assignee_done,
+        "assignee_on_time_rate_90": assignee_on_time_rate,
+        "priority_on_time_rate_90": priority_on_time_rate,
+        "assignee_backlog_open": assignee_backlog,
+        "assignee_priority_backlog": assignee_priority_backlog,
+        "velocity_gap_assignee": velocity_gap_assignee,
+        "velocity_gap_priority": velocity_gap_priority,
+        "velocity_ratio_assignee": velocity_ratio_assignee,
+        "velocity_ratio_priority": velocity_ratio_priority,
+        "gauge_fig": gauge,
+    }
+
+
+def build_probability_curve(
+    model_bundle: dict,
+    priority_value: str,
+    assignee_value: str,
+    start_date: date,
+    horizon_days: int = 120,
+) -> go.Figure:
+    start_ts = pd.Timestamp(start_date)
+    days = np.arange(0, horizon_days + 1, 7)
+
+    probs = []
+    x_dates = []
+    for d in days:
+        target = (start_ts + pd.Timedelta(days=int(d))).date()
+        pred = predict_completion_probability(model_bundle, priority_value, assignee_value, target)
+        probs.append(pred["probability"] * 100)
+        x_dates.append(target)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_dates,
+            y=probs,
+            mode="lines+markers",
+            line=dict(color="#0ea5e9", width=3),
+            marker=dict(size=6),
+            name="On-time probability",
+        )
+    )
+    fig.update_layout(
+        title="Probability Curve by Target Date",
+        xaxis_title="Target completion date",
+        yaxis_title="Probability (%)",
+        yaxis=dict(range=[0, 100]),
+        height=330,
+        hovermode="x unified",
+    )
+    return fig
