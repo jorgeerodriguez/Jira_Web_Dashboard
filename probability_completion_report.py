@@ -31,6 +31,7 @@ def _empty_payload() -> dict:
         "accuracy_target_met": False,
         "model_name": None,
         "on_time_rate": None,
+        "average_validation_days": 0.0,
         "error_message": None,
     }
 
@@ -57,6 +58,7 @@ def build_probability_training_detail_table(
     df_issues: pd.DataFrame,
     lookback_days: int = 90,
     assignee_filter: str | None = None,
+    priority_filter: str | None = None,
 ) -> pd.DataFrame:
     if df_issues is None or df_issues.empty:
         return pd.DataFrame()
@@ -109,8 +111,22 @@ def build_probability_training_detail_table(
         if detail_df.empty:
             return pd.DataFrame()
 
+    detail_df["validation_days"] = (detail_df["_completed_dt"] - detail_df[end_col]).dt.days
+    average_validation_days = float(detail_df["validation_days"].mean())
+    assignee_validation_days = detail_df.groupby(assignee_col)["validation_days"].mean().to_dict()
+    priority_validation_days = (
+        detail_df.groupby(priority_col)["validation_days"].mean().to_dict() if priority_col is not None else {}
+    )
+    selected_validation_days = float(
+        assignee_validation_days.get(
+            str(assignee_filter),
+            priority_validation_days.get(str(priority_filter), average_validation_days),
+        )
+    )
+    detail_df["_adjusted_completed_dt"] = detail_df["_completed_dt"] - pd.Timedelta(days=selected_validation_days)
+
     detail_df["On Time"] = np.where(
-        detail_df["_completed_dt"].dt.normalize() <= detail_df[end_col].dt.normalize(),
+        detail_df["_adjusted_completed_dt"].dt.normalize() <= detail_df[end_col].dt.normalize(),
         "Yes",
         "No",
     )
@@ -127,6 +143,7 @@ def build_probability_training_detail_table(
             "Created Date": _fmt_date(detail_df[created_col]),
             "End Date": _fmt_date(detail_df[end_col]),
             "Completed Date": _fmt_date(detail_df["_completed_dt"]),
+            "Avg Validation Time (days)": round(selected_validation_days, 1),
             "On Time": detail_df["On Time"],
         }
     )
@@ -261,8 +278,19 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         payload["error_message"] = f"Not enough training rows after cleanup ({len(train_df)}). Need at least 20."
         return payload
 
+    # Calculate average validation time (difference between updated date and target end date)
+    train_df["validation_days"] = (train_df["_effective_done_ts"] - train_df[deadline_col]).dt.days
+    average_validation_days = float(train_df["validation_days"].mean())
+    assignee_validation_days = train_df.groupby(assignee_col)["validation_days"].mean().to_dict()
+    priority_validation_days = train_df.groupby(priority_col)["validation_days"].mean().to_dict()
+
+    # Adjust the completed date by subtracting the average validation time
+    # This accounts for typical review/validation delays
+    train_df["_adjusted_done_ts"] = train_df["_effective_done_ts"] - pd.Timedelta(days=average_validation_days)
+
+    # Calculate on_time using the adjusted completion date
     train_df["on_time"] = (
-        train_df["_effective_done_ts"].dt.normalize() <= train_df[deadline_col].dt.normalize()
+        train_df["_adjusted_done_ts"].dt.normalize() <= train_df[deadline_col].dt.normalize()
     ).astype(int)
     if train_df["on_time"].nunique() < 2:
         payload["error_message"] = "Training data has only one target class. Need both on-time and late outcomes."
@@ -403,6 +431,7 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
     payload["accuracy_target_met"] = bool(best_accuracy >= 0.90)
     payload["model_name"] = best_model_name
     payload["on_time_rate"] = float(train_df["on_time"].mean())
+    payload["average_validation_days"] = average_validation_days
 
     payload["priority_options"] = sorted(df[priority_col].dropna().astype(str).unique().tolist())
     present_assignees = set(df[assignee_col].dropna().astype(str).unique().tolist())
@@ -412,6 +441,9 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         "model": best_model,
         "priority_col": priority_col,
         "assignee_col": assignee_col,
+        "average_validation_days": average_validation_days,
+        "assignee_validation_days": assignee_validation_days,
+        "priority_validation_days": priority_validation_days,
         "assignee_velocity": assignee_velocity,
         "priority_velocity": priority_velocity,
         "assignee_done_count": assignee_done_count,
@@ -436,7 +468,18 @@ def predict_completion_probability(
 ) -> dict:
     today = pd.Timestamp.today().normalize()
     target_date = pd.Timestamp(expected_completion_date)
-    budget_days = int((target_date - today).days)
+    raw_budget_days = int((target_date - today).days)
+
+    # Resolve validation time specific to the selected assignee → priority → global fallback.
+    # This mirrors how on_time was labeled during training for each group.
+    global_validation_days = float(model_bundle.get("average_validation_days", 0.0))
+    av_days = model_bundle.get("assignee_validation_days", {})
+    pv_days = model_bundle.get("priority_validation_days", {})
+    effective_validation_days = av_days.get(
+        assignee_value,
+        pv_days.get(priority_value, global_validation_days),
+    )
+    budget_days = int(raw_budget_days - effective_validation_days)
 
     av = model_bundle["assignee_velocity"]
     pv = model_bundle["priority_velocity"]
@@ -514,7 +557,7 @@ def predict_completion_probability(
     return {
         "probability": p_on_time,
         "risk_band": risk_band,
-        "budget_days": budget_days,
+        "budget_days": raw_budget_days,
         "assignee_velocity_90": assignee_velocity,
         "priority_velocity_90": priority_velocity,
         "assignee_done_90": assignee_done,

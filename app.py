@@ -986,10 +986,11 @@ elif selected == "🎯  Probability of completion on time":
         st.warning(f"⚠️ {prob_payload['error_message']}")
         st.stop()
 
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric("Training rows (last 90d)", f"{prob_payload['training_rows']:,}")
     k2.metric("Historical on-time rate", f"{prob_payload['on_time_rate'] * 100:.1f}%")
     k3.metric("Training accuracy", f"{prob_payload['training_accuracy'] * 100:.1f}%")
+    k4.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
 
     if prob_payload.get("model_name"):
         st.caption(f"Selected model: {prob_payload['model_name']}")
@@ -1070,13 +1071,14 @@ elif selected == "🎯  Probability of completion on time":
 
     st.subheader("Learning Opportunities from Recent Completed Tickets")
     st.caption(
-        "Done tickets from the last 90 days for the selected assignee, using Updated date as Completed Date."
+        "Done tickets from the last 90 days for the selected assignee, using Updated date as Completed Date and the selected validation-time offset for the On Time flag."
     )
 
     detail_df = build_probability_training_detail_table(
         df_issues,
         lookback_days=90,
         assignee_filter=assignee_value,
+        priority_filter=priority_value,
     )
 
     if detail_df.empty:
