@@ -313,7 +313,7 @@ elif selected == "🏠  Overview":
         if status_counts:
             st.subheader("Ticket Distribution by Kanban Status")
             dist_fig = plot_ticket_distribution(status_counts, project_key="DEVOPS")
-            st.plotly_chart(dist_fig, use_container_width=True)
+            st.plotly_chart(dist_fig, width="stretch")
         else:
             st.info("📥 Fetch Jira tickets from the sidebar to see live ticket distribution.")
             col_a, col_b = st.columns(2)
@@ -333,7 +333,7 @@ elif selected == "🏠  Overview":
                              color_discrete_map={"Critical": "#dc2626", "High": "#f97316",
                                                  "Medium": "#facc15", "Low": "#4ade80"})
                 fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             with col_b:
                 st.subheader("Daily Throughput (mock)")
@@ -341,7 +341,7 @@ elif selected == "🏠  Overview":
                 trend_df["day"] = pd.to_datetime(trend_df["day"])
                 trend_fig = px.line(trend_df, x="day", y=["created", "resolved"], markers=True)
                 trend_fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
-                st.plotly_chart(trend_fig, use_container_width=True)
+                st.plotly_chart(trend_fig, width="stretch")
 
 
 # ── Tickets Older Than 90 Days ──────────────────────────────────────────────────
@@ -365,18 +365,18 @@ elif selected == "📅  Tickets Older Than 90 Days":
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(visuals["hist_fig"], use_container_width=True)
+            st.plotly_chart(visuals["hist_fig"], width="stretch")
 
         with col2:
-            st.plotly_chart(visuals["pie_fig"], use_container_width=True)
+            st.plotly_chart(visuals["pie_fig"], width="stretch")
 
         st.subheader("Top 25 Oldest Open Tickets")
-        st.plotly_chart(visuals["top25_fig"], use_container_width=True)
+        st.plotly_chart(visuals["top25_fig"], width="stretch")
 
         st.subheader("Stale Ticket Details")
         st.dataframe(
             visuals["details_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -398,7 +398,7 @@ elif selected == "📈  Capacity":
         st.info("📥 Fetch Jira tickets from the sidebar to see capacity visuals.")
     else:
         if cap.get("yearly_total_fig") is not None:
-            st.plotly_chart(cap["yearly_total_fig"], use_container_width=True)
+            st.plotly_chart(cap["yearly_total_fig"], width="stretch")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Avg Created / month", f"{cap['avg_created']:.1f}")
@@ -407,9 +407,9 @@ elif selected == "📈  Capacity":
         c4.metric("Latest Completed", f"{cap['latest_completed']:,}")
 
         st.divider()
-        st.plotly_chart(cap["capacity_fig"], use_container_width=True)
+        st.plotly_chart(cap["capacity_fig"], width="stretch")
         st.subheader("Capacity Monthly Detail")
-        st.dataframe(cap["capacity_table"], use_container_width=True)
+        st.dataframe(cap["capacity_table"], width="stretch")
 
 
 # ── Trend ──────────────────────────────────────────────────────────────────────
@@ -433,13 +433,13 @@ elif selected == "📉  Trend":
 
         st.divider()
         if tr.get("flow_fig") is not None:
-            st.plotly_chart(tr["flow_fig"], use_container_width=True)
+            st.plotly_chart(tr["flow_fig"], width="stretch")
         if tr.get("cycle_fig") is not None:
-            st.plotly_chart(tr["cycle_fig"], use_container_width=True)
+            st.plotly_chart(tr["cycle_fig"], width="stretch")
         if tr["status_mix_fig"] is not None:
-            st.plotly_chart(tr["status_mix_fig"], use_container_width=True)
+            st.plotly_chart(tr["status_mix_fig"], width="stretch")
         st.subheader("Trend Monthly Detail")
-        st.dataframe(tr["table_df"], use_container_width=True)
+        st.dataframe(tr["table_df"], width="stretch")
 
 
 # ── Velocity ───────────────────────────────────────────────────────────────────
@@ -458,17 +458,17 @@ elif selected == "⚡  Velocity":
         c3.metric("Avg Backlog Velocity", f"{vel['avg_backlog']:.1f} days")
 
         st.divider()
-        st.plotly_chart(vel["box_fig"], use_container_width=True)
+        st.plotly_chart(vel["box_fig"], width="stretch")
 
         h1, h2 = st.columns(2)
         with h1:
             if vel["heat_exec_fig"] is not None:
-                st.plotly_chart(vel["heat_exec_fig"], use_container_width=True)
+                st.plotly_chart(vel["heat_exec_fig"], width="stretch")
         with h2:
             if vel["heat_backlog_fig"] is not None:
-                st.plotly_chart(vel["heat_backlog_fig"], use_container_width=True)
+                st.plotly_chart(vel["heat_backlog_fig"], width="stretch")
 
-        st.plotly_chart(vel["compare_fig"], use_container_width=True)
+        st.plotly_chart(vel["compare_fig"], width="stretch")
 
 
 # ── In Progress ─────────────────────────────────────────────────────────────────
@@ -490,25 +490,25 @@ elif selected == "🔄  In Progress":
         c5.metric("Missing Target End Date", f"{ip['missing_target_end_dates']}")
 
         st.divider()
-        st.plotly_chart(ip["load_fig"], use_container_width=True)
+        st.plotly_chart(ip["load_fig"], width="stretch")
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(ip["scatter_fig"], use_container_width=True)
+            st.plotly_chart(ip["scatter_fig"], width="stretch")
         with col2:
-            st.plotly_chart(ip["distribution_fig"], use_container_width=True)
+            st.plotly_chart(ip["distribution_fig"], width="stretch")
 
         if ip.get("target_timeline_fig") is not None:
             st.subheader("Target End Date Timeline")
-            st.plotly_chart(ip["target_timeline_fig"], use_container_width=True)
+            st.plotly_chart(ip["target_timeline_fig"], width="stretch")
 
         st.subheader("In Progress Workload Detail")
-        st.dataframe(ip["detail_df"], use_container_width=True)
+        st.dataframe(ip["detail_df"], width="stretch")
 
         st.subheader("All In Progress Tickets")
         st.dataframe(
             ip["tickets_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -540,15 +540,15 @@ elif selected == "✅  Validating":
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(val["oldest_fig"], use_container_width=True)
+            st.plotly_chart(val["oldest_fig"], width="stretch")
         with col2:
-            st.plotly_chart(val["risk_fig"], use_container_width=True)
+            st.plotly_chart(val["risk_fig"], width="stretch")
 
-        st.plotly_chart(val["assignee_fig"], use_container_width=True)
+        st.plotly_chart(val["assignee_fig"], width="stretch")
         st.subheader("Validating Ticket Detail")
         st.dataframe(
             val["detail_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -580,14 +580,14 @@ elif selected == "🚧  Blocked":
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(blocked["blocked_fig"], use_container_width=True)
+            st.plotly_chart(blocked["blocked_fig"], width="stretch")
         with col2:
-            st.plotly_chart(blocked["risk_fig"], use_container_width=True)
+            st.plotly_chart(blocked["risk_fig"], width="stretch")
 
         st.subheader("Blocked Ticket Detail")
         st.dataframe(
             blocked["detail_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -616,21 +616,21 @@ elif selected == "🗂️  Backlog":
         c4.metric("Critical Assignees", f"{backlog['critical_assignees']}")
 
         st.divider()
-        st.plotly_chart(backlog["load_fig"], use_container_width=True)
+        st.plotly_chart(backlog["load_fig"], width="stretch")
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(backlog["scatter_fig"], use_container_width=True)
+            st.plotly_chart(backlog["scatter_fig"], width="stretch")
         with col2:
-            st.plotly_chart(backlog["distribution_fig"], use_container_width=True)
+            st.plotly_chart(backlog["distribution_fig"], width="stretch")
 
         st.subheader("Backlog Workload Detail")
-        st.dataframe(backlog["detail_df"], use_container_width=True)
+        st.dataframe(backlog["detail_df"], width="stretch")
 
         st.subheader("All Backlog Tickets")
         st.dataframe(
             backlog["tickets_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -684,7 +684,7 @@ elif selected == "🔮  Forecast":
             )
 
             st.divider()
-            st.plotly_chart(fc["forecast_fig"], use_container_width=True)
+            st.plotly_chart(fc["forecast_fig"], width="stretch")
             st.caption(
                 "🟦 Actual · 🟢 Model on test data (dotted) · 🟠 Future forecast · "
                 "Shaded band = ±MAE confidence interval"
@@ -701,10 +701,10 @@ elif selected == "🔮  Forecast":
                 a2.metric("Best Advanced MAE", f"{fc.get('ml_best_mae', 0):.1f} tickets")
 
                 if fc.get("ml_comparison_fig") is not None:
-                    st.plotly_chart(fc["ml_comparison_fig"], use_container_width=True)
+                    st.plotly_chart(fc["ml_comparison_fig"], width="stretch")
 
                 if fc.get("ml_future_fig") is not None:
-                    st.plotly_chart(fc["ml_future_fig"], use_container_width=True)
+                    st.plotly_chart(fc["ml_future_fig"], width="stretch")
 
 
 # ── Distribution of Ticket's Age ─────────────────────────────────────────────────
@@ -734,10 +734,10 @@ elif selected == "📊  Distribution of Ticket's Age":
     k2.metric("Median Age (days)", dist["median_age"])
     k3.metric("75th Percentile (days)", dist["p75_age"])
 
-    st.plotly_chart(dist["box_fig"], use_container_width=True)
+    st.plotly_chart(dist["box_fig"], width="stretch")
 
     if dist["violin_fig"] is not None:
-        st.plotly_chart(dist["violin_fig"], use_container_width=True)
+        st.plotly_chart(dist["violin_fig"], width="stretch")
     elif dist["error_message"]:
         st.warning(f"Violin plot skipped: {dist['error_message']}")
 
@@ -790,14 +790,14 @@ elif selected == "👤  Distribution per Business Leader":
 
     col1, col2 = st.columns([2, 2])
     with col1:
-        st.plotly_chart(biz["leader_pie_fig"], use_container_width=True)
+        st.plotly_chart(biz["leader_pie_fig"], width="stretch")
     with col2:
-        st.plotly_chart(biz["priority_pie_fig"], use_container_width=True)
+        st.plotly_chart(biz["priority_pie_fig"], width="stretch")
 
-    st.plotly_chart(biz["stacked_fig"], use_container_width=True)
+    st.plotly_chart(biz["stacked_fig"], width="stretch")
 
     with st.expander("View summary table"):
-        st.dataframe(biz["summary_df"], use_container_width=True)
+        st.dataframe(biz["summary_df"], width="stretch")
 
 
 # ── Word of the Month ─────────────────────────────────────────────────────────────
@@ -848,21 +848,21 @@ elif selected == "💬  Word of the Month":
 
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(words["bar_fig"], use_container_width=True)
+        st.plotly_chart(words["bar_fig"], width="stretch")
     with col2:
-        st.plotly_chart(words["treemap_fig"], use_container_width=True)
+        st.plotly_chart(words["treemap_fig"], width="stretch")
 
     if words.get("sentiment_fig") is not None:
-        st.plotly_chart(words["sentiment_fig"], use_container_width=True)
+        st.plotly_chart(words["sentiment_fig"], width="stretch")
 
     if words.get("wordcloud_fig") is not None:
-        st.pyplot(words["wordcloud_fig"], clear_figure=True, use_container_width=True)
+        st.pyplot(words["wordcloud_fig"], clear_figure=True, width="stretch")
 
     st.subheader(f"🏆 Word of the Month: **{words['top_word'].upper()}**")
     st.caption(f"Appeared {words['top_frequency']} times across ticket summaries in the selected range.")
 
     with st.expander("View summary table"):
-        st.dataframe(words["summary_df"], use_container_width=True)
+        st.dataframe(words["summary_df"], width="stretch")
 
 
 # ── SLA ─────────────────────────────────────────────────────────────────────────
@@ -913,22 +913,22 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(sla["status_fig"], use_container_width=True)
+            st.plotly_chart(sla["status_fig"], width="stretch")
         with col2:
-            st.plotly_chart(sla["priority_fig"], use_container_width=True)
+            st.plotly_chart(sla["priority_fig"], width="stretch")
 
-        st.plotly_chart(sla["box_fig"], use_container_width=True)
+        st.plotly_chart(sla["box_fig"], width="stretch")
 
         col3, col4 = st.columns(2)
         with col3:
-            st.plotly_chart(sla["heatmap_fig"], use_container_width=True)
+            st.plotly_chart(sla["heatmap_fig"], width="stretch")
         with col4:
-            st.plotly_chart(sla["trend_fig"], use_container_width=True)
+            st.plotly_chart(sla["trend_fig"], width="stretch")
 
         st.subheader("SLA Detail")
         st.dataframe(
             sla["detail_df"],
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -942,7 +942,7 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
             st.subheader("Breached Tickets")
             st.dataframe(
                 sla["breached_df"],
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "Ticket": st.column_config.LinkColumn(
                         "Ticket",
@@ -954,7 +954,7 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
 
         if sla.get("scatter_fig") is not None:
             st.subheader("Breached Ticket Distribution by Assignee and Business Lead")
-            st.plotly_chart(sla["scatter_fig"], use_container_width=True)
+            st.plotly_chart(sla["scatter_fig"], width="stretch")
 
 
 # ── Probability of completion on time ─────────────────────────────────────────
@@ -1038,7 +1038,7 @@ elif selected == "🎯  Probability of completion on time":
 
     g1, g2 = st.columns([1, 2])
     with g1:
-        st.plotly_chart(prediction["gauge_fig"], use_container_width=True)
+        st.plotly_chart(prediction["gauge_fig"], width="stretch")
     with g2:
         curve_fig = build_probability_curve(
             prob_payload["model_bundle"],
@@ -1047,7 +1047,7 @@ elif selected == "🎯  Probability of completion on time":
             start_date=date.today(),
             horizon_days=120,
         )
-        st.plotly_chart(curve_fig, use_container_width=True)
+        st.plotly_chart(curve_fig, width="stretch")
 
     with st.expander("Model feature snapshot"):
         st.dataframe(
@@ -1066,7 +1066,7 @@ elif selected == "🎯  Probability of completion on time":
                     }
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Learning Opportunities from Recent Completed Tickets")
@@ -1086,7 +1086,7 @@ elif selected == "🎯  Probability of completion on time":
     else:
         st.dataframe(
             detail_df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Ticket No": st.column_config.LinkColumn(
                     "Ticket No",
