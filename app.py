@@ -40,9 +40,9 @@ try:
 except ModuleNotFoundError:
     from jira_morning_report_site.capacity_report import build_capacity_visuals
 try:
-    from velocity_report import build_velocity_visuals
+    from velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
 except ModuleNotFoundError:
-    from jira_morning_report_site.velocity_report import build_velocity_visuals
+    from jira_morning_report_site.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
 try:
     from trend_report import build_trend_visuals
 except ModuleNotFoundError:
@@ -228,6 +228,7 @@ with st.sidebar:
         "💬  Word of the Month",
         "🛡️  SLA (Service Level Agreements)",
         "🎯  Probability of completion on time",
+        "🧑‍💼  Personal Dashboard",
     ]
 
     selected = st.radio(
@@ -250,6 +251,281 @@ def _placeholder(section: str):
         f"**{section}** — visualization coming soon. "
         "Wire this section to live Jira data once tickets are fetched."
     )
+
+
+JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
+
+
+def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            return col
+
+    def _norm(value: str) -> str:
+        return str(value).strip().casefold().replace("_", " ").replace("-", " ")
+
+    normalized_columns = {_norm(col): col for col in df.columns}
+    for col in candidates:
+        found = normalized_columns.get(_norm(col))
+        if found is not None:
+            return found
+    return None
+
+
+def _fmt_date(series: pd.Series) -> pd.Series:
+    return series.dt.strftime("%Y-%m-%d").fillna("")
+
+
+def _normalize_text(value: str) -> str:
+    return str(value).strip().casefold().replace("_", " ").replace("-", " ")
+
+
+def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> dict:
+    empty_payload = {
+        "assigned_tickets": 0,
+        "open_tickets": 0,
+        "done_tickets": 0,
+        "in_progress_tickets": 0,
+        "on_hold_tickets": 0,
+        "blocked_tickets": 0,
+        "validating_tickets": 0,
+        "overdue_tickets": 0,
+        "due_soon_tickets": 0,
+        "missing_target_tickets": 0,
+        "high_priority_tickets": 0,
+        "triage_tickets": 0,
+        "tech_discovery_tickets": 0,
+        "avg_days_old": 0.0,
+        "oldest_days_old": 0.0,
+        "status_fig": None,
+        "priority_fig": None,
+        "focus_df": pd.DataFrame(),
+        "summary_df": pd.DataFrame(),
+    }
+
+    if df_issues is None or df_issues.empty:
+        return empty_payload
+
+    status_col = _pick_col(df_issues, ["status", "Status"])
+    assignee_col = _pick_col(df_issues, ["assignee_name", "Assignee"])
+    key_col = _pick_col(df_issues, ["key", "Key", "ticket", "Ticket"])
+    priority_col = _pick_col(df_issues, ["priority_name", "priority", "Priority"])
+    lead_col = _pick_col(df_issues, ["bussiness_lead", "business_lead", "Business Lead"])
+    summary_col = _pick_col(df_issues, ["summary", "Summary"])
+    created_col = _pick_col(df_issues, ["created", "Created"])
+    updated_col = _pick_col(df_issues, ["updated", "Updated"])
+    target_end_col = _pick_col(df_issues, ["target_end_date", "project_due_date", "duedate", "Target End Date"])
+    days_old_col = _pick_col(df_issues, ["days_old", "Days Old"])
+
+    required = [status_col, assignee_col, key_col]
+    if any(col is None for col in required):
+        return empty_payload
+
+    work = df_issues.copy()
+    work[status_col] = work[status_col].fillna("Unknown").astype(str)
+    work[assignee_col] = work[assignee_col].fillna("Unassigned").astype(str)
+
+    selected_norm = str(assignee_value).strip().casefold()
+    work = work[work[assignee_col].astype(str).str.strip().str.casefold().eq(selected_norm)].copy()
+    if work.empty:
+        return empty_payload
+
+    for col in [created_col, updated_col, target_end_col]:
+        if col is not None:
+            work[col] = pd.to_datetime(work[col], errors="coerce", utc=True)
+
+    today = pd.Timestamp.today(tz="UTC").normalize()
+    if days_old_col is None:
+        if created_col is not None:
+            work["days_old"] = (today - work[created_col].dt.normalize()).dt.days
+            days_old_col = "days_old"
+        else:
+            work["days_old"] = 0
+            days_old_col = "days_old"
+    else:
+        work[days_old_col] = pd.to_numeric(work[days_old_col], errors="coerce").fillna(0)
+
+    if target_end_col is not None:
+        work["days_left"] = (work[target_end_col].dt.normalize() - today).dt.days
+    else:
+        work["days_left"] = pd.NA
+
+    status_norm = work[status_col].astype(str).map(_normalize_text)
+    allowed_statuses = {
+        "triage",
+        "to do",
+        "in progress",
+        "on hold",
+        "validating",
+        "tech discovery required",
+        "blocked",
+        "staged car",
+        "stage car",
+    }
+    work = work[status_norm.isin(allowed_statuses)].copy()
+    if work.empty:
+        return empty_payload
+
+    status_norm = work[status_col].astype(str).map(_normalize_text)
+    priority_norm = (
+        work[priority_col].astype(str).map(_normalize_text)
+        if priority_col is not None
+        else pd.Series("", index=work.index)
+    )
+    priority_high = {"critical", "urgent", "high"}
+    open_mask = status_norm.ne("done")
+    days_left_num = pd.to_numeric(work["days_left"], errors="coerce")
+    overdue_mask = open_mask & days_left_num.lt(0)
+    due_soon_mask = open_mask & days_left_num.between(0, 7, inclusive="both")
+    missing_target_mask = open_mask & (work[target_end_col].isna() if target_end_col is not None else True)
+    high_priority_mask = open_mask & priority_norm.isin(priority_high)
+
+    conditions = [
+        status_norm.eq("blocked"),
+        status_norm.eq("on hold"),
+        status_norm.eq("validating"),
+        overdue_mask,
+        due_soon_mask,
+        missing_target_mask,
+        high_priority_mask,
+        status_norm.eq("in progress"),
+        status_norm.eq("done"),
+    ]
+    choices = [
+        "Blocked",
+        "On Hold",
+        "Validating",
+        "Overdue",
+        "Due Soon",
+        "Missing Target",
+        "High Priority",
+        "In Progress",
+        "Done",
+    ]
+    work["Attention"] = np.select(conditions, choices, default=work[status_col].astype(str))
+
+    attention_rank = {
+        "Blocked": 0,
+        "On Hold": 1,
+        "Validating": 2,
+        "Overdue": 3,
+        "Due Soon": 4,
+        "Missing Target": 5,
+        "High Priority": 6,
+        "In Progress": 7,
+        "Done": 9,
+    }
+    priority_rank = {
+        "critical": 0,
+        "urgent": 1,
+        "high": 2,
+        "medium": 3,
+        "low": 4,
+        "no priority": 5,
+    }
+    work["_attention_rank"] = work["Attention"].map(attention_rank).fillna(8)
+    work["_priority_rank"] = priority_norm.map(priority_rank).fillna(6) if priority_col is not None else 6
+
+    if key_col is None:
+        work["key"] = work.index.astype(str)
+        key_col = "key"
+    if priority_col is None:
+        work["priority_name"] = "Unknown"
+        priority_col = "priority_name"
+    if lead_col is None:
+        work["bussiness_lead"] = "Unknown"
+        lead_col = "bussiness_lead"
+    if summary_col is None:
+        work["summary"] = ""
+        summary_col = "summary"
+
+    work["Ticket"] = work[key_col].astype(str).apply(lambda ticket: f"{JIRA_BROWSE_BASE_URL}{ticket}")
+    work["Status"] = work[status_col].astype(str)
+    work["Priority"] = work[priority_col].astype(str)
+    work["Business Lead"] = work[lead_col].astype(str)
+    work["Summary"] = work[summary_col].astype(str)
+    work["Days Old"] = pd.to_numeric(work[days_old_col], errors="coerce").fillna(0)
+    work["Target End Date"] = _fmt_date(work[target_end_col]) if target_end_col is not None else ""
+    work["Updated Date"] = _fmt_date(work[updated_col]) if updated_col is not None else ""
+    work["Created Date"] = _fmt_date(work[created_col]) if created_col is not None else ""
+    work["Days Left"] = pd.to_numeric(work["days_left"], errors="coerce").fillna(pd.NA)
+
+    total_assigned = int(len(work))
+    done_tickets = int(status_norm.eq("done").sum())
+    open_tickets = int(open_mask.sum())
+    in_progress_tickets = int(status_norm.eq("in progress").sum())
+    on_hold_tickets = int(status_norm.eq("on hold").sum())
+    blocked_tickets = int(status_norm.eq("blocked").sum())
+    validating_tickets = int(status_norm.eq("validating").sum())
+    overdue_tickets = int(overdue_mask.sum())
+    due_soon_tickets = int(due_soon_mask.sum())
+    missing_target_tickets = int(missing_target_mask.sum())
+    high_priority_tickets = int(high_priority_mask.sum())
+    triage_tickets = int(status_norm.eq("triage").sum())
+    tech_discovery_tickets = int(status_norm.eq("tech discovery required").sum())
+    avg_days_old = float(pd.to_numeric(work["Days Old"], errors="coerce").mean()) if total_assigned else 0.0
+    oldest_days_old = float(pd.to_numeric(work["Days Old"], errors="coerce").max()) if total_assigned else 0.0
+
+    status_counts = work["Status"].value_counts(dropna=False).reset_index()
+    status_counts.columns = ["Status", "Count"]
+    priority_counts = work["Priority"].value_counts(dropna=False).reset_index()
+    priority_counts.columns = ["Priority", "Count"]
+
+    status_fig = px.bar(
+        status_counts,
+        x="Status",
+        y="Count",
+        text="Count",
+        title=f"Status Distribution for {assignee_value}",
+        color="Count",
+        color_continuous_scale="Blues",
+    )
+    status_fig.update_layout(height=340, xaxis_title="Status", yaxis_title="Count")
+
+    priority_fig = px.bar(
+        priority_counts,
+        x="Priority",
+        y="Count",
+        text="Count",
+        title="Priority Mix",
+        color="Count",
+        color_continuous_scale="Viridis",
+    )
+    priority_fig.update_layout(height=340, xaxis_title="Priority", yaxis_title="Count")
+
+    focus_df = work[open_mask].copy()
+    focus_df = focus_df.sort_values(
+        by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
+        ascending=[True, True, True, False],
+    )
+    focus_df = focus_df[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].head(15).copy()
+
+    summary_df = work.sort_values(
+        by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
+        ascending=[True, True, True, False],
+    )[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].copy()
+
+    return {
+        "assigned_tickets": total_assigned,
+        "open_tickets": open_tickets,
+        "done_tickets": done_tickets,
+        "in_progress_tickets": in_progress_tickets,
+        "on_hold_tickets": on_hold_tickets,
+        "blocked_tickets": blocked_tickets,
+        "validating_tickets": validating_tickets,
+        "overdue_tickets": overdue_tickets,
+        "due_soon_tickets": due_soon_tickets,
+        "missing_target_tickets": missing_target_tickets,
+        "high_priority_tickets": high_priority_tickets,
+        "triage_tickets": triage_tickets,
+        "tech_discovery_tickets": tech_discovery_tickets,
+        "avg_days_old": avg_days_old,
+        "oldest_days_old": oldest_days_old,
+        "status_fig": status_fig,
+        "priority_fig": priority_fig,
+        "focus_df": focus_df,
+        "summary_df": summary_df,
+    }
 
 
 # ── Mock data helpers ───────────────────────────────────────────────────────────
@@ -1095,3 +1371,101 @@ elif selected == "🎯  Probability of completion on time":
                 )
             },
         )
+
+
+# ── Personal Dashboard ─────────────────────────────────────────────────────────
+elif selected == "🧑‍💼  Personal Dashboard":
+    st.title("🧑‍💼 Personal Dashboard")
+    st.caption(
+        "A focused view for one PE assignee with active work, risk signals, and a Jira-linked summary table."
+    )
+
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    if df_issues is None or (isinstance(df_issues, pd.DataFrame) and df_issues.empty):
+        st.info("📥 Fetch Jira tickets from the sidebar to build the personal dashboard.")
+        st.stop()
+
+    assignee_options = []
+    seen = set()
+    for member in PE_TEAM_MEMBERS:
+        normalized = str(member).strip().casefold()
+        if normalized == "unassigned" or normalized in seen:
+            continue
+        seen.add(normalized)
+        assignee_options.append(member)
+
+    if not assignee_options:
+        st.warning("No assignee options available.")
+        st.stop()
+
+    selected_assignee = st.selectbox(
+        "Select assignee",
+        options=assignee_options,
+        index=0,
+        key="personal_dashboard_assignee",
+    )
+
+    personal = _build_personal_dashboard(df_issues, selected_assignee)
+    if personal["assigned_tickets"] == 0:
+        st.info("No tickets were found for the selected assignee.")
+        st.stop()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Assigned", f"{personal['assigned_tickets']:,}")
+    c2.metric("Open", f"{personal['open_tickets']:,}")
+    c3.metric("Overdue", f"{personal['overdue_tickets']:,}")
+    c4.metric("Due Soon", f"{personal['due_soon_tickets']:,}")
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("In Progress", f"{personal['in_progress_tickets']:,}")
+    c6.metric("On Hold", f"{personal['on_hold_tickets']:,}")
+    c7.metric("Blocked", f"{personal['blocked_tickets']:,}")
+    c8.metric("Validating", f"{personal['validating_tickets']:,}")
+
+    c9, c10, c11, c12 = st.columns(4)
+    c9.metric("Triage", f"{personal['triage_tickets']:,}")
+    c10.metric("Tech Discovery", f"{personal['tech_discovery_tickets']:,}")
+    c11.metric("High Priority", f"{personal['high_priority_tickets']:,}")
+    c12.metric("Avg Days Old", f"{personal['avg_days_old']:.1f}")
+
+    st.caption(
+        "Only tickets in Triage, To Do, In Progress, On Hold, Validating, Tech Discovery Required, Blocked, and Staged CAR are shown. "
+        "Prioritized by status risk, then target date, then ticket age."
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if personal["status_fig"] is not None:
+            st.plotly_chart(personal["status_fig"], width="stretch")
+    with col_b:
+        if personal["priority_fig"] is not None:
+            st.plotly_chart(personal["priority_fig"], width="stretch")
+
+    st.subheader("Tickets Requiring Attention")
+    if personal["focus_df"].empty:
+        st.success("No active tickets need immediate attention for this assignee.")
+    else:
+        st.dataframe(
+            personal["focus_df"],
+            width="stretch",
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )
+
+    st.subheader("All Assigned Tickets")
+    st.dataframe(
+        personal["summary_df"],
+        width="stretch",
+        column_config={
+            "Ticket": st.column_config.LinkColumn(
+                "Ticket",
+                help="Open Jira ticket",
+                display_text=r".*/([^/]+)$",
+            )
+        },
+    )
