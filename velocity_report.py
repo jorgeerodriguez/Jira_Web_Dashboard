@@ -5,9 +5,9 @@ import plotly.express as px
 
 
 PE_TEAM_MEMBERS = [
-    "Adam Shero", "Bolanle", "Denys Loboda", "Denys Naumenko", "Oleh Kuzo", "Omar Saunders",
-    "Pavlo Myshok", "Randall Puterbaugh", "Simon Davison", "simon.davison", "Taras Protsiv",
-    "Tom Terry", "vladyslav.zhyhulin", "Zack.Amadi", "Unassigned",
+    "Adam Shero", "Bolanle", "Denys Loboda", "Denys Naumenko", "Jeff Stuewe", "Oleh Kuzo",
+    "Omar Saunders", "Owen Tregoning", "Pavlo Myshok", "Randall Puterbaugh", "simon.davison",
+    "Taras Protsiv", "Tom Terry", "Trevor Atchley", "vladyslav.zhyhulin", "Zack.Amadi", "Unassigned",
 ]
 
 
