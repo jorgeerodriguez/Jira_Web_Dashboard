@@ -1,8 +1,23 @@
+import re
 from collections import Counter
+
+DEVOPS_BOARD_ID = 594
+
+
+def _get_board_jql(jira_connector, board_id: int) -> str:
+    """Return the JQL backing a board, with ORDER BY stripped. Falls back to project filter."""
+    try:
+        config = jira_connector._get_json(f"rest/agile/1.0/board/{board_id}/configuration")
+        jql = config.get("filter", {}).get("query", "")
+        if jql:
+            return re.sub(r"\s+ORDER\s+BY\s+.*$", "", jql, flags=re.IGNORECASE).strip()
+    except Exception:
+        pass
+    return 'project = "DEVOPS"'
 
 
 def fetch_all_tickets_for_project(jira_connector, project_key: str = "DEVOPS") -> tuple[int, str, int, dict]:
-    """Fetch all Jira tickets for a project.
+    """Fetch all Jira tickets for the DEVOPS board.
 
     Returns:
         tuple: (0, message, total_count, status_counts) on success
@@ -11,7 +26,7 @@ def fetch_all_tickets_for_project(jira_connector, project_key: str = "DEVOPS") -
     if jira_connector is None:
         return 1, "Invalid Jira connector: None", 0, {}
 
-    jql_query = f'project = "{project_key}" ORDER BY created DESC'
+    jql_query = _get_board_jql(jira_connector, DEVOPS_BOARD_ID) + " ORDER BY created DESC"
     status_counts = Counter()
     total_issues_processed = 0
     page_size = 100
