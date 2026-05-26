@@ -1,7 +1,5 @@
 import pandas as pd
 
-from .fetch_all_tickets_for_devops import _get_board_jql, DEVOPS_BOARD_ID
-
 # Custom field definitions
 CF_BUSINESS_LEAD    = "customfield_11751"
 CF_PLANNING_RANK    = "customfield_11445"
@@ -32,14 +30,15 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
         "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate"
     )
 
-    # Build JQL query: DEVOPS via board filter, other projects via project filter
-    board_jql = _get_board_jql(jira_connector, DEVOPS_BOARD_ID)
-    other_projects = [p for p in projects if p != "DEVOPS"]
-    if other_projects:
-        other_filter = " OR ".join([f'project = "{p}"' for p in other_projects])
-        jql_query = f"({board_jql}) OR ({other_filter}) ORDER BY assignee ASC, updated DESC"
-    else:
-        jql_query = f"({board_jql}) ORDER BY assignee ASC, updated DESC"
+    # Build JQL query
+    jql_clauses = []
+    if projects:
+        project_filter = " OR ".join([f'project = "{p}"' for p in projects])
+        jql_clauses.append(f"({project_filter})")
+    
+    jql_query = " AND ".join(jql_clauses) if jql_clauses else ""
+    jql_query += " ORDER BY assignee ASC, updated DESC"
+    jql_query = jql_query.strip()
 
     # Fetch issues with pagination
     issues_iterator_all = []
