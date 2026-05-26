@@ -9,44 +9,44 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from metrics import load_metrics
+from data.metrics import load_metrics
 
-from validate_and_connect_to_jira import validate_jira_connection
-from fetch_all_tickets_for_devops import fetch_all_tickets_for_project
-from tickets_distribution import plot_ticket_distribution
-from build_dataframe_new import build_issues_dataframe
-from tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
-from executive_summary import render_executive_summary
-from capacity_report import build_capacity_visuals
-from velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
-from trend_report import build_trend_visuals
-from in_progress_report import build_in_progress_visuals
-from validating_report import build_validating_visuals
-from backlog_report import build_backlog_visuals
-from blocked_report import build_blocked_visuals
+from config.validate_and_connect_to_jira import validate_jira_connection
+from data.fetch_all_tickets_for_devops import fetch_all_tickets_for_project
+from reports.tickets_distribution import plot_ticket_distribution
+from data.build_dataframe_new import build_issues_dataframe
+from reports.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
+from reports.executive_summary import render_executive_summary
+from reports.capacity_report import build_capacity_visuals
+from reports.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
+from reports.trend_report import build_trend_visuals
+from reports.in_progress_report import build_in_progress_visuals
+from reports.validating_report import build_validating_visuals
+from reports.backlog_report import build_backlog_visuals
+from reports.blocked_report import build_blocked_visuals
 try:
-    from forecast_report import build_forecast_visuals
+    from reports.forecast_report import build_forecast_visuals
 except ImportError:
     build_forecast_visuals = None
 try:
-    from distribution_of_tickets_report import build_distribution_visuals
+    from reports.distribution_of_tickets_report import build_distribution_visuals
 except ImportError:
     build_distribution_visuals = None
 try:
-    from distribution_by_business_leader import build_business_leader_visuals
+    from reports.distribution_by_business_leader import build_business_leader_visuals
 except ImportError:
     build_business_leader_visuals = None
 try:
-    from word_of_the_month_report import build_word_of_the_month_visuals
+    from reports.word_of_the_month_report import build_word_of_the_month_visuals
 except ImportError:
     build_word_of_the_month_visuals = None
 try:
-    from service_level_agreement_report import build_sla_visuals, PRIORITY_SLA_DAYS
+    from reports.service_level_agreement_report import build_sla_visuals, PRIORITY_SLA_DAYS
 except ImportError:
     build_sla_visuals = None
     PRIORITY_SLA_DAYS = {}
 try:
-    from probability_completion_report import (
+    from reports.probability_completion_report import (
         build_completion_on_time_model,
         predict_completion_probability,
         build_probability_curve,
