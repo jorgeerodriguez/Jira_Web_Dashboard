@@ -1,16 +1,15 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
 stages:
-- test
-- secret-detection
-variables:
-  SECRET_DETECTION_ENABLED: 'true'
-secret_detection:
-  stage: secret-detection
+  - test
+  - securityScan
+  - publish
+  - publish-semver
+  - promote-dev
+  - release
+
 include:
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - project: audacy-inc/audacy/pipeline-templates
+    ref: pipeline-templates-0.2.5
+    file:
+      - gitlab-ci/kaniko_gitlab-ci.yml
+      - gitlab-ci/security-scans_gitlab-ci.yml
+  - local: .pe-reports.gitlab-ci.yml
