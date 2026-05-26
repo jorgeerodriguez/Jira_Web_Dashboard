@@ -11,60 +11,21 @@ import streamlit as st
 
 from metrics import load_metrics
 
+from validate_and_connect_to_jira import validate_jira_connection
+from fetch_all_tickets_for_devops import fetch_all_tickets_for_project
+from tickets_distribution import plot_ticket_distribution
+from build_dataframe_new import build_issues_dataframe
+from tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
+from executive_summary import render_executive_summary
+from capacity_report import build_capacity_visuals
+from velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
+from trend_report import build_trend_visuals
+from in_progress_report import build_in_progress_visuals
+from validating_report import build_validating_visuals
+from backlog_report import build_backlog_visuals
+from blocked_report import build_blocked_visuals
 try:
-    from validate_and_connect_to_jira import validate_jira_connection
-except ModuleNotFoundError:
-    from jira_morning_report_site.validate_and_connect_to_jira import validate_jira_connection
-try:
-    from fetch_all_tickets_for_devops import fetch_all_tickets_for_project
-except ModuleNotFoundError:
-    from jira_morning_report_site.fetch_all_tickets_for_devops import fetch_all_tickets_for_project
-try:
-    from tickets_distribution import plot_ticket_distribution
-except ModuleNotFoundError:
-    from jira_morning_report_site.tickets_distribution import plot_ticket_distribution
-try:
-    from build_dataframe_new import build_issues_dataframe
-except ModuleNotFoundError:
-    from jira_morning_report_site.build_dataframe_new import build_issues_dataframe
-try:
-    from tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
-try:
-    from executive_summary import render_executive_summary
-except ModuleNotFoundError:
-    from jira_morning_report_site.executive_summary import render_executive_summary
-try:
-    from capacity_report import build_capacity_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.capacity_report import build_capacity_visuals
-try:
-    from velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
-except ModuleNotFoundError:
-    from jira_morning_report_site.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
-try:
-    from trend_report import build_trend_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.trend_report import build_trend_visuals
-try:
-    from in_progress_report import build_in_progress_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.in_progress_report import build_in_progress_visuals
-try:
-    from validating_report import build_validating_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.validating_report import build_validating_visuals
-try:
-    from backlog_report import build_backlog_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.backlog_report import build_backlog_visuals
-try:
-    from blocked_report import build_blocked_visuals
-except ModuleNotFoundError:
-    from jira_morning_report_site.blocked_report import build_blocked_visuals
-try:
-    from forcast_report import build_forecast_visuals
+    from forecast_report import build_forecast_visuals
 except ImportError:
     build_forecast_visuals = None
 try:

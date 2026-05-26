@@ -16,12 +16,7 @@ def mean_squared_error(y_true, y_pred):
     y_pred = np.asarray(y_pred, dtype=float)
     return float(np.mean((y_true - y_pred) ** 2))
 
-try:
-    from capacity_report import build_capacity_data
-except ImportError:
-    import importlib
-
-    build_capacity_data = importlib.import_module("jira_morning_report_site.capacity_report").build_capacity_data
+from capacity_report import build_capacity_data
 
 
 # ── Feature helpers ───────────────────────────────────────────────────────────

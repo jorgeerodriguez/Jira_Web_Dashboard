@@ -55,7 +55,7 @@ Templates are included:
 
 ## Where to add Jira logic
 
-- Edit `jira_morning_report_site/metrics.py`
+- Edit `metrics.py`
 - Replace `load_metrics()` mock data with Jira API calls
 
 ## Reuse from Jupyter notebooks
@@ -63,7 +63,7 @@ Templates are included:
 In a notebook cell:
 
 ```python
-from jira_morning_report_site.metrics import load_metrics
+from metrics import load_metrics
 from datetime import date
 
 load_metrics(report_date=date.today(), lookback_days=7)

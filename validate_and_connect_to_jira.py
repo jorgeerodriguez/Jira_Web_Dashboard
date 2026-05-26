@@ -1,11 +1,6 @@
 import sys
 
-try:
-    from Load_Configuration import load_config
-    from Load_Configuration import load_config_details
-except ModuleNotFoundError:
-    from jira_morning_report_site.Load_Configuration import load_config
-    from jira_morning_report_site.Load_Configuration import load_config_details
+from load_configuration import load_config, load_config_details
 
 
 def validate_jira_connection():
