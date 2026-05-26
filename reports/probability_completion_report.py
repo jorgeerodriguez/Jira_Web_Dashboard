@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-from velocity_report import PE_TEAM_MEMBERS
+from .velocity_report import PE_TEAM_MEMBERS
 
 
 _DONE_STATUSES = {"Done", "Closed", "Resolved"}

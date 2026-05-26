@@ -1,6 +1,6 @@
 import sys
 
-from load_configuration import load_config, load_config_details
+from .load_configuration import load_config, load_config_details
 
 
 def validate_jira_connection():

@@ -16,7 +16,7 @@ def mean_squared_error(y_true, y_pred):
     y_pred = np.asarray(y_pred, dtype=float)
     return float(np.mean((y_true - y_pred) ** 2))
 
-from capacity_report import build_capacity_data
+from .capacity_report import build_capacity_data
 
 
 # ── Feature helpers ───────────────────────────────────────────────────────────

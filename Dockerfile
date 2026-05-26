@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.14-slim AS publish
 
 WORKDIR /app
 
