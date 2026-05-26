@@ -11,10 +11,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-try:
-    from velocity_report import PE_TEAM_MEMBERS
-except ModuleNotFoundError:
-    from jira_morning_report_site.velocity_report import PE_TEAM_MEMBERS
+from velocity_report import PE_TEAM_MEMBERS
 
 
 _DONE_STATUSES = {"Done", "Closed", "Resolved"}
