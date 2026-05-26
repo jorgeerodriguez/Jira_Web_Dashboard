@@ -38,7 +38,7 @@ except ImportError:
     build_business_leader_visuals = None
 try:
     from reports.word_of_the_month_report import build_word_of_the_month_visuals
-except ImportError:
+except (ImportError, OSError):
     build_word_of_the_month_visuals = None
 try:
     from reports.service_level_agreement_report import build_sla_visuals, PRIORITY_SLA_DAYS
