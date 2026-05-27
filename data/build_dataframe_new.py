@@ -35,7 +35,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
     if projects:
         project_filter = " OR ".join([f'project = "{p}"' for p in projects])
         jql_clauses.append(f"({project_filter})")
-    jql_clauses.append('created >= "-730d"')
+    jql_clauses.append('created >= -730d')
 
     jql_query = " AND ".join(jql_clauses) + " ORDER BY assignee ASC, updated DESC"
 

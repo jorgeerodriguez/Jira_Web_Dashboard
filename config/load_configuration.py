@@ -138,19 +138,26 @@ def _load_from_environment() -> dict:
 
 
 def _load_from_config_json(filepath=CONFIG_FILENAME) -> dict:
+    candidate_paths = []
     if os.path.isabs(filepath):
-        config_path = filepath
+        candidate_paths.append(filepath)
     else:
-        config_path = os.path.join(BASE_DIR, filepath)
+        candidate_paths.extend([
+            os.path.join(BASE_DIR, filepath),
+            os.path.join(os.path.dirname(BASE_DIR), filepath),
+        ])
 
-    if not os.path.exists(config_path):
-        return {}
+    for config_path in candidate_paths:
+        if not os.path.exists(config_path):
+            continue
 
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return _normalize_config(json.load(f))
-    except Exception:
-        return {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return _normalize_config(json.load(f))
+        except Exception:
+            return {}
+
+    return {}
 
 
 def load_config_details(filepath=CONFIG_FILENAME) -> dict:

@@ -270,6 +270,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     status_col = _pick_col(df_issues, ["status", "Status"])
     assignee_col = _pick_col(df_issues, ["assignee_name", "Assignee"])
     key_col = _pick_col(df_issues, ["key", "Key", "ticket", "Ticket"])
+    issue_type_col = _pick_col(df_issues, ["issuetype", "issue_type", "Issue Type"])
     priority_col = _pick_col(df_issues, ["priority_name", "priority", "Priority"])
     lead_col = _pick_col(df_issues, ["bussiness_lead", "business_lead", "Business Lead"])
     summary_col = _pick_col(df_issues, ["summary", "Summary"])
@@ -285,6 +286,8 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     work = df_issues.copy()
     work[status_col] = work[status_col].fillna("Unknown").astype(str)
     work[assignee_col] = work[assignee_col].fillna("Unassigned").astype(str)
+    if issue_type_col is not None:
+        work[issue_type_col] = work[issue_type_col].fillna("Unknown").astype(str)
 
     selected_norm = str(assignee_value).strip().casefold()
     work = work[work[assignee_col].astype(str).str.strip().str.casefold().eq(selected_norm)].copy()
@@ -411,6 +414,13 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     work["Created Date"] = _fmt_date(work[created_col]) if created_col is not None else ""
     work["Days Left"] = pd.to_numeric(work["days_left"], errors="coerce").fillna(pd.NA)
 
+    issue_type_norm = (
+        work[issue_type_col].astype(str).map(_normalize_text)
+        if issue_type_col is not None
+        else pd.Series("", index=work.index)
+    )
+    feature_mask = issue_type_norm.eq("feature")
+
     total_assigned = int(len(work))
     done_tickets = int(status_norm.eq("done").sum())
     open_tickets = int(open_mask.sum())
@@ -454,14 +464,15 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     )
     priority_fig.update_layout(height=340, xaxis_title="Priority", yaxis_title="Count")
 
-    focus_df = work[open_mask].copy()
+    focus_df = work[open_mask & ~feature_mask].copy()
     focus_df = focus_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
     )
     focus_df = focus_df[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].head(15).copy()
 
-    summary_df = work.sort_values(
+    summary_df = work[feature_mask].copy()
+    summary_df = summary_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
     )[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].copy()
@@ -1391,7 +1402,7 @@ elif selected == "🧑‍💼  Personal Dashboard":
 
     st.caption(
         "Only tickets in Triage, To Do, In Progress, On Hold, Validating, Tech Discovery Required, Blocked, and Staged CAR are shown. "
-        "Prioritized by status risk, then target date, then ticket age."
+        "Feature tickets are reserved for the Epic Ticket Only table. Prioritized by status risk, then target date, then ticket age."
     )
 
     col_a, col_b = st.columns(2)
@@ -1418,7 +1429,7 @@ elif selected == "🧑‍💼  Personal Dashboard":
             },
         )
 
-    st.subheader("All Assigned Tickets")
+    st.subheader("Epic Ticket Only")
     st.dataframe(
         personal["summary_df"],
         width="stretch",
