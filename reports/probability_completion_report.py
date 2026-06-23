@@ -51,6 +51,119 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def _trimmed_mean(series: pd.Series, lower_q: float = 0.05, upper_q: float = 0.95) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return 0.0
+    if len(s) < 5:
+        return float(s.median())
+
+    low = float(s.quantile(lower_q))
+    high = float(s.quantile(upper_q))
+    trimmed = s[(s >= low) & (s <= high)]
+    if trimmed.empty:
+        return float(s.median())
+    return float(trimmed.mean())
+
+
+def _build_smoothed_validation_maps(
+    df: pd.DataFrame,
+    *,
+    value_col: str,
+    assignee_col: str,
+    priority_col: str | None,
+    prior_weight: float = 8.0,
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    global_days = _trimmed_mean(df[value_col])
+
+    assignee_stats = (
+        df.groupby(assignee_col)[value_col]
+        .agg([("group_mean", "mean"), ("group_count", "size")])
+        .reset_index()
+    )
+    assignee_map = {
+        str(row[assignee_col]): float(
+            (row["group_mean"] * row["group_count"] + global_days * prior_weight)
+            / (row["group_count"] + prior_weight)
+        )
+        for _, row in assignee_stats.iterrows()
+    }
+
+    priority_map: dict[str, float] = {}
+    if priority_col is not None:
+        priority_stats = (
+            df.groupby(priority_col)[value_col]
+            .agg([("group_mean", "mean"), ("group_count", "size")])
+            .reset_index()
+        )
+        priority_map = {
+            str(row[priority_col]): float(
+                (row["group_mean"] * row["group_count"] + global_days * prior_weight)
+                / (row["group_count"] + prior_weight)
+            )
+            for _, row in priority_stats.iterrows()
+        }
+
+    return global_days, assignee_map, priority_map
+
+
+def _build_smoothed_on_time_rate_maps(
+    df: pd.DataFrame,
+    *,
+    on_time_col: str,
+    assignee_col: str,
+    priority_col: str | None,
+    prior_weight: float = 8.0,
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Build Bayesian-smoothed on-time rate maps to stabilize small groups."""
+    global_rate = float(df[on_time_col].mean())
+
+    assignee_stats = (
+        df.groupby(assignee_col)[on_time_col]
+        .agg(["sum", "size"])
+        .reset_index()
+        .rename(columns={on_time_col + "sum": "on_time_count", on_time_col + "size": "group_size"})
+    )
+    # Fix column names after agg
+    assignee_stats.columns = [assignee_col, "on_time_count", "group_size"]
+    assignee_map = {
+        str(row[assignee_col]): float(
+            (row["on_time_count"] + global_rate * prior_weight) / (row["group_size"] + prior_weight)
+        )
+        for _, row in assignee_stats.iterrows()
+    }
+
+    priority_map: dict[str, float] = {}
+    if priority_col is not None:
+        priority_stats = (
+            df.groupby(priority_col)[on_time_col]
+            .agg(["sum", "size"])
+            .reset_index()
+        )
+        priority_stats.columns = [priority_col, "on_time_count", "group_size"]
+        priority_map = {
+            str(row[priority_col]): float(
+                (row["on_time_count"] + global_rate * prior_weight) / (row["group_size"] + prior_weight)
+            )
+            for _, row in priority_stats.iterrows()
+        }
+
+    return global_rate, assignee_map, priority_map
+
+
+def _compute_schedule_adherence(on_time_series: pd.Series, days_late_series: pd.Series, tolerance_days: float = 7.0) -> pd.Series:
+    """Compute continuous schedule adherence score (0 to 1) penalizing based on days late.
+    
+    - On-time tickets (on_time=1) get score 1.0
+    - Late tickets (on_time=0) get score = max(0, 1.0 - (days_late / tolerance_days))
+    - This captures "how late" as a continuous feature for the model.
+    """
+    adherence = pd.Series(1.0, index=on_time_series.index)
+    late_mask = on_time_series == 0
+    adherence.loc[late_mask] = np.maximum(0.0, 1.0 - (days_late_series.loc[late_mask] / tolerance_days))
+    return adherence
+
+
 def build_probability_training_detail_table(
     df_issues: pd.DataFrame,
     lookback_days: int = 90,
@@ -108,11 +221,15 @@ def build_probability_training_detail_table(
         if detail_df.empty:
             return pd.DataFrame()
 
-    detail_df["validation_days"] = (detail_df["_completed_dt"] - detail_df[end_col]).dt.days
-    average_validation_days = float(detail_df["validation_days"].mean())
-    assignee_validation_days = detail_df.groupby(assignee_col)["validation_days"].mean().to_dict()
-    priority_validation_days = (
-        detail_df.groupby(priority_col)["validation_days"].mean().to_dict() if priority_col is not None else {}
+    detail_df["validation_days"] = (
+        (detail_df["_completed_dt"] - detail_df[end_col]).dt.total_seconds() / 86400.0
+    )
+    detail_df["validation_delay_days"] = detail_df["validation_days"].clip(lower=0)
+    average_validation_days, assignee_validation_days, priority_validation_days = _build_smoothed_validation_maps(
+        detail_df,
+        value_col="validation_delay_days",
+        assignee_col=assignee_col,
+        priority_col=priority_col,
     )
     selected_validation_days = float(
         assignee_validation_days.get(
@@ -161,10 +278,13 @@ def _build_feature_frame(
     priority_on_time_rate: dict,
     assignee_backlog: dict,
     assignee_priority_backlog: dict,
+    assignee_schedule_adherence: dict,
+    priority_schedule_adherence: dict,
     global_assignee_velocity: float,
     global_priority_velocity: float,
     global_assignee_on_time_rate: float,
     global_priority_on_time_rate: float,
+    global_schedule_adherence: float,
 ) -> pd.DataFrame:
     feature_df = df.copy()
     feature_df["assignee_velocity_90"] = (
@@ -197,6 +317,12 @@ def _build_feature_frame(
     feature_df["velocity_ratio_priority"] = (
         feature_df["budget_days"] / np.maximum(feature_df["priority_velocity_90"], 1.0)
     ).astype(float)
+    feature_df["assignee_schedule_adherence_90"] = (
+        feature_df[assignee_col].map(assignee_schedule_adherence).fillna(global_schedule_adherence).astype(float)
+    )
+    feature_df["priority_schedule_adherence_90"] = (
+        feature_df[priority_col].map(priority_schedule_adherence).fillna(global_schedule_adherence).astype(float)
+    )
     return feature_df
 
 
@@ -276,14 +402,31 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         return payload
 
     # Calculate average validation time (difference between updated date and target end date)
-    train_df["validation_days"] = (train_df["_effective_done_ts"] - train_df[deadline_col]).dt.days
-    average_validation_days = float(train_df["validation_days"].mean())
-    assignee_validation_days = train_df.groupby(assignee_col)["validation_days"].mean().to_dict()
-    priority_validation_days = train_df.groupby(priority_col)["validation_days"].mean().to_dict()
+    train_df["validation_days"] = (
+        (train_df["_effective_done_ts"] - train_df[deadline_col]).dt.total_seconds() / 86400.0
+    )
+    train_df["validation_delay_days"] = train_df["validation_days"].clip(lower=0)
+    average_validation_days, assignee_validation_days, priority_validation_days = _build_smoothed_validation_maps(
+        train_df,
+        value_col="validation_delay_days",
+        assignee_col=assignee_col,
+        priority_col=priority_col,
+    )
 
     # Adjust the completed date by subtracting the average validation time
     # This accounts for typical review/validation delays
-    train_df["_adjusted_done_ts"] = train_df["_effective_done_ts"] - pd.Timedelta(days=average_validation_days)
+    train_df["_effective_validation_days"] = [
+        float(
+            assignee_validation_days.get(
+                str(a),
+                priority_validation_days.get(str(p), average_validation_days),
+            )
+        )
+        for a, p in zip(train_df[assignee_col], train_df[priority_col])
+    ]
+    train_df["_adjusted_done_ts"] = train_df["_effective_done_ts"] - pd.to_timedelta(
+        train_df["_effective_validation_days"], unit="D"
+    )
 
     # Calculate on_time using the adjusted completion date
     train_df["on_time"] = (
@@ -293,13 +436,37 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         payload["error_message"] = "Training data has only one target class. Need both on-time and late outcomes."
         return payload
 
-    # Velocity features from last N days
+    # Compute schedule adherence score (continuous 0-1 metric penalizing lateness)
+    # Days late = (adjusted_done_ts - deadline) in days
+    train_df["days_late"] = (
+        (train_df["_adjusted_done_ts"] - train_df[deadline_col]).dt.total_seconds() / 86400.0
+    )
+    train_df["schedule_adherence"] = _compute_schedule_adherence(
+        train_df["on_time"], train_df["days_late"], tolerance_days=7.0
+    )
+
+    # Velocity features from last N days (copy AFTER schedule_adherence is computed)
     done_window = train_df.copy()
     assignee_velocity = done_window.groupby(assignee_col)["cycle_days"].median().to_dict()
     priority_velocity = done_window.groupby(priority_col)["cycle_days"].median().to_dict()
     assignee_done_count = done_window.groupby(assignee_col)["on_time"].size().to_dict()
-    assignee_on_time_rate = done_window.groupby(assignee_col)["on_time"].mean().to_dict()
-    priority_on_time_rate = done_window.groupby(priority_col)["on_time"].mean().to_dict()
+
+    # Build Bayesian-smoothed on-time rate maps
+    global_assignee_on_time_rate, assignee_on_time_rate, priority_on_time_rate = _build_smoothed_on_time_rate_maps(
+        done_window,
+        on_time_col="on_time",
+        assignee_col=assignee_col,
+        priority_col=priority_col,
+    )
+    global_priority_on_time_rate = global_assignee_on_time_rate  # Same global value
+
+    # Build smoothed schedule adherence maps
+    global_schedule_adherence, assignee_schedule_adherence, priority_schedule_adherence = _build_smoothed_on_time_rate_maps(
+        done_window,
+        on_time_col="schedule_adherence",
+        assignee_col=assignee_col,
+        priority_col=priority_col,
+    )
 
     # Backlog features from open items
     open_df = df[~df[status_col].isin(_DONE_STATUSES)].copy()
@@ -310,8 +477,6 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
 
     global_assignee_velocity = float(done_window["cycle_days"].median())
     global_priority_velocity = float(done_window["cycle_days"].median())
-    global_assignee_on_time_rate = float(done_window["on_time"].mean())
-    global_priority_on_time_rate = float(done_window["on_time"].mean())
 
     train_df = _build_feature_frame(
         train_df,
@@ -324,10 +489,13 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         priority_on_time_rate=priority_on_time_rate,
         assignee_backlog=assignee_backlog,
         assignee_priority_backlog=assignee_priority_backlog,
+        assignee_schedule_adherence=assignee_schedule_adherence,
+        priority_schedule_adherence=priority_schedule_adherence,
         global_assignee_velocity=global_assignee_velocity,
         global_priority_velocity=global_priority_velocity,
         global_assignee_on_time_rate=global_assignee_on_time_rate,
         global_priority_on_time_rate=global_priority_on_time_rate,
+        global_schedule_adherence=global_schedule_adherence,
     )
 
     feature_cols = [
@@ -339,6 +507,8 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         "assignee_done_90",
         "assignee_on_time_rate_90",
         "priority_on_time_rate_90",
+        "assignee_schedule_adherence_90",
+        "priority_schedule_adherence_90",
         "assignee_backlog_open",
         "assignee_priority_backlog",
         "velocity_gap_assignee",
@@ -367,6 +537,8 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
                     "assignee_done_90",
                     "assignee_on_time_rate_90",
                     "priority_on_time_rate_90",
+                    "assignee_schedule_adherence_90",
+                    "priority_schedule_adherence_90",
                     "assignee_backlog_open",
                     "assignee_priority_backlog",
                     "velocity_gap_assignee",
@@ -446,12 +618,15 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         "assignee_done_count": assignee_done_count,
         "assignee_on_time_rate": assignee_on_time_rate,
         "priority_on_time_rate": priority_on_time_rate,
+        "assignee_schedule_adherence": assignee_schedule_adherence,
+        "priority_schedule_adherence": priority_schedule_adherence,
         "assignee_backlog": assignee_backlog,
         "assignee_priority_backlog": assignee_priority_backlog,
         "global_assignee_velocity": global_assignee_velocity,
         "global_priority_velocity": global_priority_velocity,
         "global_assignee_on_time_rate": global_assignee_on_time_rate,
         "global_priority_on_time_rate": global_priority_on_time_rate,
+        "global_schedule_adherence": global_schedule_adherence,
     }
 
     return payload
@@ -483,6 +658,8 @@ def predict_completion_probability(
     dc = model_bundle["assignee_done_count"]
     ator = model_bundle["assignee_on_time_rate"]
     ptor = model_bundle["priority_on_time_rate"]
+    asar = model_bundle.get("assignee_schedule_adherence", {})
+    psar = model_bundle.get("priority_schedule_adherence", {})
     ab = model_bundle["assignee_backlog"]
     apb = model_bundle["assignee_priority_backlog"]
 
@@ -491,6 +668,8 @@ def predict_completion_probability(
     assignee_done = float(dc.get(assignee_value, 1))
     assignee_on_time_rate = float(ator.get(assignee_value, model_bundle["global_assignee_on_time_rate"]))
     priority_on_time_rate = float(ptor.get(priority_value, model_bundle["global_priority_on_time_rate"]))
+    assignee_schedule_adherence = float(asar.get(assignee_value, model_bundle.get("global_schedule_adherence", 0.5)))
+    priority_schedule_adherence = float(psar.get(priority_value, model_bundle.get("global_schedule_adherence", 0.5)))
     assignee_backlog = float(ab.get(assignee_value, 0))
     assignee_priority_backlog = float(apb.get((assignee_value, priority_value), 0))
     velocity_gap_assignee = float(budget_days - assignee_velocity)
@@ -511,6 +690,8 @@ def predict_completion_probability(
                 "assignee_done_90": assignee_done,
                 "assignee_on_time_rate_90": assignee_on_time_rate,
                 "priority_on_time_rate_90": priority_on_time_rate,
+                "assignee_schedule_adherence_90": assignee_schedule_adherence,
+                "priority_schedule_adherence_90": priority_schedule_adherence,
                 "assignee_backlog_open": assignee_backlog,
                 "assignee_priority_backlog": assignee_priority_backlog,
                 "velocity_gap_assignee": velocity_gap_assignee,
@@ -560,6 +741,8 @@ def predict_completion_probability(
         "assignee_done_90": assignee_done,
         "assignee_on_time_rate_90": assignee_on_time_rate,
         "priority_on_time_rate_90": priority_on_time_rate,
+        "assignee_schedule_adherence_90": assignee_schedule_adherence,
+        "priority_schedule_adherence_90": priority_schedule_adherence,
         "assignee_backlog_open": assignee_backlog,
         "assignee_priority_backlog": assignee_priority_backlog,
         "velocity_gap_assignee": velocity_gap_assignee,

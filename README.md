@@ -6,7 +6,10 @@ It supports:
 - live Jira connection validation
 - full ticket fetch + dataframe build (DEVOPS + CAR)
 - multiple analytics reports (capacity, trend, velocity, SLA, forecast, etc.)
-- ML-based **Probability of completion on time**
+- ML-based **Probability of completion on time** with robust validation-delay math
+	- fractional-day validation delays with outlier trimming
+	- Bayesian-smoothed assignee/priority on-time rates
+	- continuous schedule-adherence feature to capture how late a ticket is
 - **Personal Dashboard** with prioritized attention and Epic-only view
 
 ---
@@ -124,11 +127,34 @@ Templates provided:
 - Improved probability model workflow:
 	- assignee/priority-aware validation-time offsets
 	- training detail table aligned with selected filters
+	- smoothed historical on-time rates for assignee and priority
+	- continuous schedule-adherence feature for lateness severity
 - Updated Streamlit layout API usage (`width="stretch"` / `width="content"`)
 - Fixed Jira fetch JQL lookback syntax (`created >= -730d`)
 - Improved config fallback path resolution so root `config.json` is detected
 
 ---
+
+## How the probability model works
+
+The on-time completion model uses historical Jira tickets to estimate whether a ticket will finish by a target date.
+
+- **Validation delay** is treated as the gap between completion and the target end date.
+	- It uses fractional days instead of integer days.
+	- Negative gaps are clipped to `0` so early completions do not reduce the delay estimate.
+	- Global delay estimates are trimmed to reduce outlier impact.
+- **Group-level delay estimates** are smoothed by assignee and priority.
+	- This prevents small sample sizes from producing extreme values.
+	- Training and prediction use the same assignee -> priority -> global fallback logic.
+- **Historical on-time rate** is also smoothed.
+	- Raw `mean(on_time)` was replaced with a Bayesian-smoothed rate.
+	- This makes the feature more stable for assignees or priorities with few tickets.
+- **Schedule adherence** is a continuous score from `0` to `1`.
+	- On-time tickets score `1.0`.
+	- Late tickets are penalized based on how many days late they finished.
+	- The model can learn the difference between slightly late and very late tickets.
+
+In practical terms, this means the model now uses both binary history and lateness severity instead of relying only on simple averages.
 
 ## Release notes
 
@@ -150,6 +176,16 @@ Templates provided:
 - Updated training detail table to reflect selected assignee/priority context
 - Added Personal Dashboard view with Jira-linked ticket tables and risk-focused metrics
 - Migrated Streamlit sizing API usage to `width="stretch"` / `width="content"`
+
+### 2026-06-23
+- Improved probability model math:
+	- validation delay now uses fractional days instead of integer truncation
+	- validation delay is clipped to late-only values before aggregation
+	- assignee/priority validation delays use smoothed estimates instead of raw means
+- Improved historical on-time rate calculations:
+	- Bayesian smoothing stabilizes small assignee/priority groups
+	- added continuous schedule-adherence scoring to capture how late a ticket finished
+- Aligned training and prediction feature logic so the model uses the same historical assumptions end to end
 
 ---
 
