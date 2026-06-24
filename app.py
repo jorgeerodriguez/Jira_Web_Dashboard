@@ -1237,19 +1237,35 @@ elif selected == "🎯  Probability of completion on time":
         st.warning(f"⚠️ {prob_payload['error_message']}")
         st.stop()
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Training rows (last 90d)", f"{prob_payload['training_rows']:,}")
     k2.metric("Historical on-time rate", f"{prob_payload['on_time_rate'] * 100:.1f}%")
     k3.metric("Training accuracy", f"{prob_payload['training_accuracy'] * 100:.1f}%")
-    k4.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
+    if prob_payload.get("validation_accuracy") is not None:
+        k4.metric("Validation accuracy", f"{prob_payload['validation_accuracy'] * 100:.1f}%")
+        k5.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
+        st.caption(
+            f"Validation set uses the most recent {prob_payload.get('validation_rows', 0):,} Done tickets (time-based holdout)."
+        )
+    else:
+        k4.metric("Validation accuracy", "N/A")
+        k5.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
 
     if prob_payload.get("model_name"):
         st.caption(f"Selected model: {prob_payload['model_name']}")
+    if prob_payload.get("probability_calibrated"):
+        st.caption(f"Probability calibration: {prob_payload.get('calibration_method', 'enabled')}")
 
     if prob_payload.get("accuracy_target_met"):
-        st.success("Training accuracy target met (≥ 90%).")
+        if prob_payload.get("validation_accuracy") is not None:
+            st.success("Validation accuracy target met (≥ 90%) on the time-based holdout set.")
+        else:
+            st.success("Training accuracy target met (≥ 90%).")
     else:
-        st.info("Training accuracy target of 90% was not reached; the app is using the best available fitted model.")
+        if prob_payload.get("validation_accuracy") is not None:
+            st.info("Validation accuracy target of 90% was not reached; the app is using the best available fitted model.")
+        else:
+            st.info("Training accuracy target of 90% was not reached; the app is using the best available fitted model.")
 
     pr_col, as_col, dt_col = st.columns(3)
     with pr_col:

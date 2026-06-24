@@ -6,10 +6,12 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from sklearn.compose import ColumnTransformer
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.base import clone
 
 from .velocity_report import PE_TEAM_MEMBERS
 
@@ -25,8 +27,12 @@ def _empty_payload() -> dict:
         "assignee_options": [],
         "training_rows": 0,
         "training_accuracy": None,
+        "validation_rows": 0,
+        "validation_accuracy": None,
         "accuracy_target_met": False,
         "model_name": None,
+        "probability_calibrated": False,
+        "calibration_method": None,
         "on_time_rate": None,
         "average_validation_days": 0.0,
         "error_message": None,
@@ -162,6 +168,63 @@ def _compute_schedule_adherence(on_time_series: pd.Series, days_late_series: pd.
     late_mask = on_time_series == 0
     adherence.loc[late_mask] = np.maximum(0.0, 1.0 - (days_late_series.loc[late_mask] / tolerance_days))
     return adherence
+
+
+def _apply_leave_one_out_history_features(
+    feature_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    *,
+    assignee_col: str,
+    priority_col: str,
+    prior_weight: float = 8.0,
+) -> pd.DataFrame:
+    """Replace history features with leave-one-out variants to reduce target leakage."""
+    out = feature_df.copy()
+    work = base_df.copy()
+
+    global_on_time = float(work["on_time"].mean())
+    global_schedule = float(work["schedule_adherence"].mean())
+
+    assignee_count = work.groupby(assignee_col)["on_time"].size().to_dict()
+    assignee_on_time_sum = work.groupby(assignee_col)["on_time"].sum().to_dict()
+    assignee_schedule_sum = work.groupby(assignee_col)["schedule_adherence"].sum().to_dict()
+
+    priority_count = work.groupby(priority_col)["on_time"].size().to_dict()
+    priority_on_time_sum = work.groupby(priority_col)["on_time"].sum().to_dict()
+    priority_schedule_sum = work.groupby(priority_col)["schedule_adherence"].sum().to_dict()
+
+    a_count = work[assignee_col].map(assignee_count).astype(float)
+    p_count = work[priority_col].map(priority_count).astype(float)
+
+    out["assignee_done_90"] = np.maximum(a_count - 1.0, 0.0)
+
+    out["assignee_on_time_rate_90"] = (
+        (work[assignee_col].map(assignee_on_time_sum).astype(float) - work["on_time"].astype(float) + global_on_time * prior_weight)
+        / (np.maximum(a_count - 1.0, 0.0) + prior_weight)
+    )
+    out["priority_on_time_rate_90"] = (
+        (work[priority_col].map(priority_on_time_sum).astype(float) - work["on_time"].astype(float) + global_on_time * prior_weight)
+        / (np.maximum(p_count - 1.0, 0.0) + prior_weight)
+    )
+
+    out["assignee_schedule_adherence_90"] = (
+        (
+            work[assignee_col].map(assignee_schedule_sum).astype(float)
+            - work["schedule_adherence"].astype(float)
+            + global_schedule * prior_weight
+        )
+        / (np.maximum(a_count - 1.0, 0.0) + prior_weight)
+    )
+    out["priority_schedule_adherence_90"] = (
+        (
+            work[priority_col].map(priority_schedule_sum).astype(float)
+            - work["schedule_adherence"].astype(float)
+            + global_schedule * prior_weight
+        )
+        / (np.maximum(p_count - 1.0, 0.0) + prior_weight)
+    )
+
+    return out
 
 
 def build_probability_training_detail_table(
@@ -504,29 +567,6 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         train_df["on_time"], train_df["days_late"], tolerance_days=7.0
     )
 
-    # Velocity features from last N days (copy AFTER schedule_adherence is computed)
-    done_window = train_df.copy()
-    assignee_velocity = done_window.groupby(assignee_col)["cycle_days"].median().to_dict()
-    priority_velocity = done_window.groupby(priority_col)["cycle_days"].median().to_dict()
-    assignee_done_count = done_window.groupby(assignee_col)["on_time"].size().to_dict()
-
-    # Build Bayesian-smoothed on-time rate maps
-    global_assignee_on_time_rate, assignee_on_time_rate, priority_on_time_rate = _build_smoothed_on_time_rate_maps(
-        done_window,
-        on_time_col="on_time",
-        assignee_col=assignee_col,
-        priority_col=priority_col,
-    )
-    global_priority_on_time_rate = global_assignee_on_time_rate  # Same global value
-
-    # Build smoothed schedule adherence maps
-    global_schedule_adherence, assignee_schedule_adherence, priority_schedule_adherence = _build_smoothed_on_time_rate_maps(
-        done_window,
-        on_time_col="schedule_adherence",
-        assignee_col=assignee_col,
-        priority_col=priority_col,
-    )
-
     # Backlog features from open items
     open_df = df[~df[status_col].isin(_DONE_STATUSES)].copy()
     assignee_backlog = open_df.groupby(assignee_col)[status_col].size().to_dict() if not open_df.empty else {}
@@ -534,28 +574,115 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         open_df.groupby([assignee_col, priority_col])[status_col].size().to_dict() if not open_df.empty else {}
     )
 
-    global_assignee_velocity = float(done_window["cycle_days"].median())
-    global_priority_velocity = float(done_window["cycle_days"].median())
+    def _build_history_maps(window_df: pd.DataFrame) -> dict:
+        assignee_velocity_local = window_df.groupby(assignee_col)["cycle_days"].median().to_dict()
+        priority_velocity_local = window_df.groupby(priority_col)["cycle_days"].median().to_dict()
+        assignee_done_count_local = window_df.groupby(assignee_col)["on_time"].size().to_dict()
 
-    train_df = _build_feature_frame(
-        train_df,
+        (
+            global_assignee_on_time_rate_local,
+            assignee_on_time_rate_local,
+            priority_on_time_rate_local,
+        ) = _build_smoothed_on_time_rate_maps(
+            window_df,
+            on_time_col="on_time",
+            assignee_col=assignee_col,
+            priority_col=priority_col,
+        )
+        global_priority_on_time_rate_local = global_assignee_on_time_rate_local
+
+        (
+            global_schedule_adherence_local,
+            assignee_schedule_adherence_local,
+            priority_schedule_adherence_local,
+        ) = _build_smoothed_on_time_rate_maps(
+            window_df,
+            on_time_col="schedule_adherence",
+            assignee_col=assignee_col,
+            priority_col=priority_col,
+        )
+
+        global_assignee_velocity_local = float(window_df["cycle_days"].median())
+        global_priority_velocity_local = float(window_df["cycle_days"].median())
+
+        return {
+            "assignee_velocity": assignee_velocity_local,
+            "priority_velocity": priority_velocity_local,
+            "assignee_done_count": assignee_done_count_local,
+            "assignee_on_time_rate": assignee_on_time_rate_local,
+            "priority_on_time_rate": priority_on_time_rate_local,
+            "assignee_schedule_adherence": assignee_schedule_adherence_local,
+            "priority_schedule_adherence": priority_schedule_adherence_local,
+            "global_assignee_velocity": global_assignee_velocity_local,
+            "global_priority_velocity": global_priority_velocity_local,
+            "global_assignee_on_time_rate": global_assignee_on_time_rate_local,
+            "global_priority_on_time_rate": global_priority_on_time_rate_local,
+            "global_schedule_adherence": global_schedule_adherence_local,
+        }
+
+    # Time-based holdout: keep the most recent tickets as validation set.
+    sorted_df = train_df.sort_values(by="_effective_done_ts").reset_index(drop=True)
+    holdout_size = min(max(int(len(sorted_df) * 0.2), 1), max(len(sorted_df) - 10, 1))
+    fit_window = sorted_df.iloc[:-holdout_size].copy()
+    holdout_window = sorted_df.iloc[-holdout_size:].copy()
+    use_holdout = bool(
+        len(fit_window) >= 10
+        and not holdout_window.empty
+        and fit_window["on_time"].nunique() >= 2
+        and holdout_window["on_time"].nunique() >= 2
+    )
+
+    eval_window = fit_window if use_holdout else sorted_df
+    eval_holdout = holdout_window if use_holdout else pd.DataFrame()
+
+    eval_maps = _build_history_maps(eval_window)
+    fit_features = _build_feature_frame(
+        eval_window,
         priority_col=priority_col,
         assignee_col=assignee_col,
-        assignee_velocity=assignee_velocity,
-        priority_velocity=priority_velocity,
-        assignee_done_count=assignee_done_count,
-        assignee_on_time_rate=assignee_on_time_rate,
-        priority_on_time_rate=priority_on_time_rate,
+        assignee_velocity=eval_maps["assignee_velocity"],
+        priority_velocity=eval_maps["priority_velocity"],
+        assignee_done_count=eval_maps["assignee_done_count"],
+        assignee_on_time_rate=eval_maps["assignee_on_time_rate"],
+        priority_on_time_rate=eval_maps["priority_on_time_rate"],
         assignee_backlog=assignee_backlog,
         assignee_priority_backlog=assignee_priority_backlog,
-        assignee_schedule_adherence=assignee_schedule_adherence,
-        priority_schedule_adherence=priority_schedule_adherence,
-        global_assignee_velocity=global_assignee_velocity,
-        global_priority_velocity=global_priority_velocity,
-        global_assignee_on_time_rate=global_assignee_on_time_rate,
-        global_priority_on_time_rate=global_priority_on_time_rate,
-        global_schedule_adherence=global_schedule_adherence,
+        assignee_schedule_adherence=eval_maps["assignee_schedule_adherence"],
+        priority_schedule_adherence=eval_maps["priority_schedule_adherence"],
+        global_assignee_velocity=eval_maps["global_assignee_velocity"],
+        global_priority_velocity=eval_maps["global_priority_velocity"],
+        global_assignee_on_time_rate=eval_maps["global_assignee_on_time_rate"],
+        global_priority_on_time_rate=eval_maps["global_priority_on_time_rate"],
+        global_schedule_adherence=eval_maps["global_schedule_adherence"],
     )
+    fit_features = _apply_leave_one_out_history_features(
+        fit_features,
+        eval_window,
+        assignee_col=assignee_col,
+        priority_col=priority_col,
+    )
+
+    holdout_features = pd.DataFrame()
+    if use_holdout:
+        holdout_features = _build_feature_frame(
+            eval_holdout,
+            priority_col=priority_col,
+            assignee_col=assignee_col,
+            assignee_velocity=eval_maps["assignee_velocity"],
+            priority_velocity=eval_maps["priority_velocity"],
+            assignee_done_count=eval_maps["assignee_done_count"],
+            assignee_on_time_rate=eval_maps["assignee_on_time_rate"],
+            priority_on_time_rate=eval_maps["priority_on_time_rate"],
+            assignee_backlog=assignee_backlog,
+            assignee_priority_backlog=assignee_priority_backlog,
+            assignee_schedule_adherence=eval_maps["assignee_schedule_adherence"],
+            priority_schedule_adherence=eval_maps["priority_schedule_adherence"],
+            global_assignee_velocity=eval_maps["global_assignee_velocity"],
+            global_priority_velocity=eval_maps["global_priority_velocity"],
+            global_assignee_on_time_rate=eval_maps["global_assignee_on_time_rate"],
+            global_priority_on_time_rate=eval_maps["global_priority_on_time_rate"],
+            global_schedule_adherence=eval_maps["global_schedule_adherence"],
+        )
 
     feature_cols = [
         priority_col,
@@ -576,8 +703,10 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
         "velocity_ratio_priority",
     ]
 
-    X = train_df[feature_cols].copy()
-    y = train_df["on_time"].astype(int)
+    X_fit = fit_features[feature_cols].copy()
+    y_fit = eval_window["on_time"].astype(int)
+    X_holdout = holdout_features[feature_cols].copy() if use_holdout else pd.DataFrame()
+    y_holdout = eval_holdout["on_time"].astype(int) if use_holdout else pd.Series(dtype=int)
 
     preprocess = ColumnTransformer(
         transformers=[
@@ -638,26 +767,93 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
 
     best_model = None
     best_model_name = None
-    best_accuracy = -1.0
+    best_eval_accuracy = -1.0
 
     for model_name, estimator in candidate_models:
         pipeline = Pipeline(
             steps=[
                 ("prep", preprocess),
-                ("clf", estimator),
+                ("clf", clone(estimator)),
             ]
         )
-        pipeline.fit(X, y)
-        train_accuracy = float(accuracy_score(y, pipeline.predict(X)))
-        if train_accuracy > best_accuracy:
-            best_accuracy = train_accuracy
+        pipeline.fit(X_fit, y_fit)
+        eval_accuracy = (
+            float(accuracy_score(y_holdout, pipeline.predict(X_holdout)))
+            if use_holdout
+            else float(accuracy_score(y_fit, pipeline.predict(X_fit)))
+        )
+        if eval_accuracy > best_eval_accuracy:
+            best_eval_accuracy = eval_accuracy
             best_model = pipeline
             best_model_name = model_name
 
+    # Refit selected model on all available training rows using leave-one-out historical features.
+    full_maps = _build_history_maps(train_df)
+    full_features = _build_feature_frame(
+        train_df,
+        priority_col=priority_col,
+        assignee_col=assignee_col,
+        assignee_velocity=full_maps["assignee_velocity"],
+        priority_velocity=full_maps["priority_velocity"],
+        assignee_done_count=full_maps["assignee_done_count"],
+        assignee_on_time_rate=full_maps["assignee_on_time_rate"],
+        priority_on_time_rate=full_maps["priority_on_time_rate"],
+        assignee_backlog=assignee_backlog,
+        assignee_priority_backlog=assignee_priority_backlog,
+        assignee_schedule_adherence=full_maps["assignee_schedule_adherence"],
+        priority_schedule_adherence=full_maps["priority_schedule_adherence"],
+        global_assignee_velocity=full_maps["global_assignee_velocity"],
+        global_priority_velocity=full_maps["global_priority_velocity"],
+        global_assignee_on_time_rate=full_maps["global_assignee_on_time_rate"],
+        global_priority_on_time_rate=full_maps["global_priority_on_time_rate"],
+        global_schedule_adherence=full_maps["global_schedule_adherence"],
+    )
+    full_features = _apply_leave_one_out_history_features(
+        full_features,
+        train_df,
+        assignee_col=assignee_col,
+        priority_col=priority_col,
+    )
+    X_full = full_features[feature_cols].copy()
+    y_full = train_df["on_time"].astype(int)
+
+    estimator_lookup = {name: est for name, est in candidate_models}
+    final_model = Pipeline(
+        steps=[
+            ("prep", preprocess),
+            ("clf", clone(estimator_lookup[best_model_name])),
+        ]
+    )
+    final_model.fit(X_full, y_full)
+    deployed_model = final_model
+    probability_calibrated = False
+    calibration_method = None
+    # Calibrate probability outputs so displayed completion probabilities are better aligned with observed outcomes.
+    if len(X_full) >= 30 and y_full.nunique() >= 2:
+        try:
+            calibrated_model = CalibratedClassifierCV(
+                estimator=final_model,
+                method="sigmoid",
+                cv=3,
+            )
+            calibrated_model.fit(X_full, y_full)
+            deployed_model = calibrated_model
+            probability_calibrated = True
+            calibration_method = "sigmoid"
+        except Exception:
+            # Fall back to the uncalibrated model if calibration cannot be fit.
+            deployed_model = final_model
+
+    train_accuracy = float(accuracy_score(y_full, deployed_model.predict(X_full)))
+
     payload["training_rows"] = int(len(train_df))
-    payload["training_accuracy"] = best_accuracy
-    payload["accuracy_target_met"] = bool(best_accuracy >= 0.90)
+    payload["training_accuracy"] = train_accuracy
+    payload["validation_rows"] = int(len(eval_holdout)) if use_holdout else 0
+    payload["validation_accuracy"] = best_eval_accuracy if use_holdout else None
+    payload["accuracy_target_met"] = bool((best_eval_accuracy if use_holdout else train_accuracy) >= 0.90)
     payload["model_name"] = best_model_name
+    payload["probability_calibrated"] = probability_calibrated
+    payload["calibration_method"] = calibration_method
     payload["on_time_rate"] = float(train_df["on_time"].mean())
     payload["average_validation_days"] = average_validation_days
 
@@ -666,26 +862,26 @@ def build_completion_on_time_model(df_issues: pd.DataFrame, lookback_days: int =
     payload["assignee_options"] = [member for member in PE_TEAM_MEMBERS if member in present_assignees]
 
     payload["model_bundle"] = {
-        "model": best_model,
+        "model": deployed_model,
         "priority_col": priority_col,
         "assignee_col": assignee_col,
         "average_validation_days": average_validation_days,
         "assignee_validation_days": assignee_validation_days,
         "priority_validation_days": priority_validation_days,
-        "assignee_velocity": assignee_velocity,
-        "priority_velocity": priority_velocity,
-        "assignee_done_count": assignee_done_count,
-        "assignee_on_time_rate": assignee_on_time_rate,
-        "priority_on_time_rate": priority_on_time_rate,
-        "assignee_schedule_adherence": assignee_schedule_adherence,
-        "priority_schedule_adherence": priority_schedule_adherence,
+        "assignee_velocity": full_maps["assignee_velocity"],
+        "priority_velocity": full_maps["priority_velocity"],
+        "assignee_done_count": full_maps["assignee_done_count"],
+        "assignee_on_time_rate": full_maps["assignee_on_time_rate"],
+        "priority_on_time_rate": full_maps["priority_on_time_rate"],
+        "assignee_schedule_adherence": full_maps["assignee_schedule_adherence"],
+        "priority_schedule_adherence": full_maps["priority_schedule_adherence"],
         "assignee_backlog": assignee_backlog,
         "assignee_priority_backlog": assignee_priority_backlog,
-        "global_assignee_velocity": global_assignee_velocity,
-        "global_priority_velocity": global_priority_velocity,
-        "global_assignee_on_time_rate": global_assignee_on_time_rate,
-        "global_priority_on_time_rate": global_priority_on_time_rate,
-        "global_schedule_adherence": global_schedule_adherence,
+        "global_assignee_velocity": full_maps["global_assignee_velocity"],
+        "global_priority_velocity": full_maps["global_priority_velocity"],
+        "global_assignee_on_time_rate": full_maps["global_assignee_on_time_rate"],
+        "global_priority_on_time_rate": full_maps["global_priority_on_time_rate"],
+        "global_schedule_adherence": full_maps["global_schedule_adherence"],
     }
 
     return payload
