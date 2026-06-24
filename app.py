@@ -51,12 +51,14 @@ try:
         predict_completion_probability,
         build_probability_curve,
         build_probability_training_detail_table,
+        build_probability_training_distribution_figures,
     )
 except ImportError:
     build_completion_on_time_model = None
     predict_completion_probability = None
     build_probability_curve = None
     build_probability_training_detail_table = None
+    build_probability_training_distribution_figures = None
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1218,6 +1220,7 @@ elif selected == "🎯  Probability of completion on time":
         or predict_completion_probability is None
         or build_probability_curve is None
         or build_probability_training_detail_table is None
+        or build_probability_training_distribution_figures is None
     ):
         st.error("probability_completion_report module could not be loaded.")
         st.stop()
@@ -1343,6 +1346,13 @@ elif selected == "🎯  Probability of completion on time":
                 )
             },
         )
+
+        charts = build_probability_training_distribution_figures(detail_df)
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            st.plotly_chart(charts["on_time_fig"], width="stretch")
+        with ch2:
+            st.plotly_chart(charts["past_due_fig"], width="stretch")
 
 
 # ── Personal Dashboard ─────────────────────────────────────────────────────────

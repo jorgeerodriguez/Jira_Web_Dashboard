@@ -244,6 +244,9 @@ def build_probability_training_detail_table(
         "Yes",
         "No",
     )
+    detail_df["past_due_days"] = (
+        detail_df["_completed_dt"].dt.normalize() - detail_df[end_col].dt.normalize()
+    ).dt.days
 
     def _fmt_date(series: pd.Series) -> pd.Series:
         return series.dt.strftime("%Y-%m-%d").fillna("")
@@ -257,6 +260,7 @@ def build_probability_training_detail_table(
             "Created Date": _fmt_date(detail_df[created_col]),
             "End Date": _fmt_date(detail_df[end_col]),
             "Completed Date": _fmt_date(detail_df["_completed_dt"]),
+            "Past Due Days": detail_df["past_due_days"].astype(int),
             "Avg Validation Time (days)": round(selected_validation_days, 1),
             "On Time": detail_df["On Time"],
         }
@@ -264,6 +268,61 @@ def build_probability_training_detail_table(
 
     out = out.sort_values(by="Completed Date", ascending=False).reset_index(drop=True)
     return out
+
+
+def build_probability_training_distribution_figures(detail_df: pd.DataFrame) -> dict:
+    if detail_df is None or detail_df.empty:
+        return {"on_time_fig": None, "past_due_fig": None}
+
+    work = detail_df.copy()
+
+    on_time_counts = (
+        work["On Time"]
+        .fillna("Unknown")
+        .astype(str)
+        .value_counts()
+        .reindex(["Yes", "No"], fill_value=0)
+    )
+    on_time_fig = go.Figure(
+        go.Pie(
+            labels=on_time_counts.index.tolist(),
+            values=on_time_counts.values.tolist(),
+            hole=0.45,
+            textinfo="label+percent",
+            marker=dict(colors=["#16a34a", "#dc2626"]),
+        )
+    )
+    on_time_fig.update_layout(
+        title="On Time Distribution with Validation Adjustment",
+        height=320,
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend_title_text="On Time",
+    )
+
+    work["Past Due Days"] = pd.to_numeric(work["Past Due Days"], errors="coerce").fillna(0)
+    past_due_bucket = np.where(work["Past Due Days"] < 0, "Late", "On Time")
+    past_due_counts = (
+        pd.Series(past_due_bucket)
+        .value_counts()
+        .reindex(["Late", "On Time"], fill_value=0)
+    )
+    past_due_fig = go.Figure(
+        go.Pie(
+            labels=past_due_counts.index.tolist(),
+            values=past_due_counts.values.tolist(),
+            hole=0.45,
+            textinfo="label+percent",
+            marker=dict(colors=["#0ea5e9", "#f59e0b"]),
+        )
+    )
+    past_due_fig.update_layout(
+        title="Completion of Work Distribution",
+        height=320,
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend_title_text="Completion Status",
+    )
+
+    return {"on_time_fig": on_time_fig, "past_due_fig": past_due_fig}
 
 
 def _build_feature_frame(
