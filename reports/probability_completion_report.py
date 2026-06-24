@@ -300,11 +300,11 @@ def build_probability_training_distribution_figures(detail_df: pd.DataFrame) -> 
     )
 
     work["Past Due Days"] = pd.to_numeric(work["Past Due Days"], errors="coerce").fillna(0)
-    past_due_bucket = np.where(work["Past Due Days"] < 0, "Late", "On Time")
+    past_due_bucket = np.where(work["Past Due Days"] <= 3, "On Time", "Late") # the 3 is for a 3-day tolerance window for validation delays
     past_due_counts = (
         pd.Series(past_due_bucket)
         .value_counts()
-        .reindex(["Late", "On Time"], fill_value=0)
+        .reindex(["On Time", "Late"], fill_value=0)
     )
     past_due_fig = go.Figure(
         go.Pie(
@@ -316,7 +316,7 @@ def build_probability_training_distribution_figures(detail_df: pd.DataFrame) -> 
         )
     )
     past_due_fig.update_layout(
-        title="Completion of Work Distribution",
+        title="Completion of Work Distribution + 3 Day Tolerance Window",
         height=320,
         margin=dict(l=20, r=20, t=50, b=20),
         legend_title_text="Completion Status",
