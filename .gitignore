@@ -162,6 +162,7 @@ secrets*.*
 ./backup/*.*
 /backup/
 .DS_Store
+.json
 
 
 

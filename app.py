@@ -52,6 +52,7 @@ try:
         build_probability_curve,
         build_probability_training_detail_table,
         build_probability_training_distribution_figures,
+        build_probability_trend_figure,
     )
 except ImportError:
     build_completion_on_time_model = None
@@ -59,6 +60,7 @@ except ImportError:
     build_probability_curve = None
     build_probability_training_detail_table = None
     build_probability_training_distribution_figures = None
+    build_probability_trend_figure = None
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1369,6 +1371,16 @@ elif selected == "🎯  Probability of completion on time":
             st.plotly_chart(charts["on_time_fig"], width="stretch")
         with ch2:
             st.plotly_chart(charts["past_due_fig"], width="stretch")
+
+        if build_probability_trend_figure is not None:
+            trend_fig = build_probability_trend_figure(detail_df)
+            if trend_fig is not None:
+                st.subheader("Past Due Days & On-Time Rate Trend")
+                st.caption(
+                    "Bars show raw Past Due Days per ticket (green ≤ 0, amber ≤ 3, red > 3). "
+                    "Blue line shows the rolling on-time rate across the same tickets."
+                )
+                st.plotly_chart(trend_fig, width="stretch")
 
 
 # ── Personal Dashboard ─────────────────────────────────────────────────────────

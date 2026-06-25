@@ -10,6 +10,26 @@ PE_TEAM_MEMBERS = [
     "Taras Protsiv", "Tom Terry", "Trevor Atchley", "vladyslav.zhyhulin", "Zack.Amadi", "Unassigned",
 ]
 
+PRIORITY_ORDER = ["Urgent", "High", "Medium", "Low", "None"]
+
+
+def _normalize_priority(series: pd.Series) -> pd.Series:
+    norm = series.fillna("None").astype(str).str.strip().str.casefold()
+    mapped = norm.map(
+        {
+            "urgent": "Urgent",
+            "highest": "Urgent",
+            "critical": "Urgent",
+            "high": "High",
+            "medium": "Medium",
+            "low": "Low",
+            "none": "None",
+            "no priority": "None",
+            "": "None",
+        }
+    )
+    return mapped.fillna("None")
+
 
 def build_velocity_visuals(df_issues: pd.DataFrame, time_period_days: int = 90) -> dict:
     """Build Velocity menu visuals from Jira dataframe."""
@@ -66,6 +86,7 @@ def build_velocity_visuals(df_issues: pd.DataFrame, time_period_days: int = 90) 
         ],
         ignore_index=True,
     )
+    combined_data["priority_name"] = _normalize_priority(combined_data["priority_name"])
     combined_data = combined_data[combined_data["priority_name"].notna()].copy()
 
     if combined_data.empty:
@@ -117,11 +138,12 @@ def build_velocity_visuals(df_issues: pd.DataFrame, time_period_days: int = 90) 
         z="avg_velocity",
         histfunc="avg",
         text_auto=True,
-        category_orders={"assignee_name": assignee_order},
+        category_orders={"assignee_name": assignee_order, "priority_name": PRIORITY_ORDER},
         color_continuous_scale="RdYlGn_r",
         title=f"Execution Velocity by Priority (last {time_period_days} days)",
     ) if not exec_df.empty else None
     if heat_exec_fig:
+        heat_exec_fig.update_xaxes(categoryorder="array", categoryarray=PRIORITY_ORDER)
         heat_exec_fig.update_yaxes(categoryorder="array", categoryarray=assignee_order)
 
     heat_backlog_fig = px.density_heatmap(
@@ -131,11 +153,12 @@ def build_velocity_visuals(df_issues: pd.DataFrame, time_period_days: int = 90) 
         z="avg_velocity",
         histfunc="avg",
         text_auto=True,
-        category_orders={"assignee_name": assignee_order},
+        category_orders={"assignee_name": assignee_order, "priority_name": PRIORITY_ORDER},
         color_continuous_scale="RdYlGn_r",
         title=f"Backlog Velocity by Priority (last {time_period_days} days)",
     ) if not back_df.empty else None
     if heat_backlog_fig:
+        heat_backlog_fig.update_xaxes(categoryorder="array", categoryarray=PRIORITY_ORDER)
         heat_backlog_fig.update_yaxes(categoryorder="array", categoryarray=assignee_order)
 
     compare = (

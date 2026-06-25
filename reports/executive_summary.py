@@ -4,6 +4,7 @@ import streamlit as st
 
 
 JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
+PRIORITY_ORDER = ["Urgent", "High", "Medium", "Low", "None"]
 
 
 EXCLUDED_STATUSES = {
@@ -26,6 +27,23 @@ def _lead_column(df_issues: pd.DataFrame) -> str:
     if "business_lead" in df_issues.columns:
         return "business_lead"
     return ""
+
+
+def _normalize_priority_series(series: pd.Series) -> pd.Series:
+    norm = series.fillna("None").astype(str).str.strip().str.casefold()
+    mapped = norm.map(
+        {
+            "urgent": "Urgent",
+            "highest": "Urgent",
+            "high": "High",
+            "medium": "Medium",
+            "low": "Low",
+            "none": "None",
+            "no priority": "None",
+            "": "None",
+        }
+    )
+    return mapped.fillna("None")
 
 
 def build_executive_summary_data(df_issues: pd.DataFrame) -> dict:
@@ -71,9 +89,9 @@ def build_executive_summary_data(df_issues: pd.DataFrame) -> dict:
         df["assignee_name"] = "Unassigned"
 
     if "priority_name" in df.columns:
-        df["priority_name"] = df["priority_name"].fillna("No Priority")
+        df["priority_name"] = _normalize_priority_series(df["priority_name"])
     else:
-        df["priority_name"] = "No Priority"
+        df["priority_name"] = "None"
 
     total_tickets = int(len(df))
     avg_days_old = float(df["days_old"].mean()) if total_tickets else 0.0
@@ -93,6 +111,11 @@ def build_executive_summary_data(df_issues: pd.DataFrame) -> dict:
             id_vars="status", var_name="Priority", value_name="Count"
         )
         status_priority_df.rename(columns={"status": "Status"}, inplace=True)
+        status_priority_df["Priority"] = pd.Categorical(
+            status_priority_df["Priority"],
+            categories=PRIORITY_ORDER,
+            ordered=True,
+        )
     else:
         status_priority_df = pd.DataFrame(columns=["Status", "Priority", "Count"])
 
@@ -161,6 +184,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
                 histfunc="sum",
                 color_continuous_scale="Blues",
                 text_auto=True,
+                category_orders={"Priority": PRIORITY_ORDER},
             )
             fig_status.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_status, use_container_width=True)
@@ -176,7 +200,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
                 plot_df["Business Lead"] = "Unknown"
                 color_col = "Business Lead"
             if "Priority" not in plot_df.columns:
-                plot_df["Priority"] = "No Priority"
+                plot_df["Priority"] = "None"
             if "Assignee" not in plot_df.columns:
                 plot_df["Assignee"] = "Unassigned"
             if "Days Old" not in plot_df.columns:

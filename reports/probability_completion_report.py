@@ -388,6 +388,107 @@ def build_probability_training_distribution_figures(detail_df: pd.DataFrame) -> 
     return {"on_time_fig": on_time_fig, "past_due_fig": past_due_fig}
 
 
+def build_probability_trend_figure(detail_df: pd.DataFrame) -> go.Figure | None:
+    """Return a dual-axis trend figure showing Past Due Days and On Time % over time.
+
+    The x-axis is sorted chronologically by Completed Date.  The left y-axis is
+    the raw Past Due Days value per ticket (bar).  The right y-axis is a rolling
+    7-ticket centred on-time rate (0–100%), shown as a line so you can read the
+    recent direction at a glance.
+    """
+    if detail_df is None or detail_df.empty:
+        return None
+
+    work = detail_df.copy()
+    work["Completed Date"] = pd.to_datetime(work["Completed Date"], errors="coerce")
+    work["Past Due Days"] = pd.to_numeric(work["Past Due Days"], errors="coerce").fillna(0)
+    work["_on_time_bin"] = (work["On Time"].astype(str).str.strip().str.lower() == "yes").astype(int)
+
+    work = work.dropna(subset=["Completed Date"]).sort_values("Completed Date").reset_index(drop=True)
+    if work.empty:
+        return None
+
+    x_labels = work["Completed Date"].dt.strftime("%Y-%m-%d")
+
+    # Rolling on-time rate (window = min(7, len) centred, converts to %)
+    window = min(7, max(1, len(work)))
+    rolling_on_time = (
+        work["_on_time_bin"]
+        .rolling(window=window, min_periods=1, center=True)
+        .mean() * 100
+    )
+
+    # Cap display range to ±60 days so outliers don't compress the readable range.
+    # The real value is always shown in the hover tooltip.
+    _display_cap = 60
+    raw_values = work["Past Due Days"].copy()
+    display_values = raw_values.clip(lower=-_display_cap, upper=_display_cap)
+    clamped_mask = raw_values.abs() > _display_cap
+    hover_text = [
+        f"%{{x}}<br>Past Due Days: {int(v):+d}{' (capped at ±60 for display)' if c else ''}<extra></extra>"
+        for v, c in zip(raw_values, clamped_mask)
+    ]
+
+    bar_colors = [
+        "#16a34a" if v <= 0 else ("#f59e0b" if v <= 3 else "#dc2626")
+        for v in raw_values
+    ]
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=x_labels,
+            y=display_values,
+            name="Past Due Days",
+            marker_color=bar_colors,
+            opacity=0.75,
+            yaxis="y1",
+            hovertemplate=hover_text,
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=x_labels,
+            y=rolling_on_time,
+            name="On-Time Rate (rolling)",
+            mode="lines+markers",
+            line=dict(color="#0ea5e9", width=2.5),
+            marker=dict(size=5),
+            yaxis="y2",
+            hovertemplate="%{x}<br>On-Time Rate: %{y:.0f}%<extra></extra>",
+        )
+    )
+
+    y_axis_title = "Past Due Days" if not clamped_mask.any() else "Past Due Days (capped ±60)"
+    fig.update_layout(
+        title="Past Due Days & On-Time Rate Trend",
+        xaxis=dict(title="Completed Date", tickangle=-35),
+        yaxis=dict(
+            title=y_axis_title,
+            range=[-_display_cap - 5, _display_cap + 5],
+            zeroline=True,
+            zerolinecolor="#94a3b8",
+            zerolinewidth=1.5,
+        ),
+        yaxis2=dict(
+            title="On-Time Rate (%)",
+            overlaying="y",
+            side="right",
+            range=[0, 105],
+            showgrid=False,
+        ),
+        legend=dict(orientation="h", y=-0.22),
+        height=380,
+        margin=dict(l=20, r=20, t=50, b=60),
+        hovermode="x unified",
+        barmode="relative",
+    )
+
+    return fig
+
+
 def _build_feature_frame(
     df: pd.DataFrame,
     *,
