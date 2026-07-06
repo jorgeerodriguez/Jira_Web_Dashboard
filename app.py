@@ -690,6 +690,9 @@ elif selected == "📉  Trend":
             st.plotly_chart(tr["cycle_fig"], width="stretch")
         if tr["status_mix_fig"] is not None:
             st.plotly_chart(tr["status_mix_fig"], width="stretch")
+        if tr.get("pe_completion_trend_fig") is not None:
+            st.subheader("Completion Trend by Platform Engineer")
+            st.plotly_chart(tr["pe_completion_trend_fig"], width="stretch")
         st.subheader("Trend Monthly Detail")
         st.dataframe(tr["table_df"], width="stretch")
 

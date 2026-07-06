@@ -2,6 +2,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from reports.velocity_report import PE_TEAM_MEMBERS
+
 
 DONE_STATUSES = {"Done", "Released Successfully to Production", "Closed", "Resolved"}
 
@@ -13,6 +15,7 @@ def _empty_payload() -> dict:
         "cycle_fig": None,
         "status_mix_fig": None,
         "trend_fig": None,
+        "pe_completion_trend_fig": None,
         "table_df": pd.DataFrame(),
     }
 
@@ -137,6 +140,38 @@ def build_trend_visuals(df_issues: pd.DataFrame, months: int = 9) -> dict:
     )
     mix_fig.update_layout(height=360, xaxis_title="Month", yaxis_title="Tickets", template="simple_white")
 
+    pe_completion_trend_fig = None
+    if "assignee_name" in df.columns and "issuetype" in df.columns:
+        pe_done = df[
+            df["status"].isin(DONE_STATUSES)
+            & (df["month_updated"] >= first_month)
+            & df["assignee_name"].isin(PE_TEAM_MEMBERS)
+            & ~df["issuetype"].astype(str).str.strip().str.casefold().eq("feature")
+        ].copy()
+        if not pe_done.empty:
+            pe_month = (
+                pe_done.groupby(["month_updated", "assignee_name"])
+                .size()
+                .reset_index(name="Completed")
+            )
+            pe_month["Month"] = pe_month["month_updated"].dt.strftime("%b %Y")
+            pe_completion_trend_fig = px.line(
+                pe_month.sort_values("month_updated"),
+                x="Month",
+                y="Completed",
+                color="assignee_name",
+                markers=True,
+                category_orders={"Month": flow_df["Month"].tolist()},
+                title="Completion Trend by Platform Engineer (excl. Features)",
+            )
+            pe_completion_trend_fig.update_layout(
+                height=420,
+                template="simple_white",
+                xaxis_title="Month",
+                yaxis_title="Completed Tickets",
+                legend_title="Assignee",
+            )
+
     created_total = int(flow_df["Created"].sum())
     completed_total = int(flow_df["Completed"].sum())
     completion_rate = (completed_total / created_total * 100) if created_total > 0 else 0.0
@@ -159,6 +194,7 @@ def build_trend_visuals(df_issues: pd.DataFrame, months: int = 9) -> dict:
         "cycle_fig": cycle_fig,
         "status_mix_fig": mix_fig,
         "trend_fig": flow_fig,
+        "pe_completion_trend_fig": pe_completion_trend_fig,
         "table_df": table_df,
     }
 
