@@ -13,4 +13,3 @@ include:
       - gitlab-ci/kaniko_gitlab-ci.yml
       - gitlab-ci/security-scans_gitlab-ci.yml
   - local: .pe-reports.gitlab-ci.yml
-  - local: darkstar/.gitlab-ci.yml

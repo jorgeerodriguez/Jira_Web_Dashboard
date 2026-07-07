@@ -2,7 +2,9 @@
 
 A self-contained FastAPI app that replaces the manual "Connect / Fetch" flow of the v1
 Streamlit report with an automated store the dashboards read from. It lives in this repo but
-shares no code with the Streamlit `app.py`; it has its own entrypoint, image, and workload.
+shares no code with the Streamlit `app.py`; it has its own entrypoint and workload, and rides
+the **same container image** as pe-reports (an isolated virtualenv keeps their dependencies
+apart — see Deploy).
 
 ## Dashboards
 
@@ -112,12 +114,19 @@ alongside the store), `DARKSTAR_POLL_INTERVAL_SECONDS`, `DARKSTAR_FULL_RECONCILE
 
 ## Deploy
 
-The darkstar image (`darkstar/Dockerfile`), its main-gated CI jobs (`.darkstar.gitlab-ci.yml`,
-`IMAGE_NAME: darkstar` → ECR), and the **in-process Jira + GitLab pollers** (launched from app
-startup, sharing the store connection under a write-lock; each skipped if its secret is absent)
-are in place. `/health` is independent of the store so probes pass during the first crawl.
+darkstar ships **inside the pe-reports image**, not a separate one. The root `Dockerfile` installs
+Streamlit into the system environment (pe-reports, unchanged) and darkstar into an isolated
+`/opt/darkstar-venv`; `docker-entrypoint.sh` runs Streamlit by default and uvicorn/darkstar when
+`APP_ENTRYPOINT=darkstar`. The two dependency sets can't co-resolve in one environment (pe-reports
+pins `starlette==1.0.0`, darkstar's `fastapi` needs `starlette<0.42`), which is what forces the
+venv split. So the existing `publish:pe-reports` job builds one image for both apps — there is no
+separate darkstar image or pipeline. The **in-process Jira + GitLab pollers** launch from app
+startup, share the store connection under a write-lock, and are each skipped if their secret is
+absent; `/health` is independent of the store so probes pass during the first crawl.
 
-Remaining: the gitops HelmRelease in `gitops-k8s-team-a2` — a **1-replica StatefulSet + gp3 PVC**
-at `DARKSTAR_DB_PATH` with `/health` readiness/liveness probes and ingress, reusing the
-`pe-reports` Jira secret and adding a `GITLAB_TOKEN` — then a nonprod-dev reconcile and a later
-prod promote.
+darkstar's workload is a HelmRelease in `gitops-k8s-team-a2` (dev namespace) — a **1-replica
+StatefulSet + gp3 PVC** at `DARKSTAR_DB_PATH`, `/health` probes, ingress, `APP_ENTRYPOINT=darkstar`,
+and `image.repository` pointed at the shared `pe-reports` repo (its ImagePolicy resolves the same
+tag — it's the same image). The a2 statefulSet allows a single secret, so darkstar reuses the
+`pe-reports` secret for Jira creds; `GITLAB_TOKEN` is added to that same secret to enable the
+GitLab poller. Because both apps share one image + tag stream, a rebuild redeploys both.
