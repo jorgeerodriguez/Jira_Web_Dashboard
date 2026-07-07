@@ -25,22 +25,67 @@ time — everything reads the local store):
   changelog; completion is measured as the earliest transition to `Done` (resolutiondate is
   null on ~85% of issues), attributed to the America/Denver business month.
 - **GitLab ingest** (`gitlab_ingest.py`) — pulls merged MRs (rolling **6-month** window) from
-  the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, attributes each to a roster member
-  (`roster.GITLAB_USERNAMES`), and stores changed file paths. `gitlab_domains.py` tags each MR
-  to expertise domains from its repo + file paths — a far denser signal than Jira titles.
+  the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few tracked repos that live
+  outside those groups (`_PE_PROJECT_IDS`, e.g. `tf-org`/`tf-org-v2` under secops). Each MR is
+  attributed to a roster member (`roster.GITLAB_USERNAMES`) and its changed file paths stored;
+  `gitlab_domains.py` tags each MR to expertise domains from its **repo + changed file paths**
+  (not the diff contents or the MR description) — a far denser signal than Jira titles.
 - **App** (`app.py`) — read-only `/api/*` endpoints, `/health`, and the one write path,
   `POST /api/overrides` (shared SME overrides, see below).
 
-## Intake specifics
+## How intake works
 
-- **Capacity** — spare = `max(0, velocity − done_this_month) − WIP`, so it reflects month-to-date
-  progress rather than a static monthly figure.
-- **SME matrix** — per-domain top contributor + runners-up, blending Jira title tagging with
-  GitLab MR authorship (additive). Domains are grouped **GCP / AWS / Other**; specialized
-  services (EKS, GKE, ECS, OpenSearch, MSK, VertexAI, Kubeflow Pipelines, Bedrock Agents,
-  AI Plugins) are pulled out of the coarse `AWS Core` / `GCP Core` buckets.
-- **Overrides** — the lead can force an SME/runner-up per domain via the panel above the matrix;
-  persisted to a shared JSON on the PVC (`overrides.py`) so edits are team-wide.
+The intake queue recommends **who should pick up each unassigned ticket** by combining two
+independent per-engineer signals and routing on skill first, availability second.
+
+### Availability — spare capacity
+
+`spare = max(0, velocity - done_this_month) - WIP`
+
+- **velocity** is a recency-weighted forecast of a typical month's delivery output, derived from
+  each engineer's completed Jira tickets over the last three complete months (`velocity._forecast`).
+- **done_this_month** (completions so far) and **WIP** (active in-progress tickets) are subtracted,
+  so the number is month-to-date headroom rather than a static monthly figure.
+- The capacity gauge plots `done` + WIP against the velocity tick; the 1–4 signal bars (red→green)
+  shown on each suggestion encode this spare capacity.
+
+### Expertise — the GitLab-derived domain signal (the bespoke part)
+
+This is what makes the routing accurate. Jira ticket titles are terse and inconsistent, so tagging
+them recognizes a domain in only **~63%** of the work. The primary expertise signal instead comes
+from **what engineers actually build**, read from GitLab:
+
+- For every merged MR by a roster member (rolling 6-month window, from the PE groups plus a few
+  tracked repos), we fetch the MR's **changed file paths** — not the diff contents, and not the MR
+  title/description — capped at 60 paths per MR.
+- `gitlab_domains.py` tags each MR to expertise domains with regex over the **repo name + those
+  file paths**. For the IaC / GitOps / config work that is most of PE's output, the directory
+  layout *is* the taxonomy: `.../eks-nodegroups/.../terragrunt.hcl` → EKS + Terraform;
+  `clusters/.../helmrelease.yaml` → Kubernetes/GitOps; the `tf-sharedservices` repo → Route53;
+  `tf-org` → IAM/RBAC.
+- Each domain is counted **once per MR** (so a 300-file refactor can't dominate), and those counts
+  are added to the Jira-title counts to form each engineer's per-domain `+N` skill score.
+
+**Why it's accurate:** file paths are a dense, standardized signal, so **98.4%** of MRs tag to at
+least one domain (~3.3 domains per MR) — versus ~63% from Jira titles. The expertise picture is
+near-complete and reflects hands-on authorship, not merely who a ticket was assigned to.
+**Tradeoff:** a path tells you *where* a change lives, not *what* it did — a one-line fix in an EKS
+file still counts as EKS work.
+
+### Domains and overrides
+
+Domains are grouped **AWS / GCP / Other** (alpha-sorted within each, group-collapsible), with
+specialized services (EKS, GKE, ECS, OpenSearch, MSK, Route53, VertexAI, Kubeflow Pipelines,
+Bedrock Agents, AI Plugins) pulled out of the coarse `AWS Core` / `GCP Core` buckets. Per domain
+the top scorer is the **SME** and the next are **runners-up**. The lead can override the
+SME/runner-up per domain from the panel above the matrix; overrides persist to a shared JSON on the
+PVC (`overrides.py`) so they are team-wide.
+
+### Putting it together
+
+For an unassigned ticket, its summary is tagged to a **primary domain**; the suggestion is that
+domain's **SME**, plus a **runner-up** and a **stretch** pick, ranked by domain skill (`+N`) first
+and spare capacity second. A generic ticket that matches no domain falls back to availability alone.
 
 ## Run locally
 
@@ -65,8 +110,14 @@ gitlab_ingest.run_gitlab_sync(c, datetime.now(timezone.utc).replace(tzinfo=None)
 Env: `DARKSTAR_DB_PATH` (store path), `DARKSTAR_OVERRIDES_PATH` (SME overrides JSON; defaults
 alongside the store), `DARKSTAR_POLL_INTERVAL_SECONDS`, `DARKSTAR_FULL_RECONCILE_SECONDS`.
 
-## Not done yet
+## Deploy
 
-Deploy: convert the workload to a 1-replica StatefulSet + gp3 PVC, point the readiness/liveness
-probes at `/health`, start the Jira + GitLab pollers from app startup, and add a `GITLAB_TOKEN`
-secret alongside the Jira SOPS secret. The 6-month GitLab crawl has so far been run manually.
+The darkstar image (`darkstar/Dockerfile`), its main-gated CI jobs (`.darkstar.gitlab-ci.yml`,
+`IMAGE_NAME: darkstar` → ECR), and the **in-process Jira + GitLab pollers** (launched from app
+startup, sharing the store connection under a write-lock; each skipped if its secret is absent)
+are in place. `/health` is independent of the store so probes pass during the first crawl.
+
+Remaining: the gitops HelmRelease in `gitops-k8s-team-a2` — a **1-replica StatefulSet + gp3 PVC**
+at `DARKSTAR_DB_PATH` with `/health` readiness/liveness probes and ingress, reusing the
+`pe-reports` Jira secret and adding a `GITLAB_TOKEN` — then a nonprod-dev reconcile and a later
+prod promote.
