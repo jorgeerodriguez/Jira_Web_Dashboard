@@ -234,7 +234,7 @@ const DOMAIN_PATTERNS = {"VDI/WorkSpaces":["vdi","workspace","gcve","vsphere","v
 const DOMAIN_PRIORITY = ["VDI/WorkSpaces","AI Plugins","AWS Bedrock Agents","EKS","GKE","VertexAI","Kubeflow Pipelines","OpenSearch","ECS","MSK","Route53","Airflow","Composer","Storage Transfer","BigQuery/Data","Databases","GCP Core","Grafana","Networking","IAM/RBAC","Secrets/Vault","Cost/FinOps","Terraform/Terragrunt","AWS Core","Kubernetes/GitOps","GitLab"];
 // top-level grouping for the SME matrix; domains not listed fall under "Other". Alpha-sorted within each group.
 const DOMAIN_GROUP = {"GCP Core":"GCP","BigQuery/Data":"GCP","Composer":"GCP","Airflow":"GCP","Storage Transfer":"GCP","GKE":"GCP","VertexAI":"GCP","Kubeflow Pipelines":"GCP","AWS Core":"AWS","AWS Bedrock Agents":"AWS","VDI/WorkSpaces":"AWS","EKS":"AWS","ECS":"AWS","OpenSearch":"AWS","MSK":"AWS"};
-const GROUP_ORDER = ["GCP","AWS","Other"];
+const GROUP_ORDER = ["AWS","GCP","Other"];
 const groupOf = d => DOMAIN_GROUP[d] || "Other";
 let SME = {};
 let BREAKDOWN = {};   // {domain: {key: {jira, mr, total}}} — full per-person split for the matrix columns
@@ -409,10 +409,10 @@ function renderSME(){
       const arr = smeList(d), smeKey = arr[0][0], sm = ROSTER[smeKey], sb = (BREAKDOWN[d]||{})[smeKey] || {jira:0,mr:0,total:0};
       let man = "";
       if(SME_OVERRIDES[d]){ const st = overrideStatus(d); man = ` <span class="tag" title="${esc(st.tip)}">manual</span> <span class="ov-status ${st.cls}" title="${esc(st.tip)}">${esc(st.text)}</span>`; }
-      const smeCell = `<span class="dot" style="background:${sm?sm.color:'#8891a7'}"></span>${sm?esc(sm.name):esc(smeKey)} <span class="sme-tag">SME</span>`;
+      const smeCell = `<span class="dot" style="background:${sm?sm.color:'#8891a7'}"></span>${sm?esc(sm.name):esc(smeKey)} <span class="ru-n">${sb.total?'+'+sb.total:'·'}</span> <span class="sme-tag">SME</span>`;
       const rus = arr.slice(1).map(([k])=>{
         const b = (BREAKDOWN[d]||{})[k] || {jira:0,mr:0,total:0}, m = ROSTER[k];
-        return `<span class="ru" title="${b.jira} Jira · ${b.mr} MR"><span class="dot" style="background:${m?m.color:'#8891a7'}"></span>${m?esc(m.name):esc(k)} <span class="ru-n">${b.total||'·'}</span></span>`;
+        return `<span class="ru" title="${b.jira} Jira · ${b.mr} MR"><span class="dot" style="background:${m?m.color:'#8891a7'}"></span>${m?esc(m.name):esc(k)} <span class="ru-n">${b.total?'+'+b.total:'·'}</span></span>`;
       }).join("") || `<span class="na">—</span>`;
       h += `<tr class="dom-row" data-grp="${g}"><td class="dom-name">${esc(d)}${man}</td><td class="sme-cell">${smeCell}</td><td class="num">${sb.jira||'·'}</td><td class="num">${sb.mr||'·'}</td><td class="num tot">${sb.total||'·'}</td><td class="ru-cell">${rus}</td></tr>`;
     }
@@ -431,6 +431,7 @@ function onSmeClick(e){
 
 /* ---- override editor: shared, persisted add/remove of SME overrides (panel above the matrix) ---- */
 function engOptions(){ return Object.keys(ROSTER).sort((a,b)=>ROSTER[a].name.localeCompare(ROSTER[b].name)).map(k=>`<option value="${k}">${esc(ROSTER[k].name)}</option>`).join(""); }
+function domOptions(){ return GROUP_ORDER.map(g=>`<optgroup label="${esc(g)}">`+DOMAIN_PRIORITY.filter(d=>groupOf(d)===g).sort((a,b)=>a.localeCompare(b)).map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("")+`</optgroup>`).join(""); }
 async function postOverride(op, domain, engineer, role, reason){
   try{
     const res = await fetch("api/overrides", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({op, domain, engineer, role, reason})});
@@ -451,7 +452,7 @@ function renderOverrideEditor(){
   document.getElementById("ovEditor").innerHTML =
     `<div class="ov-form"><span class="ov-lbl">Override</span>`+
       `<select id="ovEng">${engOptions()}</select>`+
-      `<select id="ovDom">${DOMAIN_PRIORITY.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("")}</select>`+
+      `<select id="ovDom">${domOptions()}</select>`+
       `<select id="ovRole"><option value="sme">as SME</option><option value="runner">as runner-up</option></select>`+
       `<input id="ovWhy" placeholder="reason (optional)">`+
       `<button id="ovAdd">Add</button>`+
