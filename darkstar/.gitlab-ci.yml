@@ -1,6 +1,6 @@
-# darkstar (FastAPI v2) image build — its own image alongside pe-reports (Streamlit).
-# Reuses the shared kaniko/promote templates; all jobs are main-gated so they never run off
-# feature branches. Dockerfile lives at darkstar/Dockerfile (PROJECT_SUB_DIR=darkstar).
+# darkstar (FastAPI v2) CI — builds its own image independently of pe-reports (Streamlit).
+# Included from the root .gitlab-ci.yml; the dev build + promote run ONLY when darkstar/ changes,
+# so a pe-reports change never rebuilds darkstar (and vice-versa). Dockerfile: darkstar/Dockerfile.
 .darkstar-variables:
   variables:
     IMAGE_NAME: darkstar
@@ -14,6 +14,8 @@ publish:darkstar:
     - .darkstar-variables
   rules:
     - if: $CI_COMMIT_BRANCH == 'main'
+      changes:
+        - darkstar/**/*
 
 publish-semver:darkstar:
   stage: publish-semver
@@ -21,7 +23,6 @@ publish-semver:darkstar:
     - .create_semver
     - .darkstar-variables
 
-## DEV
 promote-dev:darkstar:
   stage: promote-dev
   needs: ["publish:darkstar"]
@@ -29,9 +30,11 @@ promote-dev:darkstar:
     - .dev_deploy
     - .darkstar-variables
   rules:
-    - !reference [.app_promotion_rules, rules]
+    - if: $CI_COMMIT_BRANCH == 'main' && $CI_COMMIT_TAG == null
+      changes:
+        - darkstar/**/*
+      when: manual
 
-### PROD
 release:darkstar:
   stage: release
   needs: ["publish-semver:darkstar"]
