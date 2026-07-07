@@ -9,6 +9,7 @@
 
 publish:darkstar:
   stage: publish
+  needs: []
   extends:
     - .publish
     - .darkstar-variables
@@ -16,6 +17,7 @@ publish:darkstar:
     - if: $CI_COMMIT_BRANCH == 'main'
       changes:
         - darkstar/**/*
+    - if: $CI_COMMIT_BRANCH == 'feat/darkstar'   # TEMP: bootstrap a dev image from the branch (remove before/at MR)
 
 publish-semver:darkstar:
   stage: publish-semver
