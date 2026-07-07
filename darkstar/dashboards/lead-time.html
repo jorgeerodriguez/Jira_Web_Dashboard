@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform Engineering — Lead & Cycle Time</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
+    --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
+    --blue:#5b9dff; --good:#41c98a; --warn:#e8c24a; --bad:#f2705f; --hold:#c084ef;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:radial-gradient(1100px 620px at 50% -8%, #141c29 0%, var(--bg) 62%); color:var(--ink);
+    font-family:var(--sans); line-height:1.55; -webkit-font-smoothing:antialiased; padding:clamp(16px,3vw,40px) 16px 56px; min-height:100vh}
+  .nav{max-width:none; margin:0 auto 18px; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .nav .brand{font-family:var(--mono); font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.14em; font-size:11px; margin-right:8px}
+  .nav a{font-family:var(--mono); font-size:13px; color:var(--ink2); text-decoration:none; padding:7px 13px; border-radius:8px; border:1px solid transparent}
+  .nav a:hover{color:var(--ink); border-color:var(--line2)}
+  .nav a.active{color:var(--ink); background:var(--panel); border-color:var(--line2)}
+  .card{background:var(--card); max-width:none; margin:0 auto; border:1px solid var(--line); border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75); padding:clamp(22px,4vw,44px)}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
+  .dek{color:var(--ink2); font-size:16px; margin:0; max-width:74ch}
+  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:34px 0 6px}
+  .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:76ch}
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-top:16px}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:16px; background:var(--panel)}
+  .stat .lbl{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+  .stat .v{font-family:var(--mono); font-size:30px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
+  .stat .v small{font-size:14px; color:var(--muted); font-weight:400}
+  .stat .sub{font-size:12px; color:var(--ink2); margin-top:4px}
+  .chart-wrap{width:100%; overflow-x:auto; margin-top:8px}
+  svg.chart{display:block; width:100%; height:auto; max-width:900px; min-width:520px; margin-inline:auto}
+  .bar{fill:var(--blue)}
+  .barlbl{font-family:var(--mono); font-size:12px; fill:var(--ink2)}
+  .barval{font-family:var(--mono); font-size:12px; font-weight:600; fill:var(--ink)}
+  .axis{font-family:var(--mono); font-size:11px; fill:var(--muted)}
+  .tbl-wrap{width:100%; overflow-x:auto}
+  table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:560px}
+  caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
+  th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  tbody td{border-bottom:1px solid var(--line)} td.num{font-family:var(--mono)}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  .fname{color:var(--ink)} .fk{font-family:var(--mono); font-size:11px; color:var(--muted)}
+  .mini{position:relative; width:120px; height:7px; border-radius:4px; background:var(--line2); display:inline-block; vertical-align:middle}
+  .mini > i{position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--blue)}
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:80ch}
+  .foot b{color:var(--ink2); font-weight:600} .foot code{font-family:var(--mono); color:var(--ink2)}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <span class="brand">Platform Eng</span>
+  <a href="velocity">Velocity</a>
+  <a href="delivery-forecast">Delivery Forecast</a>
+  <a href="lead-time" class="active">Lead/Cycle Time</a>
+  <a href="intake">Intake</a>
+</nav>
+<main class="card">
+  <p class="eyebrow">Platform Engineering · Flow Metrics</p>
+  <h1>Lead Time &amp; Cycle Time</h1>
+  <p class="dek">For delivered DEVOPS stories under the open Initiative &amp; Features. <b>Lead time</b> = created → Done (total elapsed, including backlog wait). <b>Cycle time</b> = time actively in progress (In Progress / Blocked / On Hold / Validating), summed across spells; direct To-Do→Done counts as 1 day. The gap between them is queue/wait time. Completion measured from status history; "Will Not Do" excluded. As of July 1, 2026.</p>
+
+  <div class="cards" id="summary"></div>
+
+  <h2>Lead-time distribution</h2>
+  <p class="h2sub">How long delivered stories took end-to-end. Most work should cluster left; a long right tail signals stories that sat in the backlog or dragged.</p>
+  <div class="chart-wrap"><div id="hist"></div></div>
+
+  <h2>By Feature</h2>
+  <p class="h2sub">Median lead vs. median cycle per Feature (delivered stories). A big lead–cycle gap = lots of waiting; similar values = work flows straight through.</p>
+  <div class="tbl-wrap"><table id="byFeature"></table></div>
+
+  <div class="foot">
+    <div><b>Definitions.</b> Lead time = calendar days from <code>created</code> to the Done transition. Cycle time = summed time in active statuses (In Progress, Blocked, On Hold, Validating, Reviewing); reopened stories sum every active spell; a story that went straight To-Do→Done with no active spell is recorded as 1 day. Queue = lead − cycle.</div>
+    <div><b>Data.</b> Status history pulled per-issue from the Jira changelog for the <b>86 done stories</b> under the currently-open tracked Features; completion date is the Done-category transition (<code>resolutiondate</code> is unreliable in this instance). Refreshed as of July 1, 2026.</div>
+    <div><b>Caveat.</b> Counts stories, not effort — a one-line change and a multi-day build both count as one. Flow efficiency = cycle ÷ lead (how much of the elapsed time was active work).</div>
+  </div>
+</main>
+
+<script>
+let LEAD = [];
+let FEATURE_NAMES = {};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const median=a=>{ if(!a.length) return 0; const b=[...a].sort((x,y)=>x-y); const m=Math.floor(b.length/2); return b.length%2?b[m]:Math.round((b[m-1]+b[m])/2); };
+const pct=(a,p)=>{ if(!a.length) return 0; const b=[...a].sort((x,y)=>x-y); return b[Math.min(b.length-1,Math.floor(p*b.length))]; };
+
+let delivered = [], leads = [], cycs = [], flow = [];
+const RENDER = [];
+
+/* ---- summary cards ---- */
+RENDER.push(function(){
+  const cards=[
+    {lbl:"Delivered stories", v:delivered.length, sub:"done, Jan–Jul 2026"},
+    {lbl:"Lead time · P50", v:pct(leads,.5), unit:"d", sub:"half done within this"},
+    {lbl:"Lead time · P85", v:pct(leads,.85), unit:"d", sub:"safer planning number"},
+    {lbl:"Lead time · P95", v:pct(leads,.95), unit:"d", sub:"long-tail bound"},
+    {lbl:"Cycle time · P50", v:pct(cycs,.5), unit:"d", sub:"active work, median"},
+    {lbl:"Flow efficiency", v:Math.round(median(flow)*100), unit:"%", sub:"cycle ÷ lead (median)"}
+  ];
+  document.getElementById("summary").innerHTML = cards.map(c=>
+    `<div class="stat"><div class="lbl">${c.lbl}</div><div class="v">${c.v}${c.unit?`<small> ${c.unit}</small>`:""}</div><div class="sub">${c.sub}</div></div>`
+  ).join('');
+});
+
+/* ---- histogram ---- */
+RENDER.push(function(){
+  const BUCKETS=[[0,3,"0–3d"],[4,7,"4–7d"],[8,14,"8–14d"],[15,30,"15–30d"],[31,60,"31–60d"],[61,90,"61–90d"],[91,1e9,"90d+"]];
+  const COLORS=["#41c98a","#6fd07f","#b9cf5a","#e8c24a","#f0a24c","#f0784c","#f2705f"];
+  const counts=BUCKETS.map(b=>delivered.filter(x=>x.lead>=b[0]&&x.lead<=b[1]).length);
+  const W=900,H=340,ML=40,MR=20,MT=24,MB=54, PL=ML,PR=W-MR,PT=MT,PB=H-MB, PW=PR-PL,PH=PB-PT;
+  const n=BUCKETS.length, maxC=Math.max(1,...counts), bw=PW/n*0.62, step=PW/n;
+  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Histogram of lead times across ${delivered.length} delivered stories.">`;
+  for(let g=0; g<=4; g++){ const v=Math.round(maxC*g/4), y=PB-(v/maxC)*PH;
+    s+=`<line x1="${PL}" x2="${PR}" y1="${y}" y2="${y}" stroke="var(--grid)"/>`;
+    s+=`<text class="axis" x="${PL-8}" y="${y+4}" text-anchor="end">${v}</text>`; }
+  BUCKETS.forEach((b,i)=>{ const cx=PL+step*i+step/2, h=(counts[i]/maxC)*PH, y=PB-h;
+    s+=`<rect class="bar" x="${cx-bw/2}" y="${y}" width="${bw}" height="${h}" rx="4" fill="${COLORS[i]}"/>`;
+    if(counts[i]>0) s+=`<text class="barval" x="${cx}" y="${y-6}" text-anchor="middle">${counts[i]}</text>`;
+    s+=`<text class="barlbl" x="${cx}" y="${PB+18}" text-anchor="middle">${b[2]}</text>`; });
+  s+=`<text class="axis" x="${PL}" y="${MT-10}">stories</text>`;
+  s+=`<text class="axis" x="${PR}" y="${PB+40}" text-anchor="end">lead time (created → done)</text>`;
+  s+=`</svg>`;
+  document.getElementById("hist").innerHTML=s;
+});
+
+/* ---- by feature ---- */
+RENDER.push(function(){
+  const byF={};
+  delivered.forEach(x=>{ (byF[x.feature]=byF[x.feature]||[]).push(x); });
+  const rows=Object.entries(byF).map(([f,arr])=>({
+    f, n:arr.length, ml:median(arr.map(x=>x.lead)), mc:median(arr.map(x=>x.cyc))
+  })).sort((a,b)=>b.ml-a.ml);
+  const maxMl=Math.max(1,...rows.map(r=>r.ml));
+  const head=`<thead><tr><th>Feature</th><th>Delivered</th><th>Median lead</th><th>Median cycle</th><th>Median queue</th><th>Lead (rel.)</th></tr></thead>`;
+  const body="<tbody>"+rows.map(r=>{
+    const q=Math.max(0,r.ml-r.mc);
+    return `<tr>
+      <td><span class="fname">${esc(FEATURE_NAMES[r.f]||r.f)}</span> <span class="fk">${r.f}</span></td>
+      <td class="num">${r.n}</td>
+      <td class="num">${r.ml}d</td>
+      <td class="num">${r.mc}d</td>
+      <td class="num">${q}d</td>
+      <td><span class="mini"><i style="width:${Math.round(r.ml/maxMl*100)}%"></i></span></td>
+    </tr>`;
+  }).join('')+"</tbody>";
+  document.getElementById("byFeature").innerHTML=head+body+
+    `<caption>Sorted by median lead time, longest first. Queue = median lead − median cycle (time not actively worked).</caption>`;
+});
+
+async function init(){
+  try{
+    const res = await fetch("api/lead-time");
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    LEAD = data.stories; FEATURE_NAMES = data.feature_names;
+    delivered = LEAD.filter(x=>x.lead!=null);
+    leads = delivered.map(x=>x.lead); cycs = delivered.map(x=>x.cyc);
+    flow = delivered.filter(x=>x.lead>0).map(x=>x.cyc/x.lead);
+    RENDER.forEach(fn=>fn());
+  }catch(e){
+    document.querySelector("main.card").insertAdjacentHTML("afterbegin",
+      `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">Failed to load lead-time data: ${esc(e.message)}</div>`);
+  }
+}
+init();
+</script>
+</body>
+</html>
