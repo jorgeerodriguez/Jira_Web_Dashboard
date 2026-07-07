@@ -24,6 +24,8 @@ logger = logging.getLogger("darkstar.gitlab_ingest")
 
 _API: str = "https://gitlab.com/api/v4"
 _PE_GROUP_IDS: tuple[int, ...] = (115211004, 116139818)  # audacy-inc/devops, audacy-inc/gcp
+# individual repos outside the PE groups worth tracking (they live in other groups).
+_PE_PROJECT_IDS: tuple[int, ...] = (74581778, 83803878)  # audacy-inc/secops/aws-identity-center/tf-org{,-v2}
 _MAX_FILES_PER_MR: int = 60
 _PER_PAGE: int = 100
 _TIMEOUT_SECONDS: int = 30
@@ -43,13 +45,13 @@ def _to_naive_utc(value: str) -> datetime:
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def _merged_mrs(session: requests.Session, group_id: int, updated_after_iso: str) -> list[dict]:
-    """Every merged MR in a group updated since the cutoff, following pagination."""
+def _merged_mrs(session: requests.Session, scope: str, updated_after_iso: str) -> list[dict]:
+    """Every merged MR in a scope ('groups/{id}' or 'projects/{id}') since the cutoff, paginated."""
     results: list[dict] = []
     page = 1
     while True:
         response = session.get(
-            f"{_API}/groups/{group_id}/merge_requests",
+            f"{_API}/{scope}/merge_requests",
             params={"state": "merged", "updated_after": updated_after_iso,
                     "per_page": _PER_PAGE, "page": page},
             timeout=_TIMEOUT_SECONDS,
@@ -85,7 +87,13 @@ def _project_path(mr: dict) -> str:
 
 
 def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int) -> tuple[int, int]:
-    """Crawl merged MRs by roster members over the trailing window; store MRs + file paths.
+    """Crawl merged MRs by roster members from the PE groups + tracked repos over the window."""
+    return _sync_scopes(connection, now, window_days, _PE_GROUP_IDS, _PE_PROJECT_IDS)
+
+
+def _sync_scopes(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int,
+                 group_ids: tuple[int, ...], project_ids: tuple[int, ...]) -> tuple[int, int]:
+    """Crawl merged MRs by roster members from the given groups + projects; store MRs + file paths.
 
     `now` is a naive-UTC datetime (consistent with the rest of the store). Returns
     (merge requests written, file-path rows written).
@@ -101,8 +109,9 @@ def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window
     file_rows: list[tuple[int, str]] = []
     seen_ids: set[int] = set()
 
-    for group_id in _PE_GROUP_IDS:
-        for mr in _merged_mrs(session, group_id, updated_after_iso):
+    scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
+    for scope in scopes:
+        for mr in _merged_mrs(session, scope, updated_after_iso):
             account_id = GITLAB_USERNAMES.get((mr.get("author") or {}).get("username", ""))
             if account_id is None:
                 continue

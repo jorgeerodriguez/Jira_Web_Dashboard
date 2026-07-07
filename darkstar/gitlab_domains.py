@@ -22,8 +22,8 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|looker|\bedp\b",
     "Grafana": r"grafana|dashboards?/|prometheus|\bloki\b|\btempo\b|alerting|servicemonitor|scrape",
     "GitLab": r"\.gitlab-ci|/\.gitlab/|(^|/)ci/|\bpipeline",
-    "IAM/RBAC": r"\biam\b|/rbac|service-?account|workload-?identity|/roles?/|policies?/|clusterrole|\bsso\b|okta",
-    "Networking": r"\bvpc\b|subnet|/dns|route53|networking|firewall|/network/|ingress|egress|peering|cloudflare",
+    "IAM/RBAC": r"\biam\b|/rbac|service-?account|workload-?identity|/roles?/|policies?/|clusterrole|\bsso\b|okta|tf-org\b",
+    "Networking": r"\bvpc\b|subnet|/dns|networking|firewall|/network/|ingress|egress|peering|cloudflare",
     "Secrets/Vault": r"\bvault\b|/secrets?/|\bsops\b|sealed-?secret|external-?secret",
     "Databases": r"cloud-?sql|alloydb|\brds\b|postgres|mysql|\bredis\b|memorystore|/database",
     "Composer": r"composer",
@@ -41,6 +41,7 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "GKE": r"\bgke\b",
     "VertexAI": r"vertex[\s_-]?ai|vertexai|aiplatform|\bvertex\b",
     "Kubeflow Pipelines": r"kubeflow|\bkfp\b",
+    "Route53": r"tf-sharedservices|route\s?53|\br53\b",
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {
