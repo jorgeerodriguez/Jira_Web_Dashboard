@@ -4,14 +4,25 @@ Run locally with:  uvicorn darkstar.app:app --port 8080
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import pathlib
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 
 import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from darkstar import config, delivery, intake, leadtime, overrides, store, velocity
+from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, store, velocity
+
+logger = logging.getLogger("darkstar.app")
+
+# The in-process pollers and the dashboards share one DuckDB connection (EBS is single-writer);
+# _write_lock serializes the two pollers' writes while dashboard reads use independent cursors.
+_write_lock = threading.Lock()
+_GITLAB_WINDOW_DAYS: int = 180
 
 app = FastAPI(title="darkstar", description="Platform Engineering Jira dashboards (v2)")
 
@@ -62,6 +73,63 @@ def _db() -> duckdb.DuckDBPyConnection:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _run_jira_cycle(jira: object, jira_tz: object, full_reconcile: timedelta) -> None:
+    """One Jira sync cycle through the shared connection, serialized against the GitLab crawl."""
+    with _write_lock:
+        ingest.sync_cycle(_db().cursor(), jira, _utcnow(), full_reconcile, jira_tz)
+
+
+def _run_gitlab_cycle() -> None:
+    """One GitLab MR crawl through the shared connection, serialized against the Jira poll."""
+    with _write_lock:
+        gitlab_ingest.run_gitlab_sync(_db().cursor(), _utcnow(), _GITLAB_WINDOW_DAYS)
+
+
+async def _jira_poll_loop(cfg: config.Config) -> None:
+    """Poll Jira forever on the configured interval; a failed cycle is logged, not fatal."""
+    jira = ingest.connect_jira(cfg)
+    jira_tz = ingest.get_jira_timezone(jira)
+    full_reconcile = timedelta(seconds=cfg.full_reconcile_interval_seconds)
+    logger.info("jira poller started (interval %ss)", cfg.poll_interval_seconds)
+    while True:
+        try:
+            await asyncio.to_thread(_run_jira_cycle, jira, jira_tz, full_reconcile)
+        except Exception:
+            logger.exception("jira sync cycle failed")
+        await asyncio.sleep(cfg.poll_interval_seconds)
+
+
+async def _gitlab_poll_loop(interval_seconds: int) -> None:
+    """Crawl merged MRs forever on an interval; a failed crawl is logged, not fatal."""
+    logger.info("gitlab poller started (interval %ss, window %sd)", interval_seconds, _GITLAB_WINDOW_DAYS)
+    while True:
+        try:
+            await asyncio.to_thread(_run_gitlab_cycle)
+        except Exception:
+            logger.exception("gitlab sync failed")
+        await asyncio.sleep(interval_seconds)
+
+
+@app.on_event("startup")
+async def _start_pollers() -> None:
+    """Launch the in-process Jira + GitLab pollers, skipping either if its secret is absent.
+
+    Both share the app's single DuckDB connection (EBS is single-writer per file); dashboard
+    reads use independent cursors. `/health` is independent of the store, so probes pass while
+    the first crawl runs.
+    """
+    _db()  # open + initialize the shared connection before the pollers write
+    try:
+        cfg = config.load_config()
+        asyncio.create_task(_jira_poll_loop(cfg))
+    except RuntimeError as exc:
+        logger.warning("jira poller not started: %s", exc)
+    if os.environ.get("GITLAB_TOKEN"):
+        asyncio.create_task(_gitlab_poll_loop(int(os.environ.get("DARKSTAR_GITLAB_INTERVAL_SECONDS", "86400"))))
+    else:
+        logger.warning("gitlab poller not started: GITLAB_TOKEN unset")
 
 
 @app.get("/health")

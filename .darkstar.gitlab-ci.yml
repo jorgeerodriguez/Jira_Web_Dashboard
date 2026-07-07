@@ -1,0 +1,40 @@
+# darkstar (FastAPI v2) image build — its own image alongside pe-reports (Streamlit).
+# Reuses the shared kaniko/promote templates; all jobs are main-gated so they never run off
+# feature branches. Dockerfile lives at darkstar/Dockerfile (PROJECT_SUB_DIR=darkstar).
+.darkstar-variables:
+  variables:
+    IMAGE_NAME: darkstar
+    REGISTRY_ENDPOINT: 910555647794.dkr.ecr.us-east-1.amazonaws.com
+    PROJECT_SUB_DIR: darkstar
+
+publish:darkstar:
+  stage: publish
+  extends:
+    - .publish
+    - .darkstar-variables
+  rules:
+    - if: $CI_COMMIT_BRANCH == 'main'
+
+publish-semver:darkstar:
+  stage: publish-semver
+  extends:
+    - .create_semver
+    - .darkstar-variables
+
+## DEV
+promote-dev:darkstar:
+  stage: promote-dev
+  needs: ["publish:darkstar"]
+  extends:
+    - .dev_deploy
+    - .darkstar-variables
+  rules:
+    - !reference [.app_promotion_rules, rules]
+
+### PROD
+release:darkstar:
+  stage: release
+  needs: ["publish-semver:darkstar"]
+  extends:
+    - .prod_deploy
+    - .darkstar-variables
