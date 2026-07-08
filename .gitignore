@@ -163,6 +163,7 @@ secrets*.*
 /backup/
 .DS_Store
 .json
+.vscode/
 
 
 
