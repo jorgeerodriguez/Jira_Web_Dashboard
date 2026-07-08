@@ -42,6 +42,7 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "VertexAI": r"vertex[\s_-]?ai|vertexai|aiplatform|\bvertex\b",
     "Kubeflow Pipelines": r"kubeflow|\bkfp\b",
     "Route53": r"tf-sharedservices|route\s?53|\br53\b",
+    "Fastly": r"fastly",  # 3rd-party CDN (distinct from AWS CloudFront) — specialized, called out on its own
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {
