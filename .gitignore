@@ -158,6 +158,9 @@ env.bak/
 venv.bak/
 config.json
 config*.*
+# darkstar/config.py is source code (env-driven, no secrets) — the broad config*.* rule above
+# was hiding it, which left it out of the image and crash-looped the pod. Keep it tracked.
+!darkstar/config.py
 secrets*.*
 ./backup/*.*
 /backup/
