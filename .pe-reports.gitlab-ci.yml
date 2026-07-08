@@ -29,10 +29,6 @@ publish:pe-reports:
     - .custom-variables
   rules:
     - if: $CI_COMMIT_BRANCH == 'main'
-    # TEMP: build the combined pe-reports+darkstar image from feat/darkstar so darkstar has a dev
-    # image before merge. This pushes a dev-* tag that pe-reports' ImagePolicy also selects, so
-    # pe-reports dev redeploys to the combined image too (same Streamlit). Remove before/at MR.
-    - if: $CI_COMMIT_BRANCH == 'feat/darkstar'
 
 publish-semver:pe-reports:
   stage: publish-semver
