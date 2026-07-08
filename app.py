@@ -51,12 +51,16 @@ try:
         predict_completion_probability,
         build_probability_curve,
         build_probability_training_detail_table,
+        build_probability_training_distribution_figures,
+        build_probability_trend_figure,
     )
 except ImportError:
     build_completion_on_time_model = None
     predict_completion_probability = None
     build_probability_curve = None
     build_probability_training_detail_table = None
+    build_probability_training_distribution_figures = None
+    build_probability_trend_figure = None
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -270,6 +274,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     status_col = _pick_col(df_issues, ["status", "Status"])
     assignee_col = _pick_col(df_issues, ["assignee_name", "Assignee"])
     key_col = _pick_col(df_issues, ["key", "Key", "ticket", "Ticket"])
+    issue_type_col = _pick_col(df_issues, ["issuetype", "issue_type", "Issue Type"])
     priority_col = _pick_col(df_issues, ["priority_name", "priority", "Priority"])
     lead_col = _pick_col(df_issues, ["bussiness_lead", "business_lead", "Business Lead"])
     summary_col = _pick_col(df_issues, ["summary", "Summary"])
@@ -285,6 +290,8 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     work = df_issues.copy()
     work[status_col] = work[status_col].fillna("Unknown").astype(str)
     work[assignee_col] = work[assignee_col].fillna("Unassigned").astype(str)
+    if issue_type_col is not None:
+        work[issue_type_col] = work[issue_type_col].fillna("Unknown").astype(str)
 
     selected_norm = str(assignee_value).strip().casefold()
     work = work[work[assignee_col].astype(str).str.strip().str.casefold().eq(selected_norm)].copy()
@@ -411,6 +418,13 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     work["Created Date"] = _fmt_date(work[created_col]) if created_col is not None else ""
     work["Days Left"] = pd.to_numeric(work["days_left"], errors="coerce").fillna(pd.NA)
 
+    issue_type_norm = (
+        work[issue_type_col].astype(str).map(_normalize_text)
+        if issue_type_col is not None
+        else pd.Series("", index=work.index)
+    )
+    feature_mask = issue_type_norm.eq("feature")
+
     total_assigned = int(len(work))
     done_tickets = int(status_norm.eq("done").sum())
     open_tickets = int(open_mask.sum())
@@ -454,14 +468,15 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     )
     priority_fig.update_layout(height=340, xaxis_title="Priority", yaxis_title="Count")
 
-    focus_df = work[open_mask].copy()
+    focus_df = work[open_mask & ~feature_mask].copy()
     focus_df = focus_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
     )
     focus_df = focus_df[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].head(15).copy()
 
-    summary_df = work.sort_values(
+    summary_df = work[feature_mask].copy()
+    summary_df = summary_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
     )[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].copy()
@@ -675,6 +690,9 @@ elif selected == "📉  Trend":
             st.plotly_chart(tr["cycle_fig"], width="stretch")
         if tr["status_mix_fig"] is not None:
             st.plotly_chart(tr["status_mix_fig"], width="stretch")
+        if tr.get("pe_completion_trend_fig") is not None:
+            st.subheader("Completion Trend by Platform Engineer")
+            st.plotly_chart(tr["pe_completion_trend_fig"], width="stretch")
         st.subheader("Trend Monthly Detail")
         st.dataframe(tr["table_df"], width="stretch")
 
@@ -1207,6 +1225,7 @@ elif selected == "🎯  Probability of completion on time":
         or predict_completion_probability is None
         or build_probability_curve is None
         or build_probability_training_detail_table is None
+        or build_probability_training_distribution_figures is None
     ):
         st.error("probability_completion_report module could not be loaded.")
         st.stop()
@@ -1223,19 +1242,35 @@ elif selected == "🎯  Probability of completion on time":
         st.warning(f"⚠️ {prob_payload['error_message']}")
         st.stop()
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Training rows (last 90d)", f"{prob_payload['training_rows']:,}")
     k2.metric("Historical on-time rate", f"{prob_payload['on_time_rate'] * 100:.1f}%")
     k3.metric("Training accuracy", f"{prob_payload['training_accuracy'] * 100:.1f}%")
-    k4.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
+    if prob_payload.get("validation_accuracy") is not None:
+        k4.metric("Validation accuracy", f"{prob_payload['validation_accuracy'] * 100:.1f}%")
+        k5.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
+        st.caption(
+            f"Validation set uses the most recent {prob_payload.get('validation_rows', 0):,} Done tickets (time-based holdout)."
+        )
+    else:
+        k4.metric("Validation accuracy", "N/A")
+        k5.metric("Average validation time", f"{prob_payload['average_validation_days']:.1f} days")
 
     if prob_payload.get("model_name"):
         st.caption(f"Selected model: {prob_payload['model_name']}")
+    if prob_payload.get("probability_calibrated"):
+        st.caption(f"Probability calibration: {prob_payload.get('calibration_method', 'enabled')}")
 
     if prob_payload.get("accuracy_target_met"):
-        st.success("Training accuracy target met (≥ 90%).")
+        if prob_payload.get("validation_accuracy") is not None:
+            st.success("Validation accuracy target met (≥ 90%) on the time-based holdout set.")
+        else:
+            st.success("Training accuracy target met (≥ 90%).")
     else:
-        st.info("Training accuracy target of 90% was not reached; the app is using the best available fitted model.")
+        if prob_payload.get("validation_accuracy") is not None:
+            st.info("Validation accuracy target of 90% was not reached; the app is using the best available fitted model.")
+        else:
+            st.info("Training accuracy target of 90% was not reached; the app is using the best available fitted model.")
 
     pr_col, as_col, dt_col = st.columns(3)
     with pr_col:
@@ -1333,6 +1368,23 @@ elif selected == "🎯  Probability of completion on time":
             },
         )
 
+        charts = build_probability_training_distribution_figures(detail_df)
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            st.plotly_chart(charts["on_time_fig"], width="stretch")
+        with ch2:
+            st.plotly_chart(charts["past_due_fig"], width="stretch")
+
+        if build_probability_trend_figure is not None:
+            trend_fig = build_probability_trend_figure(detail_df)
+            if trend_fig is not None:
+                st.subheader("Past Due Days & On-Time Rate Trend")
+                st.caption(
+                    "Bars show raw Past Due Days per ticket (green ≤ 0, amber ≤ 3, red > 3). "
+                    "Blue line shows the rolling on-time rate across the same tickets."
+                )
+                st.plotly_chart(trend_fig, width="stretch")
+
 
 # ── Personal Dashboard ─────────────────────────────────────────────────────────
 elif selected == "🧑‍💼  Personal Dashboard":
@@ -1391,7 +1443,7 @@ elif selected == "🧑‍💼  Personal Dashboard":
 
     st.caption(
         "Only tickets in Triage, To Do, In Progress, On Hold, Validating, Tech Discovery Required, Blocked, and Staged CAR are shown. "
-        "Prioritized by status risk, then target date, then ticket age."
+        "Feature tickets are reserved for the Epic Ticket Only table. Prioritized by status risk, then target date, then ticket age."
     )
 
     col_a, col_b = st.columns(2)
@@ -1418,7 +1470,7 @@ elif selected == "🧑‍💼  Personal Dashboard":
             },
         )
 
-    st.subheader("All Assigned Tickets")
+    st.subheader("Epic Ticket Only")
     st.dataframe(
         personal["summary_df"],
         width="stretch",

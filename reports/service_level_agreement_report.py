@@ -62,9 +62,9 @@ def _normalize_text(value: Any, default: str = "Unknown") -> str:
 
 
 def _canonical_priority(value: Any) -> str:
-    text = _normalize_text(value, "No Priority").lower().replace(" ", "")
+    text = _normalize_text(value, "None").lower().replace(" ", "")
     if text in {"p1", "prio1"}:
-        return "Critical"
+        return "Urgent"
     if text in {"p2", "prio2"}:
         return "High"
     if text in {"p3", "prio3"}:
@@ -72,18 +72,19 @@ def _canonical_priority(value: Any) -> str:
     if text in {"p4", "prio4"}:
         return "Low"
     mapping = {
-        "highest": "Critical",
-        "critical": "Critical",
-        "urgent": "Critical",
-        "blocker": "Critical",
+        "highest": "Urgent",
+        "critical": "Urgent",
+        "urgent": "Urgent",
+        "blocker": "Urgent",
         "high": "High",
         "medium": "Medium",
         "low": "Low",
-        "lowest": "Lowest",
-        "nopriority": "No Priority",
-        "none": "No Priority",
+        "lowest": "None",
+        "nopriority": "None",
+        "none": "None",
+        "": "None",
     }
-    return mapping.get(text, _normalize_text(value, "No Priority"))
+    return mapping.get(text, "None")
 
 
 def _priority_sla_days(priority: str) -> int:
@@ -225,7 +226,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERI
 
     df["sla_status"] = df.apply(_sla_status, axis=1)
     status_order = ["On Track", "At Risk", "Breached", "Unknown"]
-    priority_order = ["Critical", "High", "Medium", "Low", "Lowest", "No Priority"]
+    priority_order = ["Urgent", "High", "Medium", "Low", "None"]
     df["priority_label"] = pd.Categorical(df["priority_label"], categories=priority_order, ordered=True)
 
     # Overall KPIs

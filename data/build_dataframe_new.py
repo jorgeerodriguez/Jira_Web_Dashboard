@@ -30,15 +30,14 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
         "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate"
     )
 
-    # Build JQL query
+    # Build JQL query — 24-month lookback
     jql_clauses = []
     if projects:
         project_filter = " OR ".join([f'project = "{p}"' for p in projects])
         jql_clauses.append(f"({project_filter})")
-    
-    jql_query = " AND ".join(jql_clauses) if jql_clauses else ""
-    jql_query += " ORDER BY assignee ASC, updated DESC"
-    jql_query = jql_query.strip()
+    jql_clauses.append('created >= -730d')
+
+    jql_query = " AND ".join(jql_clauses) + " ORDER BY assignee ASC, updated DESC"
 
     # Fetch issues with pagination
     issues_iterator_all = []

@@ -11,7 +11,7 @@ def fetch_all_tickets_for_project(jira_connector, project_key: str = "DEVOPS") -
     if jira_connector is None:
         return 1, "Invalid Jira connector: None", 0, {}
 
-    jql_query = f'project = "{project_key}" ORDER BY created DESC'
+    jql_query = f'project = "{project_key}" AND created >= -730d ORDER BY created DESC'
     status_counts = Counter()
     total_issues_processed = 0
     page_size = 100
