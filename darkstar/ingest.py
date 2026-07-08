@@ -211,14 +211,13 @@ def fetch_transitions(jira: JIRA, keys: list[str]) -> list[store.TransitionRow]:
     return transitions
 
 
-def plan_sync(meta: store.SyncMeta | None, now: datetime, full_reconcile_interval: timedelta) -> SyncPlan:
-    """Decide whether this cycle is a full crawl or an incremental slice."""
-    if (
-        meta is None
-        or meta.last_incremental_sync is None
-        or meta.last_full_sync is None
-        or (now - meta.last_full_sync) >= full_reconcile_interval
-    ):
+def plan_sync(meta: store.SyncMeta | None, now: datetime) -> SyncPlan:
+    """Decide whether this cycle is a full crawl or an incremental slice.
+
+    A full crawl happens only once — when the store has no watermark yet (first run). Every cycle
+    after is an incremental `updated >=` slice; there is no periodic full reconcile.
+    """
+    if meta is None or meta.last_incremental_sync is None or meta.last_full_sync is None:
         return SyncPlan(watermark=None, last_full_sync=now)
     return SyncPlan(watermark=meta.last_incremental_sync, last_full_sync=meta.last_full_sync)
 
@@ -256,12 +255,11 @@ def sync_cycle(
     connection: duckdb.DuckDBPyConnection,
     jira: JIRA,
     now: datetime,
-    full_reconcile_interval: timedelta,
     jira_tz: ZoneInfo,
 ) -> SyncResult:
     """Plan and run one sync cycle against the current store state."""
     meta = store.get_sync_meta(connection)
-    plan = plan_sync(meta, now, full_reconcile_interval)
+    plan = plan_sync(meta, now)
     return run_sync(connection, jira, plan, now, jira_tz)
 
 
@@ -271,12 +269,11 @@ async def poll_loop(config: Config) -> None:
     store.initialize_schema(connection)
     jira = connect_jira(config)
     jira_tz = get_jira_timezone(jira)
-    full_reconcile = timedelta(seconds=config.full_reconcile_interval_seconds)
     logger.info("poller started", extra={"db": config.db_path, "interval_s": config.poll_interval_seconds})
     while True:
         now = _utcnow()
         try:
-            result = await asyncio.to_thread(sync_cycle, connection, jira, now, full_reconcile, jira_tz)
+            result = await asyncio.to_thread(sync_cycle, connection, jira, now, jira_tz)
             logger.info(
                 "sync ok",
                 extra={
@@ -299,7 +296,7 @@ def main() -> None:
     store.initialize_schema(connection)
     jira = connect_jira(config)
     jira_tz = get_jira_timezone(jira)
-    result = sync_cycle(connection, jira, _utcnow(), timedelta(seconds=config.full_reconcile_interval_seconds), jira_tz)
+    result = sync_cycle(connection, jira, _utcnow(), jira_tz)
     connection.close()
     print(
         f"sync complete: full={result.full} fetched_issues={result.fetched_issues} "

@@ -29,6 +29,9 @@ _PE_PROJECT_IDS: tuple[int, ...] = (74581778, 83803878)  # audacy-inc/secops/aws
 _MAX_FILES_PER_MR: int = 60
 _PER_PAGE: int = 100
 _TIMEOUT_SECONDS: int = 30
+# Re-fetch a small overlap before the watermark on incremental crawls so a boundary MR is never
+# missed (upserts are idempotent, so the overlap is harmless).
+_WATERMARK_MARGIN: timedelta = timedelta(minutes=5)
 
 
 def _token() -> str:
@@ -87,18 +90,26 @@ def _project_path(mr: dict) -> str:
 
 
 def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int) -> tuple[int, int]:
-    """Crawl merged MRs by roster members from the PE groups + tracked repos over the window."""
-    return _sync_scopes(connection, now, window_days, _PE_GROUP_IDS, _PE_PROJECT_IDS)
+    """Crawl merged MRs by roster members: full `window_days` on the first run, incremental after.
+
+    The first crawl (no stored watermark) pulls the whole trailing window; every crawl after pulls
+    only MRs updated since the last successful sync (minus a small margin). The watermark advances
+    only after a successful crawl, so a failed run just retries the same slice next time.
+    """
+    watermark = store.get_gitlab_watermark(connection)
+    cutoff = now - timedelta(days=window_days) if watermark is None else watermark - _WATERMARK_MARGIN
+    written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS)
+    store.set_gitlab_watermark(connection, now)
+    return written
 
 
-def _sync_scopes(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int,
+def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                  group_ids: tuple[int, ...], project_ids: tuple[int, ...]) -> tuple[int, int]:
     """Crawl merged MRs by roster members from the given groups + projects; store MRs + file paths.
 
-    `now` is a naive-UTC datetime (consistent with the rest of the store). Returns
-    (merge requests written, file-path rows written).
+    `cutoff` is a naive-UTC floor: only MRs updated on GitLab and merged on or after it are
+    (re)ingested. Returns (merge requests written, file-path rows written).
     """
-    cutoff = now - timedelta(days=window_days)
     updated_after_iso = cutoff.replace(tzinfo=timezone.utc).isoformat()
     fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
 

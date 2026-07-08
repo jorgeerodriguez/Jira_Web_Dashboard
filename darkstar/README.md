@@ -23,12 +23,15 @@ time — everything reads the local store):
 - **Store** (`store.py`) — one DuckDB file (on a PVC in prod). Tables: `issues`,
   `transitions` (append-only status changes from changelogs), `sync_meta`, and — for the SME
   matrix — `merge_requests` + `mr_files`. All timestamps are naive UTC.
-- **Jira poller** (`ingest.py`) — incremental `updated >= watermark` pull plus per-changed-issue
-  changelog; completion is measured as the earliest transition to `Done` (resolutiondate is
-  null on ~85% of issues), attributed to the America/Denver business month.
-- **GitLab ingest** (`gitlab_ingest.py`) — pulls merged MRs (rolling **6-month** window) from
-  the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few tracked repos that live
-  outside those groups (`_PE_PROJECT_IDS`, e.g. `tf-org`/`tf-org-v2` under secops). Each MR is
+- **Jira poller** (`ingest.py`) — a one-time full crawl on the first run, then **incremental only**
+  (`updated >= watermark`, no periodic full reconcile) plus a per-changed-issue changelog;
+  completion is measured as the earliest transition to `Done` (resolutiondate is null on ~85% of
+  issues), attributed to the America/Denver business month.
+- **GitLab ingest** (`gitlab_ingest.py`) — a one-time full **6-month** crawl on the first run, then
+  **incremental** pulls of only the MRs updated since the last sync (watermark in `gitlab_sync_meta`,
+  minus a small margin), from the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few
+  tracked repos that live outside those groups (`_PE_PROJECT_IDS`, e.g. `tf-org`/`tf-org-v2` under
+  secops). Each MR is
   attributed to a roster member (`roster.GITLAB_USERNAMES`) and its changed file paths stored;
   `gitlab_domains.py` tags each MR to expertise domains from its **repo + changed file paths**
   (not the diff contents or the MR description) — a far denser signal than Jira titles.
@@ -57,9 +60,9 @@ This is what makes the routing accurate. Jira ticket titles are terse and incons
 them recognizes a domain in only **~63%** of the work. The primary expertise signal instead comes
 from **what engineers actually build**, read from GitLab:
 
-- For every merged MR by a roster member (rolling 6-month window, from the PE groups plus a few
-  tracked repos), we fetch the MR's **changed file paths** — not the diff contents, and not the MR
-  title/description — capped at 60 paths per MR.
+- For every merged MR by a roster member (a 6-month baseline on the first sync, then kept current
+  by incremental syncs, from the PE groups plus a few tracked repos), we fetch the MR's **changed
+  file paths** — not the diff contents, and not the MR title/description — capped at 60 paths per MR.
 - `gitlab_domains.py` tags each MR to expertise domains with regex over the **repo name + those
   file paths**. For the IaC / GitOps / config work that is most of PE's output, the directory
   layout *is* the taxonomy: `.../eks-nodegroups/.../terragrunt.hcl` → EKS + Terraform;
@@ -111,7 +114,8 @@ gitlab_ingest.run_gitlab_sync(c, datetime.now(timezone.utc).replace(tzinfo=None)
 ```
 
 Env: `DARKSTAR_DB_PATH` (store path), `DARKSTAR_OVERRIDES_PATH` (SME overrides JSON; defaults
-alongside the store), `DARKSTAR_POLL_INTERVAL_SECONDS`, `DARKSTAR_FULL_RECONCILE_SECONDS`.
+alongside the store), `DARKSTAR_POLL_INTERVAL_SECONDS` (Jira poll cadence),
+`DARKSTAR_GITLAB_INTERVAL_SECONDS` (GitLab poll cadence).
 
 ## Deploy
 

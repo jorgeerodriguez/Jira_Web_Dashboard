@@ -9,7 +9,7 @@ import logging
 import os
 import pathlib
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import duckdb
 from fastapi import FastAPI, HTTPException
@@ -75,10 +75,10 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _run_jira_cycle(jira: object, jira_tz: object, full_reconcile: timedelta) -> None:
+def _run_jira_cycle(jira: object, jira_tz: object) -> None:
     """One Jira sync cycle through the shared connection, serialized against the GitLab crawl."""
     with _write_lock:
-        ingest.sync_cycle(_db().cursor(), jira, _utcnow(), full_reconcile, jira_tz)
+        ingest.sync_cycle(_db().cursor(), jira, _utcnow(), jira_tz)
 
 
 def _run_gitlab_cycle() -> None:
@@ -91,11 +91,10 @@ async def _jira_poll_loop(cfg: config.Config) -> None:
     """Poll Jira forever on the configured interval; a failed cycle is logged, not fatal."""
     jira = ingest.connect_jira(cfg)
     jira_tz = ingest.get_jira_timezone(jira)
-    full_reconcile = timedelta(seconds=cfg.full_reconcile_interval_seconds)
     logger.info("jira poller started (interval %ss)", cfg.poll_interval_seconds)
     while True:
         try:
-            await asyncio.to_thread(_run_jira_cycle, jira, jira_tz, full_reconcile)
+            await asyncio.to_thread(_run_jira_cycle, jira, jira_tz)
         except Exception:
             logger.exception("jira sync cycle failed")
         await asyncio.sleep(cfg.poll_interval_seconds)

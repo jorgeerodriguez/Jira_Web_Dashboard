@@ -20,7 +20,6 @@ class Config:
     jira_api_token: str
     db_path: str
     poll_interval_seconds: int
-    full_reconcile_interval_seconds: int
 
 
 def _require(name: str) -> str:
@@ -39,7 +38,6 @@ def load_config() -> Config:
         jira_api_token=_require("JIRA_API_TOKEN"),
         db_path=os.environ.get("DARKSTAR_DB_PATH", _DEFAULT_DB_PATH),
         poll_interval_seconds=int(os.environ.get("DARKSTAR_POLL_INTERVAL_SECONDS", "900")),
-        full_reconcile_interval_seconds=int(os.environ.get("DARKSTAR_FULL_RECONCILE_SECONDS", "86400")),
     )
 
 

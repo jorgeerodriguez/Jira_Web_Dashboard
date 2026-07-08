@@ -150,6 +150,11 @@ CREATE TABLE IF NOT EXISTS mr_files (
     mr_id BIGINT NOT NULL,
     path  VARCHAR NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gitlab_sync_meta (
+    id        INTEGER PRIMARY KEY,
+    last_sync TIMESTAMP
+);
 """
 
 
@@ -251,3 +256,16 @@ def replace_mr_files(
             "INSERT INTO mr_files (mr_id, path) VALUES (?, ?)", [list(row) for row in files]
         )
     return len(files)
+
+
+def get_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> datetime | None:
+    """Return the last successful GitLab sync time, or None if never crawled (→ full window)."""
+    row = connection.execute("SELECT last_sync FROM gitlab_sync_meta WHERE id = 1").fetchone()
+    return row[0] if row else None
+
+
+def set_gitlab_watermark(connection: duckdb.DuckDBPyConnection, last_sync: datetime) -> None:
+    """Record the GitLab sync watermark (id = 1); later crawls pull only MRs updated after it."""
+    connection.execute(
+        "INSERT OR REPLACE INTO gitlab_sync_meta (id, last_sync) VALUES (1, ?)", [last_sync]
+    )
