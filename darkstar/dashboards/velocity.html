@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform Engineering — Completed Tickets by Month</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
+    --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
+    --pos:#41c98a; --neg:#f2705f;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(1100px 620px at 50% -8%, #141c29 0%, var(--bg) 62%);
+    color:var(--ink); font-family:var(--sans); line-height:1.55;
+    -webkit-font-smoothing:antialiased; padding:clamp(20px,4vw,56px) 16px; min-height:100vh;
+  }
+  .nav{max-width:none; margin:0 auto 18px; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .nav .brand{font-family:var(--mono); font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.14em; font-size:11px; margin-right:8px}
+  .nav a{font-family:var(--mono); font-size:13px; color:var(--ink2); text-decoration:none; padding:7px 13px; border-radius:8px; border:1px solid transparent}
+  .nav a:hover{color:var(--ink); border-color:var(--line2)}
+  .nav a.active{color:var(--ink); background:var(--panel); border-color:var(--line2)}
+  .card{
+    background:var(--card); max-width:none; margin:0 auto; border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
+    padding:clamp(22px,4vw,44px);
+  }
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
+  .dek{color:var(--ink2); font-size:16px; margin:0; max-width:66ch}
+
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 4px}
+  .controls .lbl{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-right:2px}
+  .chip{
+    display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+    border:1px solid var(--line2); background:transparent; color:var(--ink2);
+    padding:6px 11px; border-radius:999px; font:inherit; font-size:13px; font-weight:560;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .chip .dot{width:9px; height:9px; border-radius:50%; background:var(--c); opacity:.35; transition:opacity .15s}
+  .chip[aria-pressed="true"]{color:var(--ink); border-color:var(--c); background:color-mix(in srgb, var(--c) 16%, transparent)}
+  .chip[aria-pressed="true"] .dot{opacity:1}
+  .chip:focus-visible{outline:2px solid var(--c); outline-offset:2px}
+  .btn{cursor:pointer; border:1px solid var(--line2); background:transparent; color:var(--muted); font:inherit; font-size:12px; font-family:var(--mono); padding:6px 10px; border-radius:8px}
+  .btn:hover{color:var(--ink); border-color:var(--muted)}
+  .controls .note{font-family:var(--mono); font-size:12px; color:var(--muted); width:100%; margin-top:2px}
+
+  .chart-wrap{width:100%; overflow-x:auto; margin-top:10px}
+  svg.chart{display:block; width:85%; height:auto; min-width:520px; margin-inline:auto}
+  .chart-inner{position:relative}
+  .hit{fill:none; stroke:#000; stroke-opacity:0; stroke-width:14; pointer-events:stroke; cursor:pointer}
+  .series{transition:opacity .12s}
+  .tip{position:absolute; z-index:5; pointer-events:none; background:var(--panel); border:1px solid var(--line2);
+       border-radius:8px; padding:6px 10px; font-family:var(--mono); font-size:12.5px; color:var(--ink);
+       white-space:nowrap; box-shadow:0 8px 22px -10px rgba(0,0,0,.7); transform:translate(12px,10px)}
+  .tip .sw{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px}
+  .tip .t{color:var(--muted)}
+  .tip .tv{margin-top:3px; font-weight:600}
+  .pinned{margin-top:12px; display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+          font-family:var(--mono); font-size:12.5px; color:var(--ink2);
+          border:1px solid var(--line2); border-radius:999px; padding:5px 12px}
+  .pinned:hover{border-color:var(--muted); color:var(--ink)}
+  .pinned .sw{width:9px; height:9px; border-radius:50%; display:inline-block}
+  .pinned .x{color:var(--muted)}
+  .grid-line{stroke:var(--grid); stroke-width:1}
+  .axis-base{stroke:var(--line2); stroke-width:1}
+  .divider{stroke:var(--muted); stroke-width:1; stroke-dasharray:2 4; opacity:.6}
+  .ax-label{font-family:var(--mono); font-size:12px; fill:var(--muted)}
+  .ax-month{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
+  .ax-month.proj{fill:var(--muted)}
+  .plot-note{font-family:var(--mono); font-size:11px; fill:var(--muted); letter-spacing:.08em; text-transform:uppercase}
+  .val{font-family:var(--mono); font-size:12px; font-weight:600}
+  .series-line{fill:none; stroke-width:2.4; stroke-linejoin:round; stroke-linecap:round}
+  .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
+  .whisk{stroke-width:1.25; opacity:.55}
+
+  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:38px 0 6px}
+  .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:70ch}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--panel)}
+  .stat .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+  .stat .v{font-family:var(--mono); font-size:29px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
+  .stat .s{font-size:12px; color:var(--ink2); margin-top:3px}
+  .stat .s.pos{color:var(--pos)} .stat .s.neg{color:var(--neg)}
+  .tbar-val{font-family:var(--mono); font-size:13px; font-weight:600; fill:var(--ink)}
+  .tbar-lbl{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
+  .tbar-lbl.proj{fill:var(--muted)}
+  .tbar-ax{font-family:var(--mono); font-size:11px; fill:var(--muted)}
+  .tbl-wrap{width:100%; overflow-x:auto}
+  table{border-collapse:collapse; width:100%; font-size:14px; min-width:520px}
+  caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
+  th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  tbody td{border-bottom:1px solid var(--line)}
+  td.num{font-family:var(--mono)}
+  tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
+  tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
+  tbody tr.sum.first td{padding-top:14px}
+  .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
+  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--panel)}
+  .fc .who{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px}
+  .fc .dot-badge{width:9px; height:9px; border-radius:50%}
+  .fc .big{font-family:var(--mono); font-size:28px; font-weight:600; letter-spacing:-.02em; margin:6px 0 1px; font-variant-numeric:tabular-nums}
+  .fc .rng{font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .fc.empty{color:var(--muted); font-size:13px; display:flex; align-items:center}
+
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:76ch}
+  .foot b{color:var(--ink2); font-weight:600}
+  .foot code{font-family:var(--mono); color:var(--ink2)}
+  h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
+  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--muted); transition:transform .18s; transform:translateY(-1px)}
+  h2.collapsible[aria-expanded="true"]::before{transform:translateY(-1px) rotate(90deg)}
+  h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
+  h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
+  .sec-hidden{display:none !important}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <span class="brand">Platform Eng</span>
+  <a href="velocity" class="active">Velocity</a>
+  <a href="delivery-forecast">Delivery Forecast</a>
+  <a href="lead-time">Lead/Cycle Time</a>
+  <a href="intake">Intake</a>
+</nav>
+<main class="card">
+  <p class="eyebrow">Platform Engineering · Ticket Velocity</p>
+  <h1>Completed Tickets by Month</h1>
+  <p class="dek">Delivery work (Story, Task, Bug, Hotfix, Sub-task), each ticket counted once in its first-completion month. Actuals Jan–Jun 2026, with a next-30-day (July) forecast for every member. Toggle members to isolate or compare — pick exactly two for a head-to-head %, or one for month-over-month.</p>
+
+  <h2>Team throughput</h2>
+  <p class="h2sub">All 14 engineers combined — completed tickets per month (each ticket counted once), Jan–Jun with a next-30-day July forecast. This is the team-level trend; the per-engineer breakdown is below.</p>
+  <div class="cards" id="teamStats"></div>
+  <div class="chart-wrap" style="margin-top:16px"><div id="teamChart"></div></div>
+
+  <h2 id="tblHeading">Month-to-month</h2>
+  <div class="tbl-wrap"><table id="tbl"></table></div>
+
+  <h2>By engineer</h2>
+  <div class="controls" id="controls">
+    <span class="lbl">Show</span>
+    <!-- chips injected -->
+    <button class="btn" id="btnAll" type="button">All</button>
+    <button class="btn" id="btnNone" type="button">None</button>
+    <span class="note">solid = actual · dashed = July forecast · whisker = range · point values &amp; ranges shown when ≤3 selected · hover a line for the name</span>
+  </div>
+
+  <div class="chart-wrap"><div class="chart-inner" id="chartInner"><div id="chart"></div><div id="tip" class="tip" hidden></div></div></div>
+  <div id="pinned" class="pinned" hidden></div>
+
+  <h2>Next-30-day forecast</h2>
+  <p class="h2sub">Central = recency-weighted average of the last 3 months (Apr×1 + May×2 + Jun×3)/6; range = ±1 s.d. of those months. Reflects recent pace; low confidence (5 data points). Shows for the members you've selected.</p>
+  <div class="cards" id="cards"></div>
+
+  <div class="foot">
+    <div><b>What's counted.</b> <code>project = DEVOPS</code>, issue types Story / Task / Bug / Hotfix / Sub-task. "Completed" = the ticket entered the <code>Done</code> status (from the changelog; <code>resolutiondate</code> is unreliable here). "Will Not Do" excluded. Re-opens de-duplicated — each ticket counts once, in its first-completion month. Attributed by current assignee. Data as of July 1, 2026.</div>
+    <div><b>Forecast method.</b> Next 30 days ≈ July. Central is a recency-weighted 3-month average; the band is ±1 standard deviation of Apr–Jun. This deliberately weights recent months — a trend line through all six months would misjudge current pace, since the team’s workload and mix shifted across H1. Directional only.</div>
+    <div><b>Team.</b> 14 members of Platform Engineering (confirmed roster). Excludes non-team assignees who occasionally get DEVOPS tickets. Over Jan–Jun the team completed 616 tickets (delivery types, deduped).</div>
+    <div><b>Caveat.</b> Ticket count is throughput, not effort or complexity — a bucket-creation task and a multi-week platform build each count as 1. Read across the team accordingly.</div>
+    <div><b>Add / edit a member.</b> Edit the <code>MEMBERS</code> object at the top of the &lt;script&gt; block — set <code>actuals: [Jan, Feb, Mar, Apr, May, Jun]</code> and a <code>forecast</code>. Everything updates automatically.</div>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   DATA — edit team members here.
+   actuals: [Jan, Feb, Mar, Apr, May, Jun].  forecast: {value, low, high} for the next 30 days (July).
+   ============================================================ */
+/* Data is loaded from the darkstar API (see init() at the bottom). */
+let MONTHS = [];          // ["Jan"…"Jun","Jul"] — last entry is the forecast month
+let LAST_ACTUAL = 0;      // index of the last actual month
+let MEMBERS = {};         // key -> { name, short, color, actuals:[…], forecast:{value,low,high} }
+let ORDER = [];           // member keys in display order (by total, desc — the API sorts)
+const selected = new Set();
+let locked = null;                             // pinned member key (click-to-lock)
+
+const PALETTE = ["#ef6f9e","#6fd07f","#c084ef","#4cc4d6","#5b9dff","#f4a24c","#e8c24a","#9a8cf5","#3fccc4","#f07b6b","#b9cf5a","#e57fd0","#7c93f5","#4fd0a0"];
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const monthAbbr = ym => MONTH_ABBR[parseInt(ym.split("-")[1],10)-1];
+const nextMonthAbbr = ym => MONTH_ABBR[parseInt(ym.split("-")[1],10) % 12];
+
+/* ---------- helpers ---------- */
+const CARD_BG = "#141922";
+function niceStep(vmax){ for(const t of [5,10,20,25,50,100]) if(vmax/t <= 8) return t; return 200; }
+function total(m){ return m.actuals.reduce((a,b)=>a+b,0); }
+function julVal(m){ return m.forecast ? m.forecast.value : null; }
+function projected(m){ return total(m) + (julVal(m)||0); }
+function valAt(m,i){ return i<=LAST_ACTUAL ? m.actuals[i] : julVal(m); }
+function fmtPct(a,b){
+  if(a==null||b==null||b===0) return {t:"—", c:"na"};
+  const raw=(a-b)/b*100;
+  const val=Math.abs(raw)<10 ? Math.round(raw*10)/10 : Math.round(raw);
+  return {t:(raw>=0?"+":"−")+Math.abs(val)+"%", c: raw>=0?"pos":"neg"};
+}
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function sel(){ return ORDER.filter(k=>selected.has(k)); }
+
+/* ---------- geometry ---------- */
+const W=920, H=470, ML=60, MR=92, MT=48, MB=68;
+const PL=ML, PR=W-MR, PT=MT, PB=H-MB, PW=PR-PL, PH=PB-PT;
+const xAt = i => PL + PW*(i/(MONTHS.length-1));
+let curYAt = v=>v;   // set each render so hover can map a value to its y pixel
+
+/* ---------- chart ---------- */
+function renderChart(){
+  const keys = sel();
+  const detail = keys.length>0 && keys.length<=3;      // show point values + whiskers only when uncluttered
+  let vmax=1;
+  keys.forEach(k=>{ MEMBERS[k].actuals.forEach(v=>vmax=Math.max(vmax,v)); if(MEMBERS[k].forecast) vmax=Math.max(vmax,MEMBERS[k].forecast.high); });
+  const step=niceStep(vmax), ymax=Math.max(step, Math.ceil(vmax/step)*step);
+  const yAt=v=>PB-(v/ymax)*PH;
+  curYAt=yAt;
+
+  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Completed tickets per month for ${keys.map(k=>MEMBERS[k].name).join(', ')||'no one selected'}.">`;
+  for(let v=0; v<=ymax; v+=step){
+    const y=yAt(v);
+    s += v===0 ? `<line class="axis-base" x1="${PL}" x2="${PR}" y1="${y}" y2="${y}"/>`
+               : `<line class="grid-line" x1="${PL}" x2="${PR}" y1="${y}" y2="${y}"/>`;
+    s += `<text class="ax-label" x="${PL-12}" y="${y+4}" text-anchor="end">${v}</text>`;
+  }
+  s += `<text class="plot-note" x="${PL}" y="${MT-14}">tickets / month</text>`;
+  s += `<line class="divider" x1="${xAt(LAST_ACTUAL)}" y1="${PT}" x2="${xAt(LAST_ACTUAL)}" y2="${PB}"/>`;
+  s += `<text class="plot-note" x="${(xAt(LAST_ACTUAL)+xAt(LAST_ACTUAL+1))/2}" y="${MT-6}" text-anchor="middle">forecast →</text>`;
+
+  keys.forEach(k=>{
+    const m=MEMBERS[k], col=m.color;
+    const solidD=m.actuals.map((v,i)=>`${i?'L':'M'}${xAt(i)} ${yAt(v)}`).join(' ');
+    const fd = m.forecast ? ` M${xAt(LAST_ACTUAL)} ${yAt(m.actuals[LAST_ACTUAL])} L${xAt(LAST_ACTUAL+1)} ${yAt(m.forecast.value)}` : '';
+    s += `<g class="series" data-k="${k}">`;
+    s += `<path class="hit" data-k="${k}" d="${solidD}${fd}"/>`;
+    s += `<path class="series-line" d="${solidD}" stroke="${col}"/>`;
+    m.actuals.forEach((v,i)=>{ s += `<circle cx="${xAt(i)}" cy="${yAt(v)}" r="4" fill="${col}"/>`; });
+    if(detail) m.actuals.forEach((v,i)=>{ s += `<text class="val" x="${xAt(i)}" y="${yAt(v)-9}" text-anchor="middle" fill="${col}">${v}</text>`; });
+    if(m.forecast){
+      const xf=xAt(LAST_ACTUAL+1), yv=yAt(m.forecast.value), yl=yAt(m.forecast.low), yh=yAt(m.forecast.high);
+      s += `<path class="series-dash" d="M${xAt(LAST_ACTUAL)} ${yAt(m.actuals[LAST_ACTUAL])} L${xf} ${yv}" stroke="${col}"/>`;
+      if(detail){
+        s += `<line class="whisk" x1="${xf}" y1="${yh}" x2="${xf}" y2="${yl}" stroke="${col}"/>`;
+        s += `<line class="whisk" x1="${xf-6}" y1="${yh}" x2="${xf+6}" y2="${yh}" stroke="${col}"/>`;
+        s += `<line class="whisk" x1="${xf-6}" y1="${yl}" x2="${xf+6}" y2="${yl}" stroke="${col}"/>`;
+      }
+      s += `<circle cx="${xf}" cy="${yv}" r="4" fill="${CARD_BG}" stroke="${col}" stroke-width="2"/>`;
+      if(detail) s += `<text class="val" x="${xf+9}" y="${yv+4}" text-anchor="start" fill="${col}">${m.forecast.value}</text>`;
+    }
+    s += `</g>`;
+  });
+  MONTHS.forEach((mo,i)=>{ s += `<text class="ax-month${i===MONTHS.length-1?' proj':''}" x="${xAt(i)}" y="${PB+22}" text-anchor="middle">${mo}</text>`; });
+  s += `<text class="ax-label" x="${xAt(0)}" y="${PB+38}" text-anchor="middle">start</text>`;
+  s += `<text class="ax-label" x="${xAt(MONTHS.length-1)}" y="${PB+38}" text-anchor="middle">proj.</text>`;
+  s += `<circle id="hl" r="6" fill="none" stroke-width="2" pointer-events="none" style="display:none"/>`;
+  s += `</svg>`;
+  document.getElementById("chart").innerHTML = s;
+  bindHover();
+}
+
+/* ---------- hover tooltip ---------- */
+function applyBase(){
+  if(locked && !selected.has(locked)) locked=null;
+  document.querySelectorAll("#chart .series").forEach(g=>g.style.opacity = locked ? (g.dataset.k===locked?"1":"0.13") : "");
+  const p=document.getElementById("pinned");
+  if(p){
+    if(locked && MEMBERS[locked]){ const m=MEMBERS[locked];
+      p.hidden=false; p.innerHTML=`<span class="sw" style="background:${m.color}"></span>Pinned: ${esc(m.name)} <span class="x">✕ unpin</span>`;
+    } else { p.hidden=true; p.innerHTML=""; }
+  }
+}
+function clearHover(){
+  const t=document.getElementById("tip"); if(t) t.hidden=true;
+  const hl=document.getElementById("hl"); if(hl) hl.style.display="none";
+  applyBase();
+}
+function bindHover(){
+  const chart=document.getElementById("chart"), inner=document.getElementById("chartInner"), t=document.getElementById("tip");
+  const groups=chart.querySelectorAll(".series");
+  chart.onclick=(e)=>{ const g=e.target.closest(".series"); locked = g ? (locked===g.dataset.k?null:g.dataset.k) : null; applyBase(); };
+  chart.onmousemove=(e)=>{
+    const g=e.target.closest(".series");
+    if(!g || (locked && g.dataset.k!==locked)){ clearHover(); return; }   // while pinned, only the pinned line responds to hover
+    const m=MEMBERS[g.dataset.k];
+    groups.forEach(gg=>gg.style.opacity=(gg.dataset.k===g.dataset.k?"1":"0.13"));
+    const svg=chart.querySelector("svg"), sr=svg.getBoundingClientRect();
+    const vbX=(e.clientX-sr.left)/sr.width*W;
+    let mi=0,best=1e9; for(let i=0;i<MONTHS.length;i++){ const d=Math.abs(xAt(i)-vbX); if(d<best){best=d; mi=i;} }
+    const val=valAt(m,mi), isFc=mi===MONTHS.length-1;
+    const hl=document.getElementById("hl");
+    if(hl){ if(val==null){ hl.style.display="none"; } else { hl.setAttribute("cx",xAt(mi)); hl.setAttribute("cy",curYAt(val)); hl.setAttribute("stroke",m.color); hl.style.display=""; } }
+    const r=inner.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+    const vtxt = val==null ? "—" : (isFc ? "≈"+val+" (forecast)" : val);
+    t.innerHTML=`<span class="sw" style="background:${m.color}"></span>${esc(m.name)}<div class="tv">${MONTHS[mi]}: ${vtxt} <span class="t">· ${total(m)} total</span></div>`;
+    t.style.left=x+"px"; t.style.top=y+"px";
+    t.style.transform=(x>r.width-190)?"translate(calc(-100% - 12px),10px)":"translate(12px,10px)";
+    t.hidden=false;
+  };
+  chart.onmouseleave=clearHover;
+  applyBase();
+}
+
+/* ---------- table ---------- */
+function renderTable(){
+  const keys=sel(), pair=keys.length===2, solo=keys.length===1;
+  document.getElementById("tblHeading").textContent =
+    pair ? `Month-to-month · ${MEMBERS[keys[0]].short} vs ${MEMBERS[keys[1]].short}` : "Month-to-month";
+
+  let head=`<thead><tr><th>Month</th>`+keys.map(k=>`<th>${esc(MEMBERS[k].short)}</th>`).join('');
+  if(pair) head+=`<th>${esc(MEMBERS[keys[0]].short)} vs ${esc(MEMBERS[keys[1]].short)}</th>`;
+  if(solo) head+=`<th>MoM</th>`;
+  head+=`</tr></thead>`;
+
+  let body="<tbody>";
+  for(let i=0;i<MONTHS.length;i++){
+    const isFc=i===MONTHS.length-1;
+    let row=`<tr class="${isFc?'proj':''}"><td>${MONTHS[i]}${i===0?' <span style="color:var(--muted)">(start)</span>':''}${isFc?' — forecast':''}</td>`;
+    row+=keys.map(k=>{ const v=valAt(MEMBERS[k],i); return `<td class="num" style="color:${MEMBERS[k].color}">${v==null?'<span class="na">—</span>':(isFc?'≈':'')+v}</td>`; }).join('');
+    if(pair){ const p=fmtPct(valAt(MEMBERS[keys[0]],i), valAt(MEMBERS[keys[1]],i)); row+=`<td class="num"><span class="${p.c}">${p.t}</span></td>`; }
+    if(solo){
+      let cell='<span class="na">—</span>';
+      if(i>0){ const cur=valAt(MEMBERS[keys[0]],i), prev=MEMBERS[keys[0]].actuals[i-1]; const p=fmtPct(cur,prev); cell=`<span class="${p.c}">${p.t}</span>`; }
+      row+=`<td class="num">${cell}</td>`;
+    }
+    body+=row+`</tr>`;
+  }
+  const totRow=(label,fn,cls)=>{
+    let r=`<tr class="sum ${cls}"><td>${label}</td>`;
+    r+=keys.map(k=>{ const v=fn(k); return `<td class="num" style="color:${MEMBERS[k].color}">${v}</td>`; }).join('');
+    if(pair){ const p=fmtPct(fn(keys[0]),fn(keys[1])); r+=`<td class="num"><span class="${p.c}">${p.t}</span></td>`; }
+    if(solo) r+=`<td></td>`;
+    return r+`</tr>`;
+  };
+  body+=totRow("Total, actual (Jan–Jun)", k=>total(MEMBERS[k]), "first");
+  body+=totRow("Total, projected (Feb–Jul)", k=>projected(MEMBERS[k]), "");
+  body+="</tbody>";
+
+  const cap = pair
+    ? `<caption>Positive = ${esc(MEMBERS[keys[0]].short)} ahead that month · negative = behind. "—" where a value is 0.</caption>`
+    : (solo ? `<caption>MoM = change vs the previous month.</caption>`
+            : `<caption>Pick exactly two members for a head-to-head %, or one for month-over-month.</caption>`);
+  document.getElementById("tbl").innerHTML = head+body+cap;
+}
+
+/* ---------- forecast cards ---------- */
+function renderCards(){
+  const keys=sel().filter(k=>MEMBERS[k].forecast);
+  const el=document.getElementById("cards");
+  if(!keys.length){ el.innerHTML=`<div class="fc empty">No members selected.</div>`; return; }
+  el.innerHTML = keys.map(k=>{ const m=MEMBERS[k];
+    return `<div class="fc">
+      <div class="who"><span class="dot-badge" style="background:${m.color}"></span>${esc(m.short)}</div>
+      <div class="big" style="color:${m.color}">≈ ${m.forecast.value}</div>
+      <div class="rng">range ${m.forecast.low}–${m.forecast.high}</div>
+    </div>`; }).join('');
+}
+
+/* ---------- chips ---------- */
+function renderChips(){
+  const c=document.getElementById("controls");
+  c.querySelectorAll(".chip").forEach(n=>n.remove());
+  const anchor=document.getElementById("btnAll");
+  ORDER.forEach(k=>{
+    const m=MEMBERS[k], b=document.createElement("button");
+    b.className="chip"; b.type="button"; b.style.setProperty("--c",m.color);
+    b.setAttribute("aria-pressed", selected.has(k));
+    b.innerHTML=`<span class="dot"></span>${esc(m.short)}`;
+    b.addEventListener("click",()=>{ if(selected.has(k)){ if(selected.size===1) return; selected.delete(k);} else selected.add(k); renderAll(); });
+    c.insertBefore(b, anchor);
+  });
+}
+
+// ---- Team-level view: monthly team totals + summary (all members, ignores filter) ----
+function renderTeam(){
+  const N = LAST_ACTUAL + 1;                                  // actual months (Feb..Jun)
+  const totals = [];
+  for(let i=0;i<N;i++) totals.push(ORDER.reduce((s,k)=>s+MEMBERS[k].actuals[i],0));
+  const fTot  = ORDER.reduce((s,k)=>s+MEMBERS[k].forecast.value,0);
+  const fLow  = ORDER.reduce((s,k)=>s+MEMBERS[k].forecast.low,0);
+  const fHigh = ORDER.reduce((s,k)=>s+MEMBERS[k].forecast.high,0);
+  const grand = totals.reduce((a,b)=>a+b,0);
+  const avg   = Math.round(grand/N);
+  const last  = totals[N-1], prev = totals[N-2];
+  const dPct  = prev ? Math.round((last-prev)/prev*100) : 0;
+
+  const card=(k,v,sub,scls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s ${scls||''}">${sub}</div></div>`;
+  document.getElementById("teamStats").innerHTML =
+    card("Delivered Jan–Jun", grand, ORDER.length+" engineers") +
+    card("Avg / month", avg, "team throughput") +
+    card("Latest — "+MONTHS[N-1], last, (dPct>=0?"▲ +"+dPct:"▼ "+dPct)+"% vs "+MONTHS[N-2], dPct>=0?"pos":"neg") +
+    card("July forecast", "≈"+fTot, fLow+"–"+fHigh+" range");
+
+  // monthly team-total bar chart (actuals Feb..Jun + July forecast)
+  const labels = MONTHS.slice(0, N+1);
+  const vals   = totals.concat([fTot]);
+  const W=980,H=300,ML=46,MR=18,MT=26,MB=48;
+  const PL=ML,PR=W-MR,PT=MT,PB=H-MB,PW=PR-PL,PH=PB-PT;
+  const n=vals.length, step=PW/n, bw=Math.min(84, step*0.56);
+  const maxV=Math.max(...vals), niceMax=Math.max(25, Math.ceil(maxV/25)*25);
+  const yAtV=v=>PB-(v/niceMax)*PH, cxAt=i=>PL+step*i+step/2;
+  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Team completed tickets per month, February through June with a July forecast.">`;
+  for(let g=0;g<=4;g++){ const gv=Math.round(niceMax*g/4), gy=yAtV(gv);
+    s+=`<line class="grid-line" x1="${PL}" y1="${gy}" x2="${PR}" y2="${gy}"/>`;
+    s+=`<text class="tbar-ax" x="${PL-9}" y="${gy+4}" text-anchor="end">${gv}</text>`; }
+  vals.forEach((v,i)=>{ const proj=(i===n-1), by=yAtV(v), h=PB-by, x=cxAt(i)-bw/2;
+    s+=`<rect x="${x}" y="${by}" width="${bw}" height="${h}" rx="5" fill="${proj?'none':'#5b9dff'}"${proj?' stroke="#5b9dff" stroke-width="2" stroke-dasharray="5 4"':''}/>`;
+    s+=`<text class="tbar-val" x="${cxAt(i)}" y="${by-8}" text-anchor="middle">${proj?'≈'+v:v}</text>`;
+    s+=`<text class="tbar-lbl${proj?' proj':''}" x="${cxAt(i)}" y="${PB+20}" text-anchor="middle">${labels[i]}${proj?' (proj)':''}</text>`; });
+  s+=`<text class="tbar-ax" x="${PL}" y="${MT-12}">tickets / month</text>`;
+  s+=`</svg>`;
+  document.getElementById("teamChart").innerHTML = s;
+}
+function renderAll(){ renderChips(); renderChart(); renderTable(); renderCards(); }
+document.getElementById("btnAll").addEventListener("click",()=>{ ORDER.forEach(k=>selected.add(k)); renderAll(); });
+document.getElementById("btnNone").addEventListener("click",()=>{ selected.clear(); selected.add(ORDER[0]); renderAll(); });
+document.getElementById("pinned").addEventListener("click",()=>{ locked=null; applyBase(); });
+
+async function init(){
+  try{
+    const res = await fetch("api/velocity");
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    LAST_ACTUAL = data.months.length - 1;
+    MONTHS = data.months.map(monthAbbr).concat([nextMonthAbbr(data.months[data.months.length-1])]);
+    MEMBERS = {}; ORDER = [];
+    data.members.forEach((mem,i)=>{
+      const key = mem.name.toLowerCase().replace(/[^a-z0-9]+/g,"-") || ("m"+i);
+      MEMBERS[key] = { name:mem.name, short:mem.name, color:PALETTE[i % PALETTE.length], actuals:mem.counts, forecast:mem.forecast };
+      ORDER.push(key);
+    });
+    selected.clear(); ORDER.forEach(k=>selected.add(k));
+    renderAll();
+    renderTeam();
+  }catch(e){
+    document.querySelector("main.card").insertAdjacentHTML("afterbegin",
+      `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">Failed to load velocity data: ${esc(e.message)}</div>`);
+  }
+}
+init();
+
+/* ---------- collapsible sections: each <h2> toggles the elements beneath it (up to the next h2 / footer) ---------- */
+(function(){
+  const card=document.querySelector("main.card");
+  const isStop=el=> el.tagName==="H2" || el.classList.contains("foot");
+  card.querySelectorAll(":scope > h2").forEach(h=>{
+    const body=[]; let n=h.nextElementSibling;
+    while(n && !isStop(n)){ body.push(n); n=n.nextElementSibling; }
+    h.classList.add("collapsible");
+    h.setAttribute("role","button");
+    h.setAttribute("tabindex","0");
+    h.setAttribute("aria-expanded","true");
+    const set=open=>{ h.setAttribute("aria-expanded",String(open)); body.forEach(el=>el.classList.toggle("sec-hidden",!open)); };
+    h.addEventListener("click",()=>set(h.getAttribute("aria-expanded")!=="true"));
+    h.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(h.getAttribute("aria-expanded")!=="true"); }});
+  });
+})();
+</script>
+</body>
+</html>

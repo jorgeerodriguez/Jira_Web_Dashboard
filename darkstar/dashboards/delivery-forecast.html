@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform Engineering — Delivery Forecast</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
+    --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
+    --blue:#5b9dff; --good:#41c98a; --warn:#e8c24a; --bad:#f2705f; --hold:#c084ef;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(1100px 620px at 50% -8%, #141c29 0%, var(--bg) 62%);
+    color:var(--ink); font-family:var(--sans); line-height:1.55;
+    -webkit-font-smoothing:antialiased; padding:clamp(16px,3vw,40px) 16px 56px; min-height:100vh;
+  }
+  /* nav (shared across pages) */
+  .nav{max-width:none; margin:0 auto 18px; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .nav .brand{font-family:var(--mono); font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.14em; font-size:11px; margin-right:8px}
+  .nav a{font-family:var(--mono); font-size:13px; color:var(--ink2); text-decoration:none; padding:7px 13px; border-radius:8px; border:1px solid transparent}
+  .nav a:hover{color:var(--ink); border-color:var(--line2)}
+  .nav a.active{color:var(--ink); background:var(--panel); border-color:var(--line2)}
+
+  .card{
+    background:var(--card); max-width:none; margin:0 auto; border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
+    padding:clamp(22px,4vw,44px);
+  }
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
+  .dek{color:var(--ink2); font-size:16px; margin:0 0 4px; max-width:70ch}
+  .summary{margin-top:16px; display:flex; flex-wrap:wrap; gap:10px}
+  .stat{border:1px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--panel)}
+  .stat b{font-family:var(--mono); font-size:20px; font-weight:600; display:block}
+  .stat span{font-size:12px; color:var(--muted)}
+
+  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:34px 0 6px}
+  .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:74ch}
+
+  /* initiative card */
+  .init{border:1px solid var(--line2); border-radius:12px; padding:20px; background:linear-gradient(180deg, rgba(91,157,255,.06), transparent 60%)}
+  .init .top{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
+  .init .name{font-size:18px; font-weight:640}
+  .k{font-family:var(--mono); font-size:12.5px; color:var(--muted); text-decoration:none}
+  .k:hover{color:var(--ink)}
+  .init .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-top:16px}
+  .metric .lbl{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+  .metric .v{font-family:var(--mono); font-size:22px; font-weight:600; margin-top:2px}
+  .metric .v small{font-size:13px; color:var(--muted); font-weight:400}
+  .caveat{margin-top:16px; font-size:13px; color:var(--warn); background:rgba(232,194,74,.08); border:1px solid rgba(232,194,74,.25); border-radius:9px; padding:10px 13px}
+  .cardlist{display:flex; flex-direction:column; gap:14px}
+  .init .top .conf{margin-left:auto}
+  .rnote{margin-top:14px; font-size:13px; border-radius:9px; padding:9px 12px; border:1px solid}
+  .rnote.done{color:var(--good); background:rgba(65,201,138,.08); border-color:rgba(65,201,138,.28)}
+  .rnote.stall{color:var(--bad); background:rgba(242,112,95,.08); border-color:rgba(242,112,95,.28)}
+  .rnote.unbroken{color:var(--muted); background:rgba(124,134,149,.06); border-color:var(--line2)}
+  .children-lbl{background:none; border:0; cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:16px 0 8px 22px; padding:4px 0; display:inline-flex; align-items:center; gap:7px}
+  .children-lbl:hover{color:var(--ink)}
+  .children-lbl .caret{display:inline-block; width:9px; text-align:center}
+  .children{margin:0 0 4px 22px; padding-left:18px; border-left:2px solid var(--line2); display:flex; flex-direction:column; gap:12px}
+  .children.collapsed{display:none}
+  .stories-lbl{background:none; border:0; cursor:pointer; font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:var(--muted); margin:12px 0 2px; padding:4px 0; display:inline-flex; align-items:center; gap:7px}
+  .stories-lbl:hover{color:var(--ink)}
+  .stories{margin-top:4px; border-top:1px solid var(--line)}
+  .stories.collapsed{display:none}
+  .stbl-wrap{overflow-x:auto; margin-top:6px}
+  .stbl{border-collapse:collapse; width:100%; font-size:12.5px; min-width:660px}
+  .stbl th,.stbl td{text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:middle; font-variant-numeric:tabular-nums}
+  .stbl tr:last-child td{border-bottom:0}
+  .stbl thead th{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  .stbl .keycell{display:inline-flex; align-items:center; gap:8px}
+  .stbl .c-sum{white-space:normal; color:var(--ink2); min-width:220px; max-width:460px}
+  .sdot{width:8px; height:8px; border-radius:50%; flex:0 0 auto; display:inline-block}
+  .skey{font-family:var(--mono); font-size:11.5px; color:var(--muted); text-decoration:none}
+  .skey:hover{color:var(--ink)}
+  .nodata{color:var(--muted); opacity:.55; font-style:italic}
+  .delta{padding:1px 8px; border-radius:999px; font-weight:600}
+  .delta.late{color:var(--bad); border:1px solid rgba(242,112,95,.4)}
+  .delta.early{color:var(--good); border:1px solid rgba(65,201,138,.4)}
+  .delta.ontime{color:var(--muted); border:1px solid var(--line2)}
+  .age-warn{color:var(--warn)} .age-bad{color:var(--bad)}
+
+  .tbl-wrap{width:100%; overflow-x:auto}
+  table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:720px}
+  caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
+  th,td{padding:9px 11px; text-align:right; font-variant-numeric:tabular-nums; vertical-align:middle}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  tbody td{border-bottom:1px solid var(--line)}
+  .feat{display:flex; flex-direction:column; gap:2px}
+  .feat .fn{font-weight:560; color:var(--ink)}
+  .feat .fk{font-family:var(--mono); font-size:11.5px; color:var(--muted)}
+  .num{font-family:var(--mono)}
+  .date{font-family:var(--mono); font-weight:600}
+  .p85{color:var(--ink)} .p50{color:var(--ink2)}
+  /* progress bar */
+  .bar{position:relative; width:96px; height:8px; border-radius:5px; background:var(--line2); overflow:hidden; display:inline-block; vertical-align:middle}
+  .bar > i{position:absolute; left:0; top:0; bottom:0; background:var(--good); border-radius:5px}
+  .barlbl{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:7px}
+  /* status chips */
+  .chips{display:inline-flex; gap:4px; flex-wrap:wrap; justify-content:flex-end}
+  .chip{font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:999px; border:1px solid var(--line2); color:var(--ink2)}
+  .chip.todo{border-color:rgba(124,134,149,.5)}
+  .chip.prog{border-color:rgba(91,157,255,.5); color:#a9c8ff}
+  .chip.blk{border-color:rgba(242,112,95,.55); color:#ffab9e}
+  .chip.hold{border-color:rgba(192,132,239,.5); color:#dcbcf5}
+  .conf{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:999px}
+  .conf.higher{color:var(--good); border:1px solid rgba(65,201,138,.4)}
+  .conf.medium{color:var(--warn); border:1px solid rgba(232,194,74,.4)}
+  .conf.low{color:var(--muted); border:1px solid var(--line2)}
+  .reason{color:var(--muted)}
+  .tag{font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line2); color:var(--ink2)}
+  .tag.done{color:var(--good); border-color:rgba(65,201,138,.4)}
+  .tag.stall{color:var(--bad); border-color:rgba(242,112,95,.4)}
+  .tag.unbroken{color:var(--muted)}
+
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:82ch}
+  .foot b{color:var(--ink2); font-weight:600}
+  .foot code{font-family:var(--mono); color:var(--ink2)}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <span class="brand">Platform Eng</span>
+  <a href="velocity">Velocity</a>
+  <a href="delivery-forecast" class="active">Delivery Forecast</a>
+  <a href="lead-time">Lead/Cycle Time</a>
+  <a href="intake">Intake</a>
+</nav>
+
+<main class="card">
+  <p class="eyebrow">Platform Engineering · Delivery Forecast</p>
+  <h1>Initiative &amp; Feature Target Dates</h1>
+  <p class="dek">Monte Carlo delivery forecast for open Initiatives and Features. Each item's remaining child scope is burned down by simulating its recent weekly completion rate 10,000 times; the dates below are the P50 (coin-flip) and P85 (safer commit) finish dates. As of July 1, 2026.</p>
+  <div class="summary" id="summary"></div>
+
+  <h2>Initiative</h2>
+  <p class="h2sub">Rolled-up scope and throughput, with its Features nested beneath.</p>
+  <div id="initiatives"></div>
+
+  <h2>Features — forecastable</h2>
+  <p class="h2sub">Standalone Features (not under an Initiative above), sorted by P85 (safer) target date. Pace λ = child items completed per week (recent 12 weeks). Confidence reflects how much recent data backs the rate.</p>
+  <div id="featList" class="cardlist"></div>
+
+  <h2>Features — no forecast yet</h2>
+  <p class="h2sub">Standalone Features that are complete, stalled (no completions in 12 weeks), or not broken into stories.</p>
+  <div id="noFcList" class="cardlist"></div>
+
+  <div class="foot">
+    <div><b>Method.</b> For each item, remaining scope <code>R</code> = child items not Done (excluding "Will Not Do"). Pace <code>λ</code> = children completed in the last 12 weeks ÷ min(12, weeks-since-created, floored at 2). Each of 10,000 trials draws weekly completions ~ Poisson(λ) until <code>R</code> is burned down; P50/P85/P95 are percentiles of the resulting week counts, added to the as-of date. Simulation is seeded, so results are stable across reloads.</div>
+    <div><b>Completion</b> = child entered the <code>Done</code> status (from the changelog; <code>resolutiondate</code> is unreliable here). Child→parent via the <code>parent</code> field.</div>
+    <div><b>Known limitations (prototype).</b> (1) <b>Scope growth not modeled</b> — Features usually add stories as they progress, so dates skew optimistic; the Initiative is especially a <i>floor</i> because 3 of its 5 Features have no stories yet. (2) Uses item-level pace, which assumes current staffing holds. (3) <b>Blocked</b> items are still counted in scope but can't complete until unblocked — treat blocked-heavy items with caution. (4) Count-based — a large story and a tiny one weigh the same.</div>
+    <div><b>Next steps if this proves useful:</b> model scope-growth from history, use per-assignee throughput, and add a cycle-time/aging view to spot at-risk in-progress items.</div>
+  </div>
+</main>
+
+<script>
+const ASOF = new Date();
+const WINDOW = 12, TRIALS = 10000, CAPWEEKS = 260;
+
+/* type: 'initiative' | 'feature'; done/remaining exclude "Will Not Do"; recent = children Done in last 12 wks */
+let ITEMS = [];
+const BASE = "https://entercomdigitalservices.atlassian.net/browse/";
+
+/* ---------- Monte Carlo ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function poisson(l,rng){ if(l<=0) return 0; const L=Math.exp(-l); let k=0,p=1; do{k++;p*=rng();}while(p>L); return k-1; }
+function ageWeeks(iso){ return Math.max(0,(ASOF-new Date(iso))/(7*864e5)); }
+function lambdaOf(it){ const eff=Math.min(WINDOW, Math.max(2, ageWeeks(it.created))); return it.recent/eff; }
+function scope(it){ return it.done+it.remaining; }
+function classify(it){
+  if(it.unbroken || scope(it)===0) return "unbroken";
+  if(it.remaining===0) return "complete";
+  if(it.recent===0) return "stalled";
+  return "forecast";
+}
+function simulate(R, lam){
+  const rng=mulberry32(0x9E3779B9); const weeks=new Array(TRIALS);
+  for(let i=0;i<TRIALS;i++){ let rem=R,w=0; while(rem>0 && w<CAPWEEKS){ rem-=poisson(lam,rng); w++; } weeks[i]=w; }
+  weeks.sort((a,b)=>a-b);
+  const q=p=>weeks[Math.min(TRIALS-1,Math.floor(p*TRIALS))];
+  return {p50:q(.5), p85:q(.85), p95:q(.95)};
+}
+function addWeeks(w){ const d=new Date(ASOF); d.setDate(d.getDate()+Math.round(w*7)); return d; }
+function fmtDate(d){ return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function confOf(it){ const a=ageWeeks(it.created); if(it.recent>=8 && a>=4) return "higher"; if(it.recent>=4) return "medium"; return "low"; }
+function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function progressBar(it){ const sc=scope(it), pct= sc? Math.round(it.done/sc*100):0;
+  return `<span class="bar"><i style="width:${pct}%"></i></span><span class="barlbl">${it.done}/${sc}</span>`; }
+function chips(it){ let h='<span class="chips">';
+  if(it.todo) h+=`<span class="chip todo">${it.todo} To Do</span>`;
+  if(it.prog) h+=`<span class="chip prog">${it.prog} In Prog</span>`;
+  if(it.blk)  h+=`<span class="chip blk">${it.blk} Blocked</span>`;
+  if(it.hold) h+=`<span class="chip hold">${it.hold} On Hold</span>`;
+  return h+'</span>'; }
+
+/* ---------- render ---------- */
+function renderSummary(){
+  const feats=ITEMS.filter(i=>i.type==="feature");
+  const fc=feats.filter(i=>classify(i)==="forecast").length;
+  const el=document.getElementById("summary");
+  el.innerHTML =
+    `<div class="stat"><b>1</b><span>open Initiative</span></div>`+
+    `<div class="stat"><b>${feats.filter(i=>i.status!=="Done").length}</b><span>open Features</span></div>`+
+    `<div class="stat"><b>${fc}</b><span>forecastable now</span></div>`+
+    `<div class="stat"><b>${feats.filter(i=>classify(i)==="unbroken").length}</b><span>not broken down</span></div>`+
+    `<div class="stat"><b>${feats.filter(i=>classify(i)==="stalled").length}</b><span>stalled (0 in 12 wk)</span></div>`;
+}
+let INIT_KEYS = new Set();
+/* which Feature rolls up to which Initiative/Legend (child Feature key -> parent key) */
+let ROLLUP = {};
+let CHILDREN = {};
+let CYCLE = {};
+function parentOf(it){ return ROLLUP[it.key] || null; }
+function isNested(it){ const p=parentOf(it); return !!(p && INIT_KEYS.has(p)); }
+function simOf(it){ if(!it._sim) it._sim=simulate(it.remaining, lambdaOf(it)); return it._sim; }
+function featRank(it){ return classify(it)==="forecast"?0:1; }
+function featCompare(a,b){ const r=featRank(a)-featRank(b); if(r) return r;
+  if(featRank(a)===0) return simOf(a).p85-simOf(b).p85;
+  const o={complete:0,stalled:1,unbroken:2}; return o[classify(a)]-o[classify(b)]; }
+const NODATA = `<span class="nodata">No Data</span>`;
+function storyRow(s){
+  const dot = s.c==="done" ? "var(--good)" : (s.st==="Blocked" ? "var(--bad)" : (s.st==="On Hold" ? "var(--hold)" : (s.c==="indeterminate" ? "var(--blue)" : "var(--muted)")));
+  const assignee = s.a ? esc(s.a) : NODATA;
+  const target = s.te ? fmtDate(new Date(s.te+"T00:00:00")) : NODATA;
+  let age = NODATA;
+  if(s.c==="done"){
+    const cd=(typeof CYCLE!=="undefined" && CYCLE[s.k]!=null)?CYCLE[s.k]:null;
+    if(cd!=null){ const cls=cd>=60?"age-bad":(cd>=30?"age-warn":""); age=`<span class="${cls}">${cd}d</span>`; }
+  } else if(s.c==="indeterminate" && s.scd){
+    const d=Math.round((ASOF-new Date(s.scd+"T00:00:00"))/864e5);
+    const cls=d>=60?"age-bad":(d>=30?"age-warn":"");
+    age=`<span class="${cls}">${d}d</span>`;
+  }
+  let delta = NODATA;
+  if(s.c==="done" && s.te && s.scd){
+    const diff=Math.round((new Date(s.scd+"T00:00:00")-new Date(s.te+"T00:00:00"))/864e5);
+    delta = diff>0 ? `<span class="delta late">${diff}d late</span>`
+          : diff<0 ? `<span class="delta early">${-diff}d early</span>`
+          : `<span class="delta ontime">on time</span>`;
+  }
+  return `<tr><td><span class="keycell"><span class="sdot" style="background:${dot}"></span><a class="skey" href="${BASE}${s.k}" target="_blank" rel="noopener">${s.k}</a></span></td><td class="c-sum">${esc(s.s)}</td><td>${esc(s.st)}</td><td>${assignee}</td><td>${target}</td><td>${age}</td><td>${delta}</td></tr>`;
+}
+function storiesHTML(it){
+  const kids=(typeof CHILDREN!=="undefined" && CHILDREN[it.key]) ? CHILDREN[it.key] : [];
+  if(!kids.length) return '';
+  const head=`<thead><tr><th>Story</th><th>Summary</th><th>Status</th><th>Assignee</th><th>Target end</th><th>In progress (days)</th><th>Δ vs target</th></tr></thead>`;
+  const body=`<tbody>${kids.map(storyRow).join('')}</tbody>`;
+  return `<button class="stories-lbl" type="button" aria-expanded="false"><span class="caret">▸</span>${kids.length} child ${kids.length===1?"story":"stories"}</button><div class="stories collapsed"><div class="stbl-wrap"><table class="stbl">${head}${body}</table></div></div>`;
+}
+function featureCardHTML(it){
+  const cls=classify(it), sc=scope(it), pct= sc?Math.round(it.done/sc*100):0;
+  let h=`<div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a><span class="tag">${esc(it.status)}</span>`;
+  if(cls==="forecast") h+=`<span class="conf ${confOf(it)}">${confOf(it)} confidence</span>`;
+  h+=`</div>`;
+  if(cls==="forecast"){ const lam=lambdaOf(it), sim=simOf(it);
+    h+=`<div class="grid">
+        <div class="metric"><div class="lbl">Progress</div><div class="v">${pct}% <small>${it.done}/${sc}</small></div></div>
+        <div class="metric"><div class="lbl">Remaining</div><div class="v">${it.remaining}</div></div>
+        <div class="metric"><div class="lbl">Pace λ</div><div class="v">${lam.toFixed(1)}<small>/wk</small></div></div>
+        <div class="metric"><div class="lbl">P50 target</div><div class="v" style="color:var(--ink2)">${fmtDate(addWeeks(sim.p50))}</div></div>
+        <div class="metric"><div class="lbl">P85 target</div><div class="v" style="color:var(--blue)">${fmtDate(addWeeks(sim.p85))}</div></div>
+      </div><div style="margin-top:12px">${chips(it)}</div>`;
+  } else { const rn={complete:["done", it.status==="Done" ? "Feature delivered — all "+scope(it)+" child items Done" : "Scope complete — awaiting release / close"],stalled:["stall","Stalled — no completions in the last 12 weeks"],unbroken:["unbroken","Not broken into stories yet — no scope to forecast"]}[cls];
+    h+=`<div class="grid">
+        <div class="metric"><div class="lbl">Progress</div><div class="v">${sc? pct+'%' : '—'} ${sc?`<small>${it.done}/${sc}</small>`:''}</div></div>
+        <div class="metric"><div class="lbl">Remaining</div><div class="v">${it.remaining||'—'}</div></div>
+      </div>${it.remaining? '<div style="margin-top:12px">'+chips(it)+'</div>':''}<div class="rnote ${rn[0]}">${rn[1]}</div>`;
+  }
+  return `<div class="init">${h}${storiesHTML(it)}</div>`;
+}
+function renderInitiatives(){
+  document.getElementById("initiatives").innerHTML = ITEMS.filter(i=>i.type==="initiative").map(it=>{
+    const lam=lambdaOf(it), sim=simOf(it), sc=scope(it), pct=Math.round(it.done/sc*100);
+    const card=`<div class="init">
+      <div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a><span class="tag">${esc(it.status)}</span></div>
+      <div class="grid">
+        <div class="metric"><div class="lbl">Progress</div><div class="v">${pct}% <small>${it.done}/${sc}</small></div></div>
+        <div class="metric"><div class="lbl">Remaining</div><div class="v">${it.remaining}</div></div>
+        <div class="metric"><div class="lbl">Pace λ</div><div class="v">${lam.toFixed(1)}<small>/wk</small></div></div>
+        <div class="metric"><div class="lbl">P50 target</div><div class="v" style="color:var(--ink2)">${fmtDate(addWeeks(sim.p50))}</div></div>
+        <div class="metric"><div class="lbl">P85 target</div><div class="v" style="color:var(--blue)">${fmtDate(addWeeks(sim.p85))}</div></div>
+      </div>
+      <div style="margin-top:12px">${chips(it)}</div>
+      <div class="caveat">⚠ ${esc(it.note)}</div>
+    </div>`;
+    const kids=ITEMS.filter(f=>f.type==="feature" && parentOf(f)===it.key).sort(featCompare);
+    const kidsHTML = kids.length ? `<button class="children-lbl" type="button" aria-expanded="true"><span class="caret">▾</span>${kids.length} Features under this Initiative — click to collapse</button><div class="children">${kids.map(featureCardHTML).join('')}</div>` : '';
+    return card+kidsHTML;
+  }).join('');
+}
+function renderFeatures(){
+  const rows = ITEMS.filter(i=>i.type==="feature" && !isNested(i) && classify(i)==="forecast").sort((a,b)=>simOf(a).p85-simOf(b).p85);
+  document.getElementById("featList").innerHTML = rows.map(featureCardHTML).join('');
+}
+function renderNoForecast(){
+  const o={complete:0,stalled:1,unbroken:2};
+  const rows = ITEMS.filter(i=>i.type==="feature" && !isNested(i) && classify(i)!=="forecast").sort((a,b)=>o[classify(a)]-o[classify(b)]);
+  document.getElementById("noFcList").innerHTML = rows.map(featureCardHTML).join('');
+}
+async function init(){
+  try{
+    const res = await fetch("api/delivery-forecast");
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    ITEMS = data.items; ROLLUP = data.rollup; CHILDREN = data.children; CYCLE = data.cycle;
+    INIT_KEYS = new Set(ITEMS.filter(i=>i.type==="initiative").map(i=>i.key));
+    renderSummary(); renderInitiatives(); renderFeatures(); renderNoForecast();
+  }catch(e){
+    document.querySelector("main.card").insertAdjacentHTML("afterbegin",
+      `<div style="color:#f2705f;font-family:var(--mono);margin-bottom:16px">Failed to load forecast data: ${esc(e.message)}</div>`);
+  }
+}
+init();
+document.addEventListener("click", e=>{
+  const b=e.target.closest(".children-lbl, .stories-lbl"); if(!b) return;
+  const collapsed=b.nextElementSibling.classList.toggle("collapsed");
+  b.querySelector(".caret").textContent = collapsed ? "▸" : "▾";
+  b.setAttribute("aria-expanded", String(!collapsed));
+});
+</script>
+</body>
+</html>
