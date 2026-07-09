@@ -32,9 +32,14 @@ _KEY_BY_ACCOUNT: dict[str, str] = {account_id: name.lower() for account_id, name
 
 
 def _velocity_by_key(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict[str, int]:
-    """Predicted velocity per roster key, reused from the velocity view's forecast."""
+    """Typical monthly velocity per roster key — the velocity view's unblended baseline.
+
+    Uses `forecast.baseline` (the recency-weighted typical month), not the headline `value`, which
+    the velocity dashboard blends toward current-month pace. Capacity subtracts `done_this_month`
+    separately, so a current-month-aware velocity here would double-count it.
+    """
     report = velocity.velocity_report(connection, now)
-    return {member["name"].lower(): round(member["forecast"]["value"]) for member in report["members"]}
+    return {member["name"].lower(): member["forecast"]["baseline"] for member in report["members"]}
 
 
 def _mr_domains_by_key(connection: duckdb.DuckDBPyConnection) -> dict[str, dict[str, int]]:

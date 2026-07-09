@@ -124,10 +124,10 @@
 <body>
 <nav class="nav">
   <span class="brand">Platform Eng</span>
-  <a href="velocity" class="active">Velocity</a>
-  <a href="delivery-forecast">Delivery Forecast</a>
-  <a href="lead-time">Lead/Cycle Time</a>
   <a href="intake">Intake</a>
+  <a href="delivery-forecast">Delivery Forecast</a>
+  <a href="velocity" class="active">Velocity</a>
+  <a href="lead-time">Lead/Cycle Time</a>
 </nav>
 <main class="card">
   <p class="eyebrow">Platform Engineering · Ticket Velocity</p>
@@ -155,12 +155,12 @@
   <div id="pinned" class="pinned" hidden></div>
 
   <h2>Next-30-day forecast</h2>
-  <p class="h2sub">Central = recency-weighted average of the last 3 months (Apr×1 + May×2 + Jun×3)/6; range = ±1 s.d. of those months. Reflects recent pace; low confidence (5 data points). Shows for the members you've selected.</p>
+  <p class="h2sub">Central starts from a recency-weighted average of the last 3 complete months (Apr×1 + May×2 + Jun×3)/6, then blends toward the current month’s pace as the month progresses; range = ±1 s.d. of those months. Reflects recent pace and how this month is tracking. Shows for the members you've selected.</p>
   <div class="cards" id="cards"></div>
 
   <div class="foot">
     <div><b>What's counted.</b> <code>project = DEVOPS</code>, issue types Story / Task / Bug / Hotfix / Sub-task. "Completed" = the ticket entered the <code>Done</code> status (from the changelog; <code>resolutiondate</code> is unreliable here). "Will Not Do" excluded. Re-opens de-duplicated — each ticket counts once, in its first-completion month. Attributed by current assignee. Data as of July 1, 2026.</div>
-    <div><b>Forecast method.</b> Next 30 days ≈ July. Central is a recency-weighted 3-month average; the band is ±1 standard deviation of Apr–Jun. This deliberately weights recent months — a trend line through all six months would misjudge current pace, since the team’s workload and mix shifted across H1. Directional only.</div>
+    <div><b>Forecast method.</b> Central is a recency-weighted 3-month average (Apr–Jun, June heaviest) blended toward the current month’s run-rate — this month’s completions so far, extrapolated over the business days elapsed — weighted by how far into the month we are. Early in the month it tracks the recent-months baseline; it converges to the actual as the month fills in, so the estimate updates day to day. The band is ±1 standard deviation of the recent months, recentered on the estimate. Directional only.</div>
     <div><b>Team.</b> 14 members of Platform Engineering (confirmed roster). Excludes non-team assignees who occasionally get DEVOPS tickets. Over Jan–Jun the team completed 616 tickets (delivery types, deduped).</div>
     <div><b>Caveat.</b> Ticket count is throughput, not effort or complexity — a bucket-creation task and a multi-week platform build each count as 1. Read across the team accordingly.</div>
     <div><b>Add / edit a member.</b> Edit the <code>MEMBERS</code> object at the top of the &lt;script&gt; block — set <code>actuals: [Jan, Feb, Mar, Apr, May, Jun]</code> and a <code>forecast</code>. Everything updates automatically.</div>

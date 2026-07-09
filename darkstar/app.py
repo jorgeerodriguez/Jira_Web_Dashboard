@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import duckdb
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, store, velocity
 
@@ -25,25 +25,6 @@ _write_lock = threading.Lock()
 _GITLAB_WINDOW_DAYS: int = 180
 
 app = FastAPI(title="darkstar", description="Platform Engineering Jira dashboards (v2)")
-
-_INDEX_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>darkstar</title>
-</head>
-<body>
-<h1>darkstar</h1>
-<p>Platform Engineering Jira dashboards (v2).</p>
-<ul>
-<li><a href="/velocity">Velocity — Completed Tickets by Month</a></li>
-<li><a href="/delivery-forecast">Delivery Forecast</a></li>
-<li><a href="/lead-time">Lead/Cycle Time</a></li>
-<li><a href="/intake">Intake</a></li>
-</ul>
-</body>
-</html>"""
 
 _DASHBOARDS = pathlib.Path(__file__).parent / "dashboards"
 
@@ -137,10 +118,10 @@ async def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "darkstar"})
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> HTMLResponse:
-    """Landing page linking the dashboards."""
-    return HTMLResponse(_INDEX_HTML)
+@app.get("/")
+async def index() -> RedirectResponse:
+    """Redirect the root to the intake dashboard — the team's default landing page."""
+    return RedirectResponse(url="/intake")
 
 
 @app.get("/velocity", response_class=HTMLResponse)
