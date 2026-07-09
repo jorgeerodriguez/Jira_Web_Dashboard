@@ -13,10 +13,12 @@ time — everything reads the local store):
 
 | Route | What |
 |---|---|
+| `/intake` | Triage queue, team capacity, and the SME suggestion matrix |
+| `/delivery-forecast` | Monte-Carlo burn-down for the open Initiative + Features |
 | `/velocity` | Completed delivery tickets per engineer per month (changelog-derived) |
 | `/lead-time` | Lead / cycle time for delivered stories |
-| `/delivery-forecast` | Monte-Carlo burn-down for the open Initiative + Features |
-| `/intake` | Triage queue, team capacity, and the SME suggestion matrix |
+
+`/` redirects to `/intake` (the default landing page); the nav lists the dashboards in this order.
 
 ## Architecture
 
@@ -47,8 +49,11 @@ independent per-engineer signals and routing on skill first, availability second
 
 `spare = max(0, velocity - done_this_month) - WIP`
 
-- **velocity** is a recency-weighted forecast of a typical month's delivery output, derived from
-  each engineer's completed Jira tickets over the last three complete months (`velocity._forecast`).
+- **velocity** is each engineer's typical monthly output — the recency-weighted average of their
+  completed Jira tickets over the last three complete months (`velocity._forecast`'s `baseline`).
+  The velocity dashboard additionally blends this toward the current month's pace for its own
+  display, but intake intentionally uses the unblended baseline so this term does not double-count
+  `done_this_month`.
 - **done_this_month** (completions so far) and **WIP** (active in-progress tickets) are subtracted,
   so the number is month-to-date headroom rather than a static monthly figure.
 - The capacity gauge plots `done` + WIP against the velocity tick; the 1–4 signal bars (red→green)
