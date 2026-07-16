@@ -11,6 +11,7 @@ CF_REQUEST_TYPE     = "customfield_10977"
 CF_TARGET_END       = "customfield_10947"
 CF_TIME_IN_PROGRESS = "customfield_11261"
 CF_PLANNED_START    = "customfield_10946"
+CF_ESTIMATE_SIZE    = "customfield_10968"
 
 
 def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
@@ -27,7 +28,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
     fields_to_fetch = (
         "assignee, summary, key, status, created, updated, issuetype, creator, project, "
         "duedate, priority, customfield_10947, customfield_11751, customfield_11445, "
-        "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate"
+        "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968"
     )
 
     # Build JQL query — 24-month lookback
@@ -129,7 +130,27 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             parent = fields.get("parent", {}).get("key", pd.NA) if fields.get("parent") else pd.NA
         except Exception:
             parent = pd.NA
-            
+        
+        try:
+            if fields.get(CF_ESTIMATE_SIZE):
+                estimate_size_name = fields[CF_ESTIMATE_SIZE]['value']
+                if estimate_size_name == 'Small':
+                    estimate_size_number = 1
+                elif estimate_size_name == 'Medium':
+                    estimate_size_number = 2
+                elif estimate_size_name == 'Large':
+                    estimate_size_number = 3
+                elif estimate_size_name == 'XL':
+                    estimate_size_number = 4
+                else:
+                    estimate_size_number = 0
+            else:
+                estimate_size_name = None # Use NaT for missing dates
+                estimate_size_number = 0
+        except Exception as e:
+            estimate_size_name = None  # Use NaT for missing dates
+            estimate_size_number = 0
+        
         created_dt = pd.to_datetime(fields.get('created', None), utc=True, errors='coerce')
         updated_dt = pd.to_datetime(fields.get('updated', None), utc=True, errors='coerce')
         resolved_dt = pd.to_datetime(fields.get('resolutiondate', None), utc=True, errors='coerce')
@@ -182,6 +203,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "legend": legend,
             "parent_project": parent_project,
             "parent": parent,
+            'estimated_size_name' : estimate_size_name,
+            'estimated_size_number' : estimate_size_number,
         }
         processed_data.append(issue_data)
 

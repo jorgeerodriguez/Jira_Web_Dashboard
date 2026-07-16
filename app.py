@@ -24,6 +24,7 @@ from reports.in_progress_report import build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
 from reports.backlog_report import build_backlog_visuals
 from reports.blocked_report import build_blocked_visuals
+from reports.estimated_size_distribution_report import build_estimated_size_distribution_visuals
 try:
     from reports.forecast_report import build_forecast_visuals
 except ImportError:
@@ -194,6 +195,7 @@ with st.sidebar:
         "🛡️  SLA (Service Level Agreements)",
         "🎯  Probability of completion on time",
         "🧑‍💼  Personal Dashboard",
+        "📏  Distribution of Ticket by Estimated Size",
     ]
 
     selected = st.radio(
@@ -1482,3 +1484,49 @@ elif selected == "🧑‍💼  Personal Dashboard":
             )
         },
     )
+
+
+# ── Distribution of Ticket by Estimated Size ────────────────────────────────────
+elif selected == "📏  Distribution of Ticket by Estimated Size":
+    st.title("📏 Distribution of Ticket by Estimated Size")
+    st.caption(
+        "In Progress (Status = In Progress) vs Backlog (Status = To Do / Tech Discovery Required), "
+        "grouped by estimated_size_name. Features are excluded from both groups."
+    )
+
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    size_visuals = build_estimated_size_distribution_visuals(df_issues)
+
+    if size_visuals["bar_fig"] is None:
+        st.info("📥 Fetch Jira tickets from the sidebar to see the estimated size distribution.")
+    else:
+        c1, c2 = st.columns(2)
+        c1.metric("In Progress Tickets", f"{size_visuals['in_progress_count']:,}")
+        c2.metric("Backlog Tickets", f"{size_visuals['backlog_count']:,}")
+
+        st.divider()
+        st.plotly_chart(size_visuals["bar_fig"], width="stretch")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if size_visuals["pie_in_progress_fig"] is not None:
+                st.plotly_chart(size_visuals["pie_in_progress_fig"], width="stretch")
+        with col2:
+            if size_visuals["pie_backlog_fig"] is not None:
+                st.plotly_chart(size_visuals["pie_backlog_fig"], width="stretch")
+
+        st.subheader("Estimated Size Detail")
+        st.dataframe(size_visuals["table_df"], width="stretch")
+
+        st.subheader("Ticket Detail")
+        st.dataframe(
+            size_visuals["detail_df"],
+            width="stretch",
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )
