@@ -1515,6 +1515,11 @@ elif selected == "📏  Distribution of Ticket by Estimated Size":
             if size_visuals["pie_backlog_fig"] is not None:
                 st.plotly_chart(size_visuals["pie_backlog_fig"], width="stretch")
 
+        if size_visuals.get("priority_size_heatmap_fig") is not None:
+            st.subheader("Priority vs. Size Risk Heatmap")
+            st.caption("Cells shaded red (Urgent/High priority + Large/XL size) are most likely to blow resolution targets.")
+            st.plotly_chart(size_visuals["priority_size_heatmap_fig"], width="stretch")
+
         st.subheader("Estimated Size Detail")
         st.dataframe(size_visuals["table_df"], width="stretch")
 
