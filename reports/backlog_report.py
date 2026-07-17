@@ -332,9 +332,9 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
         color_continuous_scale="RdYlGn_r",
         hover_name="assignee_name",
         hover_data=["execution_velocity_value", "backlog_velocity_value", "average_total_velocity_backlog_days"],
-        title="In Progress Size vs Complexity Days",
+        title="Backlog Size vs Complexity Days",
     )
-    scatter_fig.update_layout(height=380, xaxis_title="In Progress Tickets", yaxis_title="Complexity Days")
+    scatter_fig.update_layout(height=380, xaxis_title="Backlog Tickets", yaxis_title="Complexity Days")
 
     dist = (
         summary["load_bucket"]
@@ -369,7 +369,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     ].copy()
     detail_df.columns = [
         "Assignee",
-        "In Progress",
+        "Backlog Tickets",
         "Complexity Days",
         "Load",
     ]
