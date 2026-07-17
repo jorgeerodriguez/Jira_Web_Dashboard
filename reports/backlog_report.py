@@ -85,6 +85,9 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     assignee_col = _first_existing_column(in_progress_df, ["assignee_name", "Assignee"])
     updated_col = _first_existing_column(in_progress_df, ["updated", "Updated", "last_updated"])
     target_end_col = _first_existing_column(in_progress_df, ["target_end_date", "project_due_date", "Target End Date"])
+    target_start_col = _first_existing_column(
+        in_progress_df, ["planned_start_date", "target_start_date", "Target Start Date"]
+    )
     days_old_col = _first_existing_column(in_progress_df, ["days_old", "Days Old"])
     summary_col = _first_existing_column(in_progress_df, ["summary", "Summary"])
 
@@ -128,10 +131,14 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
 
     in_progress_df[days_old_col] = pd.to_numeric(in_progress_df[days_old_col], errors="coerce").fillna(0)
 
-    target_end_select_col = target_end_col
-    if target_end_select_col is None:
-        target_end_select_col = "__target_end_date__"
-        in_progress_df[target_end_select_col] = pd.NaT
+    target_start_select_col = target_start_col
+    if target_start_select_col is None:
+        target_start_select_col = "__target_start_date__"
+        in_progress_df[target_start_select_col] = pd.NaT
+    else:
+        in_progress_df[target_start_select_col] = pd.to_datetime(
+            in_progress_df[target_start_select_col], errors="coerce"
+        ).dt.date
 
     tickets_df = in_progress_df[
         [
@@ -141,7 +148,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
             creator_col,
             assignee_col,
             updated_col,
-            target_end_select_col,
+            target_start_select_col,
             days_old_col,
             "days_left",
             summary_col,
@@ -154,7 +161,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
         "Creator",
         "Assognee Name",
         "Last Updated",
-        "Target End Date",
+        "Target Start Date",
         "Days Old",
         "Days Left",
         "Summary",
