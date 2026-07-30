@@ -1,0 +1,32 @@
+# Local run for the darkstar dashboard (FastAPI v2). Builds the shared pe-reports image and runs
+# the darkstar entrypoint (APP_ENTRYPOINT=darkstar → uvicorn on :8080). The Jira/GitLab pollers
+# stay off unless you supply JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN and GITLAB_TOKEN, so by default
+# it serves purely from the local DuckDB store on the darkstar-data volume.
+#
+#   docker compose up --build          # build + run → http://localhost:8080/slas
+#   docker compose down                # stop
+services:
+  darkstar:
+    build: .
+    image: pe-reports:local
+    environment:
+      APP_ENTRYPOINT: darkstar
+      DARKSTAR_DB_PATH: /data/darkstar.duckdb
+      # Uncomment and fill to enable the live pollers instead of a static store:
+      # JIRA_SERVER: ""
+      # JIRA_EMAIL: ""
+      # JIRA_API_TOKEN: ""
+      # GITLAB_TOKEN: ""
+    ports:
+      - "8080:8080"
+    volumes:
+      - darkstar-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  darkstar-data:
