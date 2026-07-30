@@ -8,6 +8,7 @@ def _row(**over):
                 author_account_id="acct-1", title="DEVOPS-42 do a thing",
                 opened_at=datetime(2026, 7, 20, 9, 0, 0),
                 merged_at=datetime(2026, 7, 22, 15, 0, 0),
+                labels=["pe:iac-request"],
                 web_url="https://gitlab.com/x/-/merge_requests/7",
                 fetched_at=datetime(2026, 7, 22, 16, 0, 0))
     base.update(over)

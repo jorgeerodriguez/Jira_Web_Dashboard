@@ -150,6 +150,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 title=mr.get("title") or "",
                 opened_at=_to_naive_utc(mr["created_at"]),
                 merged_at=merged_naive,
+                labels=list(mr.get("labels") or []),
                 web_url=mr.get("web_url") or "",
                 fetched_at=fetched_at,
             ))
