@@ -76,6 +76,7 @@ class MergeRequestRow:
     iid: int
     author_account_id: str
     title: str
+    opened_at: datetime
     merged_at: datetime
     web_url: str
     fetched_at: datetime
@@ -91,7 +92,8 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
-    "id", "project_path", "iid", "author_account_id", "title", "merged_at", "web_url", "fetched_at",
+    "id", "project_path", "iid", "author_account_id", "title",
+    "opened_at", "merged_at", "web_url", "fetched_at",
 )
 
 _SCHEMA_SQL: str = """
@@ -141,6 +143,7 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     iid               BIGINT NOT NULL,
     author_account_id VARCHAR NOT NULL,
     title             VARCHAR NOT NULL,
+    opened_at         TIMESTAMP NOT NULL,
     merged_at         TIMESTAMP NOT NULL,
     web_url           VARCHAR NOT NULL,
     fetched_at        TIMESTAMP NOT NULL
