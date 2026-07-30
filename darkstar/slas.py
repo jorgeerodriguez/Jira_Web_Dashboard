@@ -103,7 +103,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
     # title references the DEVOPS-<n> key. First MR with a recognized bucket / valid times wins.
     mr_by_key: dict[str, dict] = {}
     for title, opened_at, merged_at, mr_labels in connection.execute(
-        "SELECT title, opened_at, merged_at, labels FROM merge_requests"
+        "SELECT title, opened_at, merged_at, labels FROM merge_requests ORDER BY id"
     ).fetchall():
         match = _KEY_RE.search(title or "")
         if not match:
@@ -139,10 +139,13 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
         if mr and mr["review_hours"] is not None:
             acc["reviews"].append(mr["review_hours"])
 
-        terminal = status_category == "done" or status in _ABANDONED or done_at is not None
-        if terminal:
+        # Terminal/success derive from ONE signal — the issue's *current* status category — so a
+        # reopened issue (has a past Done transition but is active again) is not counted, and the
+        # two counters can't disagree. status_category "done" covers Done + Won't Do/Cancelled;
+        # a request succeeded iff it's in that terminal category and not an abandon status.
+        if status_category == "done":
             success_terminal += 1
-            if done_at is not None and status not in _ABANDONED:
+            if status not in _ABANDONED:
                 success_done += 1
 
     out_buckets: list[dict] = []

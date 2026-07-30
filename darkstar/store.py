@@ -169,8 +169,16 @@ def connect(db_path: str) -> duckdb.DuckDBPyConnection:
 
 
 def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
-    """Create the issues, transitions, and sync_meta tables if they do not exist."""
+    """Create the tables if absent, and idempotently migrate existing ones.
+
+    CREATE TABLE IF NOT EXISTS does not add columns to a table that already exists (e.g. the
+    persistent prod store on its PVC), so newer columns are added here with ADD COLUMN IF NOT
+    EXISTS. They are nullable — pre-existing rows have no value and the next crawl backfills them;
+    every new insert supplies them. This keeps a deploy from breaking MR ingestion on an old store.
+    """
     connection.execute(_SCHEMA_SQL)
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS opened_at TIMESTAMP")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS labels VARCHAR[]")
     logger.debug("schema initialized")
 
 

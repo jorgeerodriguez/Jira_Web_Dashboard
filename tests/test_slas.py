@@ -79,3 +79,39 @@ def test_review_turnaround_from_linked_mr():
     r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
     assert tm["review_hours_median"] == 24.0
+
+
+def test_multiple_mrs_per_key_pick_is_deterministic():
+    """Two MRs on one issue key → the lowest-id MR wins deterministically (ORDER BY id),
+    regardless of insertion order, so the reported review turnaround is stable across runs."""
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    store.upsert_issues(conn, [_issue("DEVOPS-1", ["DevOps", "pe-iac-request", "pe-tf-module"],
+                                       datetime(2026, 7, 20, 9, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-1"],
+        [store.TransitionRow(key="DEVOPS-1", to_status="Done", changed_at=datetime(2026, 7, 21, 9, 0, 0), seq=0)])
+    # insert in reverse-id order; id=5 has 6h review, id=1 has 24h. Lowest id (1) must win.
+    store.upsert_merge_requests(conn, [
+        _mr(5, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 15, 0, 0)),
+        _mr(1, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 21, 9, 0, 0)),
+    ])
+    tm = next(b for b in slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"]
+              if b["type"] == "tf-module")
+    assert tm["review_hours_median"] == 24.0  # id=1's 24h, not id=5's 6h
+
+
+def test_reopened_issue_not_counted_as_terminal_success():
+    """An issue with a Done transition in history but currently In Progress (reopened) is not
+    terminal, so it must not inflate the agent-success counts."""
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    store.upsert_issues(conn, [_issue("DEVOPS-7", ["DevOps", "pe-troubleshoot"],
+                                       datetime(2026, 7, 20, 9, 0, 0), status="In Progress")])
+    store.replace_transitions(conn, ["DEVOPS-7"], [
+        store.TransitionRow(key="DEVOPS-7", to_status="Done", changed_at=datetime(2026, 7, 20, 12, 0, 0), seq=0),
+        store.TransitionRow(key="DEVOPS-7", to_status="In Progress", changed_at=datetime(2026, 7, 21, 12, 0, 0), seq=1),
+    ])
+    a = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["agent_success"]
+    assert a["terminal"] == 0
+    assert a["succeeded"] == 0
+    assert a["rate_pct"] is None
