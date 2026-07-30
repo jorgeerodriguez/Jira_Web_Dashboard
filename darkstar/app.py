@@ -15,7 +15,7 @@ import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, store, velocity
+from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, slas, store, velocity
 
 logger = logging.getLogger("darkstar.app")
 
@@ -148,6 +148,12 @@ async def delivery_forecast_dashboard() -> HTMLResponse:
     return _dashboard("delivery-forecast")
 
 
+@app.get("/slas", response_class=HTMLResponse)
+async def slas_dashboard() -> HTMLResponse:
+    """The self-service SLA dashboard (fetches /api/slas client-side)."""
+    return _dashboard("slas")
+
+
 @app.get("/api/velocity")
 def api_velocity() -> JSONResponse:
     """Monthly delivery completions per engineer, read from the store (no Jira call)."""
@@ -183,3 +189,9 @@ def set_override(payload: dict) -> JSONResponse:
 def api_delivery_forecast() -> JSONResponse:
     """Forecast items (initiatives/features scope + recent pace), read from the store."""
     return JSONResponse(delivery.delivery_report(_db().cursor(), _utcnow()))
+
+
+@app.get("/api/slas")
+def api_slas() -> JSONResponse:
+    """Self-service SLA compliance, turnaround, and agent success rate (no Jira call)."""
+    return JSONResponse(slas.slas_report(_db().cursor(), _utcnow()))

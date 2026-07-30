@@ -76,7 +76,9 @@ class MergeRequestRow:
     iid: int
     author_account_id: str
     title: str
+    opened_at: datetime
     merged_at: datetime
+    labels: list[str]
     web_url: str
     fetched_at: datetime
 
@@ -91,7 +93,8 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
-    "id", "project_path", "iid", "author_account_id", "title", "merged_at", "web_url", "fetched_at",
+    "id", "project_path", "iid", "author_account_id", "title",
+    "opened_at", "merged_at", "labels", "web_url", "fetched_at",
 )
 
 _SCHEMA_SQL: str = """
@@ -141,7 +144,9 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     iid               BIGINT NOT NULL,
     author_account_id VARCHAR NOT NULL,
     title             VARCHAR NOT NULL,
+    opened_at         TIMESTAMP NOT NULL,
     merged_at         TIMESTAMP NOT NULL,
+    labels            VARCHAR[] NOT NULL,
     web_url           VARCHAR NOT NULL,
     fetched_at        TIMESTAMP NOT NULL
 );
@@ -164,8 +169,16 @@ def connect(db_path: str) -> duckdb.DuckDBPyConnection:
 
 
 def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
-    """Create the issues, transitions, and sync_meta tables if they do not exist."""
+    """Create the tables if absent, and idempotently migrate existing ones.
+
+    CREATE TABLE IF NOT EXISTS does not add columns to a table that already exists (e.g. the
+    persistent prod store on its PVC), so newer columns are added here with ADD COLUMN IF NOT
+    EXISTS. They are nullable — pre-existing rows have no value and the next crawl backfills them;
+    every new insert supplies them. This keeps a deploy from breaking MR ingestion on an old store.
+    """
     connection.execute(_SCHEMA_SQL)
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS opened_at TIMESTAMP")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS labels VARCHAR[]")
     logger.debug("schema initialized")
 
 
