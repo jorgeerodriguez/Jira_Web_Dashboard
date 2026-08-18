@@ -184,13 +184,11 @@
   <p class="h2sub">Every merged MR the ingest attributes, opened → merged, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Note that an engineer working
   EET can score near zero here, since their own workday falls inside the Pacific night.</p>
-  <label class="filter">Filter authors
-    <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
-           aria-describedby="mrFilterHint">
-  </label>
-  <span class="filter-hint" id="mrFilterHint">comma-separated, matches any part of a name</span>
-  <div class="tbl-wrap"><table id="mrTbl"></table></div>
   <div class="controls">
+    <label class="filter">Filter authors
+      <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
+             aria-describedby="mrFilterHint">
+    </label>
     <label class="filter">Add author
       <input id="addUser" type="text" placeholder="gitlab username" autocomplete="off">
     </label>
@@ -198,9 +196,12 @@
       <input id="addName" type="text" placeholder="Display Name" autocomplete="off">
     </label>
     <button class="btn" id="addBtn" type="button">Add</button>
-    <span class="filter-hint" id="authorHint">Adding queues one full GitLab re-crawl — their existing
-      MRs are not in the store yet. Use <b>×</b> on a row to hide someone.</span>
   </div>
+  <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
+    name; it only narrows the view. Adding an author queues one full GitLab re-crawl, since their
+    existing MRs are not in the store yet. Use <b>×</b> on a row to hide someone.</span>
+  <span class="filter-hint" id="authorHint"></span>
+  <div class="tbl-wrap"><table id="mrTbl"></table></div>
   <div id="hiddenChips" class="chips"></div>
 
   <div class="foot">
