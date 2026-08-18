@@ -126,6 +126,21 @@
           letter-spacing:0}
   .filter input:focus-visible{outline:2px solid var(--line2); outline-offset:2px; border-color:var(--muted)}
   .filter-hint{display:block; font-size:12px; color:var(--muted); margin:0 0 10px}
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:10px 0 4px}
+  .controls .filter-hint{margin:0; flex:1 1 260px; min-width:200px}
+  .btn{font-family:var(--mono); font-size:12.5px; color:var(--ink2); background:var(--panel);
+       border:1px solid var(--line2); border-radius:8px; padding:6px 13px; cursor:pointer}
+  .btn:hover{border-color:var(--muted); color:var(--ink)}
+  .btn:focus-visible{outline:2px solid var(--line2); outline-offset:2px}
+  .chips{display:flex; flex-wrap:wrap; gap:7px; margin:8px 0 2px}
+  .chip{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+        color:var(--muted); border:1px dashed var(--line2); border-radius:999px; padding:4px 11px}
+  .chip button{background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px;
+        padding:0; line-height:1}
+  .chip button:hover{color:var(--ink)}
+  .rowx{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1;
+        padding:0 2px}
+  .rowx:hover{color:var(--neg)}
 </style>
 </head>
 <body>
@@ -144,8 +159,15 @@
   agent self-service requests, bucketed by the skill that created them (from the linked MR's label).
   Agent success is the share of terminal AI requests that reached Done. Human-side tracking is a follow-up.
   <b>All hours are business hours</b> — Mon–Fri 09:00–17:00 America/Denver, one standard clock, since
-  Audacy's users are overwhelmingly North American. Nothing before 2026-03 is counted; that is when the
-  self-service workflows began. Each section states its own window.</p>
+  Audacy's users are overwhelmingly North American. The self-service workflows began 2026-03.</p>
+
+  <div class="controls">
+    <label class="filter">Lookback from
+      <input id="since" type="date" min="2026-01-01">
+    </label>
+    <button class="btn" id="sinceReset" type="button">Reset to defaults</button>
+    <span class="filter-hint" id="sinceHint"></span>
+  </div>
 
   <h2>Agent success</h2>
   <div class="cards" id="successStats"></div>
@@ -160,15 +182,26 @@
 
   <h2>MR turnaround by author</h2>
   <p class="h2sub">Every merged MR the ingest attributes, opened → merged, slowest first, merged since
-  <span id="windowNote">—</span>. Counts every MR,
-  with no per-issue pick. <b>Calendar</b> is shown alongside so the overnight/weekend share is visible —
-  worth checking for the engineers working EET, whose own workday sits inside Denver's night.</p>
+  <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Note that an engineer working
+  EET can score near zero here, since their own workday falls inside Denver's night.</p>
   <label class="filter">Filter authors
     <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
            aria-describedby="mrFilterHint">
   </label>
   <span class="filter-hint" id="mrFilterHint">comma-separated, matches any part of a name</span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <div class="controls">
+    <label class="filter">Add author
+      <input id="addUser" type="text" placeholder="gitlab username" autocomplete="off">
+    </label>
+    <label class="filter">shown as
+      <input id="addName" type="text" placeholder="Display Name" autocomplete="off">
+    </label>
+    <button class="btn" id="addBtn" type="button">Add</button>
+    <span class="filter-hint" id="authorHint">Adding queues one full GitLab re-crawl — their existing
+      MRs are not in the store yet. Use <b>×</b> on a row to hide someone.</span>
+  </div>
+  <div id="hiddenChips" class="chips"></div>
 
   <div class="foot">
     <div><b>What's counted.</b> DEVOPS issues carrying an agent watermark (a <code>pe-*</code> Jira label).
@@ -250,14 +283,15 @@ function renderMrTable(d){
   const shown = terms.length
     ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
     : d.authors;
-  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Biz median (h)</th>`+
-             `<th>Biz p90 (h)</th><th>Calendar median (h)</th></tr></thead>`;
+  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median (h)</th>`+
+             `<th>p90 (h)</th><th></th></tr></thead>`;
   const row=(a,cls)=>`<tr class="${cls}">
      <td>${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
      <td class="num">${a.merged}</td>
      <td class="num">${fmt(a.biz_hours_median)}</td>
      <td class="num">${fmt(a.biz_hours_p90)}</td>
-     <td class="num">${fmt(a.cal_hours_median)}</td>
+     <td class="num">${cls==="sum" ? "" :
+       `<button class="rowx" type="button" data-hide="${esc(a.name)}" title="Hide ${esc(a.name)}">×</button>`}</td>
    </tr>`;
   const rows = shown.map(a=>row(a,"")).join("");
   const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
@@ -269,25 +303,105 @@ function renderMrTable(d){
     `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
 }
 
-async function init(){
-  try{
-    const [res, mrRes] = await Promise.all([fetch("api/slas"), fetch("api/mr-turnaround")]);
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    if(!mrRes.ok) throw new Error("HTTP "+mrRes.status+" (mr-turnaround)");
-    const data = await res.json();
-    const mrData = await mrRes.json();
-    renderSuccess(data.agent_success);
-    renderTable(data.buckets);
-    renderMrTable(mrData);
-    document.getElementById("mrFilter").addEventListener("input", ()=>renderMrTable(mrData));
-    document.getElementById("windowNote").textContent = mrData.window_start;
-    document.getElementById("placeholderNote").textContent =
-      data.targets_are_placeholder ? "Targets are placeholders (DEVOPS-9580)." : "";
-    document.getElementById("slaWindowNote").textContent = data.window_start;
-  }catch(e){
-    document.querySelector("main.card").insertAdjacentHTML("afterbegin",
-      `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">Failed to load SLA data: ${esc(e.message)}</div>`);
+/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to
+   both endpoints as ?since=; empty means "each panel uses its own default window". */
+const SINCE_KEY = "darkstar.slas.since";
+let mrData = null, slaData = null;
+
+function sinceParam(){
+  const v = document.getElementById("since").value;
+  return v ? `?since=${encodeURIComponent(v)}` : "";
+}
+
+async function getJSON(path){
+  const res = await fetch(path + sinceParam());
+  if(!res.ok){
+    let detail = "HTTP " + res.status;
+    try{ detail = (await res.json()).detail || detail; }catch(e){}
+    throw new Error(detail);
   }
+  return res.json();
+}
+
+function renderHidden(){
+  const hidden = (mrData && mrData.hidden) || [];
+  document.getElementById("hiddenChips").innerHTML = hidden.length
+    ? `<span class="filter-hint">Hidden:</span>` + hidden.map(n =>
+        `<span class="chip">${esc(n)}<button type="button" data-show="${esc(n)}" title="Show ${esc(n)}">+</button></span>`).join("")
+    : "";
+}
+
+async function editAuthors(body){
+  const res = await fetch("api/mr-authors", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if(!res.ok){
+    let detail = "HTTP " + res.status;
+    try{ detail = (await res.json()).detail || detail; }catch(e){}
+    showError("Could not update authors: " + detail);
+    return;
+  }
+  const saved = await res.json();
+  document.getElementById("authorHint").textContent = saved.recrawl_queued
+    ? "Added. A full GitLab re-crawl is queued — their MRs appear after the next sync."
+    : "Saved.";
+  await reload();
+}
+
+function showError(message){
+  document.querySelector("main.card").insertAdjacentHTML("afterbegin",
+    `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">${esc(message)}</div>`);
+}
+
+async function reload(){
+  [slaData, mrData] = await Promise.all([getJSON("api/slas"), getJSON("api/mr-turnaround")]);
+  renderSuccess(slaData.agent_success);
+  renderTable(slaData.buckets);
+  renderMrTable(mrData);
+  renderHidden();
+  document.getElementById("windowNote").textContent = mrData.window_start;
+  document.getElementById("slaWindowNote").textContent = slaData.window_start;
+  document.getElementById("placeholderNote").textContent =
+    slaData.targets_are_placeholder ? "Targets are placeholders (DEVOPS-9580)." : "";
+  document.getElementById("sinceHint").textContent = document.getElementById("since").value
+    ? "Applied to every panel on this page."
+    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;
+}
+
+async function init(){
+  const since = document.getElementById("since");
+  since.value = localStorage.getItem(SINCE_KEY) || "";
+  try{
+    await reload();
+  }catch(e){
+    showError("Failed to load: " + e.message);
+    return;
+  }
+
+  since.addEventListener("change", async () => {
+    localStorage.setItem(SINCE_KEY, since.value);
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  });
+  document.getElementById("sinceReset").addEventListener("click", async () => {
+    since.value = ""; localStorage.removeItem(SINCE_KEY);
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  });
+  document.getElementById("mrFilter").addEventListener("input", () => renderMrTable(mrData));
+  document.getElementById("addBtn").addEventListener("click", () => {
+    const user = document.getElementById("addUser").value.trim();
+    const name = document.getElementById("addName").value.trim();
+    if(!user){ document.getElementById("authorHint").textContent = "Enter a GitLab username."; return; }
+    document.getElementById("addUser").value = ""; document.getElementById("addName").value = "";
+    editAuthors({op: "add", username: user, display_name: name || user});
+  });
+  // row × and chip + are re-rendered on every reload, so delegate rather than rebind
+  document.getElementById("mrTbl").addEventListener("click", e => {
+    const name = e.target.getAttribute && e.target.getAttribute("data-hide");
+    if(name) editAuthors({op: "hide", display_name: name});
+  });
+  document.getElementById("hiddenChips").addEventListener("click", e => {
+    const name = e.target.getAttribute && e.target.getAttribute("data-show");
+    if(name) editAuthors({op: "show", display_name: name});
+  });
 }
 init();
 

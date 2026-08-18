@@ -3,6 +3,11 @@ import duckdb
 from darkstar import store, slas
 
 
+def _report(conn, now):
+    """slas_report with the view's own default window — the page can override it, tests need not."""
+    return slas.slas_report(conn, now, slas.default_window_start(now))
+
+
 def _issue(key, labels, created, status="Done", issuetype="Story"):
     return store.IssueRow(
         key=key, id=int(key.split("-")[1]), project="DEVOPS", issuetype=issuetype,
@@ -55,7 +60,7 @@ def _seed():
 
 
 def test_bucketing_by_mr_label_separates_k8s_from_iac():
-    r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
+    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     by = {(b["audience"], b["type"]): b for b in r["buckets"]}
     assert by[("ai", "tf-module")]["volume"] == 1
     assert by[("ai", "k8s-request")]["volume"] == 1     # separated via the MR label (Option B win)
@@ -69,7 +74,7 @@ def test_sla_compliance_uses_business_hour_delivery_turnaround():
     Billing the request for the night nobody was working is what made these medians read roughly
     3x too high; an SLA the team is measured on must only count hours it could have acted in.
     """
-    r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
+    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
     assert tm["turnaround_hours_median"] == 8.0    # 24 calendar hours, 8 of them in the business day
 
@@ -81,7 +86,7 @@ def test_each_sla_tier_is_scored_independently():
     the median blows the p50 target while the p90 exactly meets its own — which a single blended
     "% under one target" score could not express.
     """
-    r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
+    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
     assert (tm["target_p50_hours"], tm["target_p90_hours"]) == (2, 8)
     assert tm["turnaround_hours_median"] == 8.0 and tm["meets_p50"] is False
@@ -95,7 +100,7 @@ def test_tiers_are_none_rather_than_false_when_nothing_closed():
     store.upsert_issues(conn, [_issue("DEVOPS-30", ["DevOps", "pe-iac-request"],
                                       datetime(2026, 7, 20, 9, 0, 0), status="In Progress")])
     store.replace_transitions(conn, ["DEVOPS-30"], [])
-    bucket = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"][0]
+    bucket = _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"][0]
     assert bucket["volume"] == 1 and bucket["closed"] == 0
     assert bucket["meets_p50"] is None and bucket["meets_p90"] is None
     assert bucket["within_target_pct"] is None
@@ -110,12 +115,12 @@ def test_sla_window_is_three_months_not_six():
                                       datetime(2026, 5, 20, 9, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-31"], [store.TransitionRow(
         key="DEVOPS-31", to_status="Done", changed_at=datetime(2026, 5, 21, 15, 0, 0), seq=0)])
-    assert slas.slas_report(conn, datetime(2026, 8, 18, 12, 0, 0))["buckets"] == []
+    assert _report(conn, datetime(2026, 8, 18, 12, 0, 0))["buckets"] == []
 
 
 def test_agent_success_rate_counts_abandoned_as_failure():
     """DEVOPS names this status "Will Not Do". Matching only "Won't Do" pinned the rate at 100%."""
-    r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
+    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     # 3 AI terminal issues: DEVOPS-1 Done, DEVOPS-4 Done, DEVOPS-2 Will Not Do → 2/3 = 66.7%
     assert r["agent_success"]["terminal"] == 3
     assert r["agent_success"]["succeeded"] == 2
@@ -124,7 +129,7 @@ def test_agent_success_rate_counts_abandoned_as_failure():
 
 def test_review_turnaround_from_linked_mr():
     """Review turnaround uses the same business-hour clock as delivery, so the two are comparable."""
-    r = slas.slas_report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
+    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
     assert tm["review_hours_median"] == 8.0
 
@@ -143,7 +148,7 @@ def test_multiple_mrs_per_key_pick_is_deterministic():
         _mr(5, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 21, 0, 0)),
         _mr(1, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 21, 9, 0, 0)),
     ])
-    tm = next(b for b in slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"]
+    tm = next(b for b in _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"]
               if b["type"] == "tf-module")
     assert tm["review_hours_median"] == 8.0  # id=1's 8h, not id=5's 6h
 
@@ -159,7 +164,7 @@ def test_reopened_issue_not_counted_as_terminal_success():
         store.TransitionRow(key="DEVOPS-7", to_status="Done", changed_at=datetime(2026, 7, 20, 12, 0, 0), seq=0),
         store.TransitionRow(key="DEVOPS-7", to_status="In Progress", changed_at=datetime(2026, 7, 21, 12, 0, 0), seq=1),
     ])
-    a = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["agent_success"]
+    a = _report(conn, datetime(2026, 7, 28, 12, 0, 0))["agent_success"]
     assert a["terminal"] == 0
     assert a["succeeded"] == 0
     assert a["rate_pct"] is None
@@ -191,7 +196,7 @@ def test_mr_footer_alone_marks_a_request_as_agent_created():
     _done_issue(conn, "DEVOPS-20", ["DevOps"])            # no watermark at all
     store.upsert_merge_requests(conn, [_mr(20, "DEVOPS-20", [], datetime(2026, 7, 20, 9, 0, 0),
                                            datetime(2026, 7, 20, 15, 0, 0), description=_FOOTER)])
-    report = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
     assert sum(b["volume"] for b in report["buckets"]) == 1
     assert report["buckets"][0]["type"] == "iac-request"   # skill read from the footer's "via /"
 
@@ -200,7 +205,7 @@ def test_ai_generated_jira_label_alone_is_enough():
     """`ai-generated` is stamped on 56 of the 135 self-service issues; it must count by itself."""
     conn = _fresh()
     _done_issue(conn, "DEVOPS-21", ["DevOps", "ai-generated"])
-    report = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
     assert sum(b["volume"] for b in report["buckets"]) == 1
     assert report["buckets"][0]["type"] == "other"        # no skill signal anywhere, so unbucketed
 
@@ -212,7 +217,7 @@ def test_footer_skill_name_is_normalised_to_the_bucket():
     store.upsert_merge_requests(conn, [_mr(
         22, "DEVOPS-22", [], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 15, 0, 0),
         description=":robot: Generated with Claude Code via /tf-module-request")])
-    report = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
     assert report["buckets"][0]["type"] == "tf-module"
 
 
@@ -223,7 +228,7 @@ def test_malformed_json_array_label_still_buckets():
     store.upsert_merge_requests(conn, [_mr(23, "DEVOPS-23", ['["pe:iac-request"]'],
                                            datetime(2026, 7, 20, 9, 0, 0),
                                            datetime(2026, 7, 20, 15, 0, 0))])
-    report = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
     assert report["buckets"][0]["type"] == "iac-request"
 
 
@@ -234,7 +239,7 @@ def test_genuinely_human_work_is_still_excluded():
     store.upsert_merge_requests(conn, [_mr(
         24, "DEVOPS-24", [], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 15, 0, 0),
         description="Bumps the chart version. See CLAUDE.md for the commit convention.")])
-    report = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
     assert report["buckets"] == []          # a bare "CLAUDE.md" mention is not an agent footer
     assert report["agent_success"]["terminal"] == 0
 
@@ -246,7 +251,7 @@ def test_requests_before_the_self_service_epoch_are_excluded():
                                       datetime(2026, 1, 5, 9, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-25"], [store.TransitionRow(
         key="DEVOPS-25", to_status="Done", changed_at=datetime(2026, 1, 6, 15, 0, 0), seq=0)])
-    assert slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"] == []
+    assert _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"] == []
 
 
 def test_container_issue_types_are_excluded_from_turnaround():
@@ -266,6 +271,6 @@ def test_container_issue_types_are_excluded_from_turnaround():
                                       datetime(2026, 7, 1, 16, 0, 0), issuetype="Feature")])
     store.replace_transitions(conn, ["DEVOPS-41"], [store.TransitionRow(
         key="DEVOPS-41", to_status="Done", changed_at=datetime(2026, 7, 24, 22, 0, 0), seq=0)])
-    bucket = slas.slas_report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"][0]
+    bucket = _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"][0]
     assert bucket["volume"] == 1                      # the Feature is not a request
     assert bucket["turnaround_hours_median"] == 6.0   # not dragged toward the Feature's ~120h

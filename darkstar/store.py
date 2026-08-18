@@ -283,6 +283,15 @@ def get_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> datetime | No
     return row[0] if row else None
 
 
+def clear_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> None:
+    """Drop the GitLab sync watermark so the next crawl covers the full window again.
+
+    Used when a newly tracked author is added: an incremental crawl only returns MRs *updated*
+    since the watermark, so their existing merged MRs would never be fetched.
+    """
+    connection.execute("DELETE FROM gitlab_sync_meta")
+
+
 def set_gitlab_watermark(connection: duckdb.DuckDBPyConnection, last_sync: datetime) -> None:
     """Record the GitLab sync watermark (id = 1); later crawls pull only MRs updated after it."""
     connection.execute(

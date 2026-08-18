@@ -167,9 +167,17 @@ def _earliest_done(transitions: list[tuple[str, datetime]]) -> datetime | None:
     return None
 
 
-def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
-    """Volume, turnaround, SLA compliance (per audience x type) + agent success rate."""
-    since = window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
+def default_window_start(now: datetime) -> datetime:
+    """The window this view uses unless the page overrides it: three months, floored at the epoch."""
+    return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
+
+
+def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime) -> dict:
+    """Volume, turnaround, SLA compliance (per audience x type) + agent success rate.
+
+    `since` is the population floor (requests created on or after it), passed in rather than
+    derived so the dashboard's lookback control drives every panel from one value.
+    """
     # Scope to delivery types, as leadtime/velocity/intake do: a Feature or Epic is a container for
     # requests, not a request, and its months-long lifetime badly inflates a turnaround median.
     delivery = ", ".join(["?"] * len(DELIVERY_TYPES))

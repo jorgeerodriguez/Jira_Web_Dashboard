@@ -26,16 +26,25 @@ time — everything reads the local store):
 Turnaround used to be raw calendar elapsed time, which is what made a request filed at 16:00 and
 closed at 09:00 next morning read as 17 hours.
 
-One standard clock now: **business hours**, `metrics.business_hours_between`, Mon–Fri 09:00–17:00
-`metrics.BUSINESS_TZ` (America/Denver). One business day is 8h and one business week 40h, so
-`SLA_TARGETS_HOURS` reads directly in working days. Company holidays are not modelled. Audacy's
-users are overwhelmingly North American, so turnaround is judged against their working day —
-`slas.py` and `mrflow.py` both report it. On the pilot data this cut the iac-request median from
-21.3 calendar hours to 7.0 business hours; the difference was entirely nights and weekends.
+One clock, everywhere: **business hours**, `metrics.business_hours_between` — Mon–Fri 09:00–17:00
+`metrics.BUSINESS_TZ` (America/Denver), **excluding company holidays**. One business day is 8h and
+one business week 40h, so `SLA_TARGETS_HOURS` reads directly in working days. Audacy's users are
+overwhelmingly North American, so turnaround is judged against their working day. On the pilot data
+this cut the iac-request median from 21.3 calendar hours to 7.0 business hours; the difference was
+entirely nights and weekends.
 
-Read the per-author MR table with one caveat: PE also has engineers working EET, whose own working
-day sits inside Denver's night, so their business-hour figure understates how long an MR really
-sat. `mrflow.py` reports the raw calendar median beside it so that case stays visible.
+Raw calendar elapsed time is **not reported anywhere**. It bills a request for nights, weekends and
+holidays nobody was working, which says nothing useful about delivery speed.
+
+Holidays come from the `holidays` package, so the rules — including observance shifts, e.g.
+Independence Day 2026 falls on a Saturday and is observed Friday 2026-07-03 — never go stale.
+`metrics.OBSERVED_HOLIDAY_NAMES` decides which federal days Audacy actually closes for; it excludes
+Washington's Birthday, Columbus Day and Veterans Day, which most private employers work. Add
+company-specific closures (floating days, shutdown weeks) to `metrics.EXTRA_HOLIDAYS`.
+
+One property to know when reading a single row of the per-author MR table: PE also has engineers
+working EET, whose own working day falls inside Denver's night, so an MR they open and merge inside
+their own hours can score near 0.0 on the Denver clock.
 
 Both aggregations use `metrics.window_start` — a rolling window floored at
 `metrics.SELF_SERVICE_EPOCH` (2026-03-01), including the current month, unlike
@@ -73,6 +82,28 @@ good month and the trailing quarter, and it resolves itself as Jun/Jul age out o
 One further lever, independent of any target: roughly **18% of median turnaround falls after the MR
 merged** — work shipped, ticket still open (August p90 for that phase alone is 14h). An
 auto-transition on merge would reduce every figure here for no engineering effort.
+
+## Page controls
+
+Two controls on `/slas`, both server-backed rather than cosmetic:
+
+- **Lookback** — a date that overrides the window on *every* panel, sent as `?since=YYYY-MM-DD` to
+  both `/api/slas` and `/api/mr-turnaround`. Empty means each panel uses its own default (SLA 3
+  months, MR turnaround 6). Held in `localStorage` so it survives a refresh. A malformed date is a
+  400, never a silently different window than the box shows.
+- **MR authors** — add a GitLab username to the table, or hide a row. Persisted to
+  `darkstar_mr_authors.json` beside the store (`mr_authors.py`), so edits are team-wide and survive
+  restarts, exactly like the SME overrides. Hidden names are dropped from the rows *and* the team
+  totals, so the total always describes what is on screen.
+
+Adding an author is the one edit the store cannot serve on its own: the GitLab crawl is
+incremental, so an author it has never attributed has no rows and an incremental pull will not
+fetch their history. `POST /api/mr-authors` with `op: add` therefore clears the GitLab watermark
+(`store.clear_gitlab_watermark`) to force one full-window re-crawl, and returns
+`recrawl_queued: true` so the page can say so. Added authors are keyed in the store by their
+**GitLab username** rather than a Jira accountId, precisely so they cannot leak into the
+roster-gated views — velocity, capacity and the SME matrix all look up `ROSTER` by accountId and
+simply miss.
 
 ## Population
 

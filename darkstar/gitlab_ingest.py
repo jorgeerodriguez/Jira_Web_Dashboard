@@ -2,7 +2,8 @@
 
 Parallel to the Jira poller. Pulls merged MRs from the PE groups (audacy-inc/devops and
 audacy-inc/gcp) over a trailing window, attributes each to a tracked author via
-roster.MR_AUTHORS (the PE roster plus the non-roster contributors in TRACKED_MR_AUTHORS), and
+roster.MR_AUTHORS (the PE roster plus TRACKED_MR_AUTHORS, plus anyone added at runtime through
+mr_authors.py), and
 stores the MR plus its changed file paths. The SME matrix is then tagged from real authorship
 (see gitlab_domains), which fills the gaps sparse Jira titles leave; it keys on ROSTER, so
 tracked non-roster authors feed the MR-turnaround view without entering the SME matrix.
@@ -19,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 import duckdb
 import requests
 
-from darkstar import store
+from darkstar import config, mr_authors, store
 from darkstar.roster import MR_AUTHORS
 
 logger = logging.getLogger("darkstar.gitlab_ingest")
@@ -144,10 +145,16 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     file_rows: list[tuple[int, str]] = []
     seen_ids: set[int] = set()
 
+    # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
+    # their GitLab username rather than a Jira accountId, so they cannot reach the roster-gated
+    # views (velocity/capacity/SME look up ROSTER by accountId and simply miss).
+    added = (mr_authors.read(mr_authors.authors_path(config.db_path())).get("added") or {})
+    attributable = {**MR_AUTHORS, **{username: username for username in added}}
+
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
     for scope in scopes:
         for mr in _merged_mrs(session, scope, updated_after_iso):
-            account_id = MR_AUTHORS.get((mr.get("author") or {}).get("username", ""))
+            account_id = attributable.get((mr.get("author") or {}).get("username", ""))
             if account_id is None:
                 continue
             merged_at = mr.get("merged_at")
