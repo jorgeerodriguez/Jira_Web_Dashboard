@@ -15,7 +15,7 @@ import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, slas, store, velocity
+from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, mrflow, overrides, slas, store, velocity
 
 logger = logging.getLogger("darkstar.app")
 
@@ -195,3 +195,9 @@ def api_delivery_forecast() -> JSONResponse:
 def api_slas() -> JSONResponse:
     """Self-service SLA compliance, turnaround, and agent success rate (no Jira call)."""
     return JSONResponse(slas.slas_report(_db().cursor(), _utcnow()))
+
+
+@app.get("/api/mr-turnaround")
+def api_mr_turnaround() -> JSONResponse:
+    """Merge-request opened->merged turnaround per author, read from the store."""
+    return JSONResponse(mrflow.mr_turnaround_report(_db().cursor(), _utcnow()))

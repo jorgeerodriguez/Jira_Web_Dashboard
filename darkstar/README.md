@@ -17,8 +17,100 @@ time — everything reads the local store):
 | `/delivery-forecast` | Monte-Carlo burn-down for the open Initiative + Features |
 | `/velocity` | Completed delivery tickets per engineer per month (changelog-derived) |
 | `/lead-time` | Lead / cycle time for delivered stories |
+| `/slas` | Self-service SLA compliance, agent success, and MR turnaround by author |
 
 `/` redirects to `/intake` (the default landing page); the nav lists the dashboards in this order.
+
+## The turnaround clock
+
+Turnaround used to be raw calendar elapsed time, which is what made a request filed at 16:00 and
+closed at 09:00 next morning read as 17 hours.
+
+One standard clock now: **business hours**, `metrics.business_hours_between`, Mon–Fri 09:00–17:00
+`metrics.BUSINESS_TZ` (America/Denver). One business day is 8h and one business week 40h, so
+`SLA_TARGETS_HOURS` reads directly in working days. Company holidays are not modelled. Audacy's
+users are overwhelmingly North American, so turnaround is judged against their working day —
+`slas.py` and `mrflow.py` both report it. On the pilot data this cut the iac-request median from
+21.3 calendar hours to 7.0 business hours; the difference was entirely nights and weekends.
+
+Read the per-author MR table with one caveat: PE also has engineers working EET, whose own working
+day sits inside Denver's night, so their business-hour figure understates how long an MR really
+sat. `mrflow.py` reports the raw calendar median beside it so that case stays visible.
+
+Both aggregations use `metrics.window_start` — a rolling window floored at
+`metrics.SELF_SERVICE_EPOCH` (2026-03-01), including the current month, unlike
+`metrics.window_months` which yields complete months only and suits the month-bucketed charts. The
+floor is measured, not assumed: the first MR carrying an agent footer opened 2026-03-18, and volume
+ramps 6 (Mar) / 21 (Apr) / 74 (May) / 96 (Jun) / 211 (Jul).
+
+The two views window differently, on purpose:
+
+- **SLA (`slas.py`) — 3 months.** Delivery turnaround improved roughly 100x over the pilot (p50 by
+  month created: 369.7h Apr, 102.0h May, 7.5h Jun, 12.9h Jul, 2.5h Aug), so six months calibrates
+  against a team that no longer exists. Three keeps ~200 delivered requests, enough for a stable p90.
+- **MR turnaround (`mrflow.py`) — 6 months.** Tracked back to the epoch, because the point of that
+  table is the whole self-service era, not just the current quarter.
+
+## SLA targets
+
+`SLA_TARGETS_HOURS` holds **two tiers per bucket** rather than one number, because delivery
+turnaround is bimodal: on August data 45% of requests closed inside 2h while the p90 sat at 25h. A
+single "% under T" score blends those into a figure that is wrong about both ends. `p50` is what the
+common case should hit; `p90` is the tail backstop. Each is scored on the distribution — bucket
+median vs `p50`, bucket p90 vs `p90` — and `within_target_pct` is reported alongside as the "how
+often does the fast path actually happen" read, against the `p50` target only.
+
+Targets are calibrated to **August 2026** capability while the window is **3 months**, so most
+buckets currently read as breaching. That is deliberate and not a fault: it shows the gap between a
+good month and the trailing quarter, and it resolves itself as Jun/Jul age out of the window.
+
+| bucket | p50 | p90 | 3-month actual | August actual |
+|---|---|---|---|---|
+| iac-request | 4h | 24h | 10.7h / 94.9h | 2.6h / 18.6h |
+| troubleshoot | 2h | 16h | 2.6h / 23.0h | 0.9h / 12.8h |
+| tf-module | 2h | 8h | 1.3h / 4.1h | 1.3h / 1.8h |
+
+One further lever, independent of any target: roughly **18% of median turnaround falls after the MR
+merged** — work shipped, ticket still open (August p90 for that phase alone is 14h). An
+auto-transition on merge would reduce every figure here for no engineering effort.
+
+## Population
+
+A request counts iff it is a `metrics.DELIVERY_TYPES` issue (Story/Task/Bug/Hotfix/Sub-task) — a
+Feature or Epic is a *container* for requests, and its months-long lifetime inflates the median
+badly (it moved iac-request's p50 from 6.6h to 10.6h), which is why `leadtime`/`velocity`/`intake`
+scope the same way.
+
+Agent success counts terminal requests that are not abandoned. Note DEVOPS spells the abandon status
+**`Will Not Do`**, not `Won't Do`; `_ABANDONED` holds both spellings plus Cancelled/Rejected, since
+matching only the latter scored every abandoned request as a success and pinned the rate at 100%.
+
+## Detecting a self-service request
+
+Three independent signals, unioned — any one is enough, because each alone misses a slice:
+
+| Signal | Where | Note |
+|---|---|---|
+| `pe-*` / `ai-generated` / `self-service` label | Jira issue | the `pe-*` labels only began 2026-05-27 |
+| `pe:<skill>` label | linked GitLab MR | 302 of 2477 crawled MRs |
+| `Generated with Claude Code` footer | linked GitLab MR description | 522 of 2477 — the widest signal, and it predates the labels by two months |
+
+The MR is matched to the issue by the `DEVOPS-<n>` key in its title. On the crawled corpus the
+footer alone catches **254 MRs the label misses**, and **127 issues** carrying no `pe-*` label at
+all — against 135 found by labels alone. The footer usually also names the originating skill
+(`via /iac-request`), which buckets the request when no `pe:` label is present.
+
+Bucketing takes the MR's `pe:` label first, then the footer's skill, then the Jira label. Note the
+Jira fallback cannot separate k8s from iac (`pe-tf-module` issues also carry `pe-iac-request`), and
+15 crawled MRs carry the label as the literal string `["pe:iac-request"]` — a quoting bug in
+whatever sets it, tolerated in `_MR_BUCKET_BY_LABEL` but still worth fixing at the source.
+
+MR turnaround needs `merge_requests.opened_at` and `description` on every in-window row. Because
+the GitLab crawl is incremental, rows written before those columns existed — and MRs by an author added to `MR_AUTHORS`
+later — cannot be repaired by an incremental pull, so `gitlab_ingest._needs_backfill` forces **one**
+full-window re-crawl while any in-window row is missing either, then returns to incremental.
+Descriptions are stored verbatim (~1.3 MiB for the whole corpus) so the footer heuristics can be
+retuned without another crawl.
 
 ## Architecture
 
@@ -34,7 +126,9 @@ time — everything reads the local store):
   minus a small margin), from the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few
   tracked repos that live outside those groups (`_PE_PROJECT_IDS`, e.g. `tf-org`/`tf-org-v2` under
   secops). Each MR is
-  attributed to a roster member (`roster.GITLAB_USERNAMES`) and its changed file paths stored;
+  attributed to a tracked author (`roster.MR_AUTHORS` = the PE roster plus `TRACKED_MR_AUTHORS`,
+  non-roster contributors whose MR turnaround is measured but who must stay out of the roster-gated
+  velocity/capacity/SME views) and its changed file paths stored;
   `gitlab_domains.py` tags each MR to expertise domains from its **repo + changed file paths**
   (not the diff contents or the MR description) — a far denser signal than Jira titles.
 - **App** (`app.py`) — read-only `/api/*` endpoints, `/health`, and the one write path,
@@ -65,7 +159,7 @@ This is what makes the routing accurate. Jira ticket titles are terse and incons
 them recognizes a domain in only **~63%** of the work. The primary expertise signal instead comes
 from **what engineers actually build**, read from GitLab:
 
-- For every merged MR by a roster member (a 6-month baseline on the first sync, then kept current
+- For every merged MR by a tracked author (a 6-month baseline on the first sync, then kept current
   by incremental syncs, from the PE groups plus a few tracked repos), we fetch the MR's **changed
   file paths** — not the diff contents, and not the MR title/description — capped at 60 paths per MR.
 - `gitlab_domains.py` tags each MR to expertise domains with regex over the **repo name + those

@@ -119,6 +119,13 @@
   h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
   h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
   .sec-hidden{display:none !important}
+  .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
+          text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
+  .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 11px; min-width:220px; text-transform:none;
+          letter-spacing:0}
+  .filter input:focus-visible{outline:2px solid var(--line2); outline-offset:2px; border-color:var(--muted)}
+  .filter-hint{display:block; font-size:12px; color:var(--muted); margin:0 0 10px}
 </style>
 </head>
 <body>
@@ -135,15 +142,33 @@
   <h1>Self-Service SLAs &amp; Agent Success</h1>
   <p class="dek">Request volume, delivery turnaround, SLA compliance, and PE review turnaround for
   agent self-service requests, bucketed by the skill that created them (from the linked MR's label).
-  Agent success is the share of terminal AI requests that reached Done. Human-side tracking is a follow-up.</p>
+  Agent success is the share of terminal AI requests that reached Done. Human-side tracking is a follow-up.
+  <b>All hours are business hours</b> — Mon–Fri 09:00–17:00 America/Denver, one standard clock, since
+  Audacy's users are overwhelmingly North American. Nothing before 2026-03 is counted; that is when the
+  self-service workflows began. Each section states its own window.</p>
 
   <h2>Agent success</h2>
   <div class="cards" id="successStats"></div>
 
   <h2>By request type</h2>
-  <p class="h2sub">AI self-service requests, bucketed by originating skill, each against its SLA target.
-  Human-side tracking is a follow-up. <span id="placeholderNote"></span></p>
+  <p class="h2sub">AI self-service requests, bucketed by originating skill. Two tiers per bucket, scored
+  separately: the <b>p50</b> is what the common case should hit, the <b>p90</b> is the tail backstop.
+  Turnaround is bimodal — most requests land in a couple of hours and a hard tail sits a day or more
+  out — so one blended figure would be wrong about both ends. Requests created since
+  <span id="slaWindowNote">—</span>. <span id="placeholderNote"></span></p>
   <div class="tbl-wrap"><table id="slaTbl"></table></div>
+
+  <h2>MR turnaround by author</h2>
+  <p class="h2sub">Every merged MR the ingest attributes, opened → merged, slowest first, merged since
+  <span id="windowNote">—</span>. Counts every MR,
+  with no per-issue pick. <b>Calendar</b> is shown alongside so the overnight/weekend share is visible —
+  worth checking for the engineers working EET, whose own workday sits inside Denver's night.</p>
+  <label class="filter">Filter authors
+    <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
+           aria-describedby="mrFilterHint">
+  </label>
+  <span class="filter-hint" id="mrFilterHint">comma-separated, matches any part of a name</span>
+  <div class="tbl-wrap"><table id="mrTbl"></table></div>
 
   <div class="foot">
     <div><b>What's counted.</b> DEVOPS issues carrying an agent watermark (a <code>pe-*</code> Jira label).
@@ -152,7 +177,22 @@
     matched to the issue by its <code>DEVOPS-</code> key; an issue with no linked MR falls back to its Jira
     <code>pe-*</code> label. Delivery turnaround = created → first <code>Done</code> (changelog). Review
     turnaround = MR <code>opened_at</code> → <code>merged_at</code>. v1 tracks AI requests; human-side is a follow-up.</div>
-    <div><b>SLA targets are placeholders</b> pending team agreement (DEVOPS-9580).</div>
+    <div><b>Business hours.</b> Mon–Fri 09:00–17:00 America/Denver, so a request filed 16:00 and closed
+    09:00 next morning is 1h, not 17h. Company holidays are not modelled. Targets are business hours too.</div>
+    <div><b>Review median vs. MR turnaround.</b> The per-type <b>review median</b> above keeps one MR per
+    Jira issue (the earliest, for deterministic bucketing), so an issue delivered across several MRs
+    contributes once. The <b>MR turnaround</b> table counts every merged MR. Only merged MRs are ingested,
+    so neither is a queue depth — an MR still open is invisible until it lands.</div>
+    <div><b>Targets are calibrated to August capability; the window is 3 months.</b> Most buckets
+    therefore read as breaching, and that is the intended signal, not a fault — it is the gap between
+    a good month and the trailing quarter. Delivery p50 by month created ran 369.7h (Apr), 102.0h
+    (May), 7.5h (Jun), 12.9h (Jul), 2.5h (Aug), so a six-month window would calibrate against a team
+    that no longer exists; the reading improves as Jun/Jul age out. MR turnaround below keeps its own
+    six-month window back to the epoch, since that table is about the whole self-service era.</div>
+    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task). A Feature or
+    Epic is a container for requests, not a request, and its lifetime distorts the median. Roughly
+    18% of a typical request's turnaround falls <i>after</i> its MR merged — shipped work waiting to
+    be closed out — so an auto-transition on merge would improve every figure here for free.</div>
     <div><b>Agent success (v1).</b> Store-derived: terminal AI requests that reached Done vs
     Won't Do/Cancelled. Invocation-level success from the CloudWatch GenAI dashboard (DEVOPS-9562) is deferred.</div>
   </div>
@@ -170,34 +210,80 @@ function renderSuccess(a){
     card("Succeeded", a.succeeded, "reached Done");
 }
 
+/* Each tier gets its own verdict: median vs the p50 target, p90 vs the p90 target. A bimodal
+   distribution fails these independently, which one blended percentage cannot show. */
+function tier(value, target, meets){
+  if(value==null) return '<span class="na">—</span>';
+  const cls = meets==null ? "" : (meets ? "pos" : "neg");
+  const mark = meets==null ? "" : (meets ? " ✓" : " ✗");
+  return `<span class="${cls}">${value}${mark}</span>`+
+         (target==null ? "" : ` <span class="na">/ ${target}</span>`);
+}
+
 function renderTable(buckets){
   let head=`<thead><tr><th>Audience</th><th>Type</th><th>Volume</th><th>Closed</th>`+
-           `<th>Target (h)</th><th>Median (h)</th><th>p90 (h)</th><th>SLA met</th>`+
+           `<th>p50 / target (h)</th><th>p90 / target (h)</th><th>Inside p50 target</th>`+
            `<th>Review median (h)</th></tr></thead>`;
   const rows = buckets.map(b=>`<tr>
      <td>${esc(b.audience.toUpperCase())}</td>
      <td>${esc(b.type)}</td>
      <td class="num">${b.volume}</td>
      <td class="num">${b.closed}</td>
-     <td class="num">${fmt(b.target_hours)}</td>
-     <td class="num">${fmt(b.turnaround_hours_median)}</td>
-     <td class="num">${fmt(b.turnaround_hours_p90)}</td>
-     <td class="num">${pct(b.sla_met_pct)}</td>
+     <td class="num">${tier(b.turnaround_hours_median, b.target_p50_hours, b.meets_p50)}</td>
+     <td class="num">${tier(b.turnaround_hours_p90, b.target_p90_hours, b.meets_p90)}</td>
+     <td class="num">${pct(b.within_target_pct)}</td>
      <td class="num">${fmt(b.review_hours_median)}</td>
    </tr>`).join("");
   document.getElementById("slaTbl").innerHTML =
-    head + `<tbody>${rows || '<tr><td colspan="9" class="na">No self-service requests yet.</td></tr>'}</tbody>`;
+    head + `<tbody>${rows || '<tr><td colspan="8" class="na">No self-service requests yet.</td></tr>'}</tbody>`;
+}
+
+/* Filter terms are comma-separated; a row survives if any term is a substring of the name.
+   Team totals stay as returned — they describe the whole window, not the filtered subset. */
+function mrFilterTerms(){
+  return (document.getElementById("mrFilter").value || "")
+    .split(",").map(t=>t.trim().toLowerCase()).filter(Boolean);
+}
+
+function renderMrTable(d){
+  const terms = mrFilterTerms();
+  const shown = terms.length
+    ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
+    : d.authors;
+  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Biz median (h)</th>`+
+             `<th>Biz p90 (h)</th><th>Calendar median (h)</th></tr></thead>`;
+  const row=(a,cls)=>`<tr class="${cls}">
+     <td>${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
+     <td class="num">${a.merged}</td>
+     <td class="num">${fmt(a.biz_hours_median)}</td>
+     <td class="num">${fmt(a.biz_hours_p90)}</td>
+     <td class="num">${fmt(a.cal_hours_median)}</td>
+   </tr>`;
+  const rows = shown.map(a=>row(a,"")).join("");
+  const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
+  const empty = terms.length
+    ? '<tr><td colspan="5" class="na">No author matches that filter.</td></tr>'
+    : '<tr><td colspan="5" class="na">No merged MRs in the window.</td></tr>';
+  document.getElementById("mrTbl").innerHTML = head +
+    `<tbody>${rows || empty}${d.authors.length?team:''}</tbody>` +
+    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
 }
 
 async function init(){
   try{
-    const res = await fetch("api/slas");
+    const [res, mrRes] = await Promise.all([fetch("api/slas"), fetch("api/mr-turnaround")]);
     if(!res.ok) throw new Error("HTTP "+res.status);
+    if(!mrRes.ok) throw new Error("HTTP "+mrRes.status+" (mr-turnaround)");
     const data = await res.json();
+    const mrData = await mrRes.json();
     renderSuccess(data.agent_success);
     renderTable(data.buckets);
+    renderMrTable(mrData);
+    document.getElementById("mrFilter").addEventListener("input", ()=>renderMrTable(mrData));
+    document.getElementById("windowNote").textContent = mrData.window_start;
     document.getElementById("placeholderNote").textContent =
       data.targets_are_placeholder ? "Targets are placeholders (DEVOPS-9580)." : "";
+    document.getElementById("slaWindowNote").textContent = data.window_start;
   }catch(e){
     document.querySelector("main.card").insertAdjacentHTML("afterbegin",
       `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">Failed to load SLA data: ${esc(e.message)}</div>`);

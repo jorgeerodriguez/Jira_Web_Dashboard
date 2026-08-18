@@ -1,9 +1,11 @@
-"""GitLab merge-request ingest: merged MRs by roster members, with changed file paths.
+"""GitLab merge-request ingest: merged MRs by tracked authors, with changed file paths.
 
 Parallel to the Jira poller. Pulls merged MRs from the PE groups (audacy-inc/devops and
-audacy-inc/gcp) over a trailing window, attributes each to a roster member via
-GITLAB_USERNAMES, and stores the MR plus its changed file paths. The SME matrix is then
-tagged from real authorship (see gitlab_domains), which fills the gaps sparse Jira titles leave.
+audacy-inc/gcp) over a trailing window, attributes each to a tracked author via
+roster.MR_AUTHORS (the PE roster plus the non-roster contributors in TRACKED_MR_AUTHORS), and
+stores the MR plus its changed file paths. The SME matrix is then tagged from real authorship
+(see gitlab_domains), which fills the gaps sparse Jira titles leave; it keys on ROSTER, so
+tracked non-roster authors feed the MR-turnaround view without entering the SME matrix.
 
 Transport mirrors the Jira poller: a token from the environment (GITLAB_TOKEN), so the same
 code runs locally and in-cluster.
@@ -18,7 +20,7 @@ import duckdb
 import requests
 
 from darkstar import store
-from darkstar.roster import GITLAB_USERNAMES
+from darkstar.roster import MR_AUTHORS
 
 logger = logging.getLogger("darkstar.gitlab_ingest")
 
@@ -89,15 +91,37 @@ def _project_path(mr: dict) -> str:
     return full_reference.split("!")[0] or str(mr["project_id"])
 
 
+def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> bool:
+    """True if in-window MRs lack opened_at/description, which an incremental crawl cannot repair.
+
+    Incremental crawls only re-fetch MRs *updated* since the watermark, so rows written before
+    opened_at/labels existed (and MRs by an author added to MR_AUTHORS later) would stay incomplete
+    forever. One full re-crawl fixes both. Self-terminating: once every in-window row has an
+    opened_at this is False again, and rows older than the window are never revisited.
+    """
+    missing = connection.execute(
+        "SELECT count(*) FROM merge_requests "
+        "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL)", [cutoff]
+    ).fetchone()[0]
+    if missing:
+        logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
+    return bool(missing)
+
+
 def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int) -> tuple[int, int]:
-    """Crawl merged MRs by roster members: full `window_days` on the first run, incremental after.
+    """Crawl merged MRs by tracked authors: full `window_days` on the first run, incremental after.
 
     The first crawl (no stored watermark) pulls the whole trailing window; every crawl after pulls
     only MRs updated since the last successful sync (minus a small margin). The watermark advances
-    only after a successful crawl, so a failed run just retries the same slice next time.
+    only after a successful crawl, so a failed run just retries the same slice next time. A store
+    holding incomplete in-window rows is re-crawled in full once (see _needs_backfill).
     """
     watermark = store.get_gitlab_watermark(connection)
-    cutoff = now - timedelta(days=window_days) if watermark is None else watermark - _WATERMARK_MARGIN
+    window_cutoff = now - timedelta(days=window_days)
+    if watermark is None or _needs_backfill(connection, window_cutoff):
+        cutoff = window_cutoff
+    else:
+        cutoff = watermark - _WATERMARK_MARGIN
     written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS)
     store.set_gitlab_watermark(connection, now)
     return written
@@ -123,7 +147,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
     for scope in scopes:
         for mr in _merged_mrs(session, scope, updated_after_iso):
-            account_id = GITLAB_USERNAMES.get((mr.get("author") or {}).get("username", ""))
+            account_id = MR_AUTHORS.get((mr.get("author") or {}).get("username", ""))
             if account_id is None:
                 continue
             merged_at = mr.get("merged_at")
@@ -153,6 +177,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 labels=list(mr.get("labels") or []),
                 web_url=mr.get("web_url") or "",
                 fetched_at=fetched_at,
+                description=mr.get("description") or "",
             ))
             file_rows.extend((mr_id, path) for path in paths)
 
