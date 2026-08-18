@@ -1,12 +1,29 @@
 """Self-service SLA + agent-success aggregation (DEVOPS-9580).
 
-Reads only from the store. A DEVOPS delivery-type issue is an AI self-service request iff it carries an agent
-watermark (any pe-* Jira label, stamped by the skills). Its bucket comes from the linked GitLab
-MR's pe:<skill> label (Option B, four clean buckets), matched to the issue by the DEVOPS-<n> key
-in the MR title; an issue with no linked MR falls back to its Jira pe-* label. Delivery turnaround
+Reads only from the store. Two independent properties, never merged:
+
+  SELF-SERVICE  a *label* is present -- pe-*/ai-generated/self-service on the Jira issue, or
+                pe:<skill> on the linked MR. The skills stamp these, so a label means the request
+                came through a self-service skill. This is the population the SLA buckets measure.
+  AI-GENERATED  the *footer* is present -- "Generated with Claude Code" in the MR description. The
+                code was agent-written, whatever the origin of the request.
+
+They overlap but are not the same, and treating the footer as self-service overstated it badly:
+96 issues created since the labels existed are footer-only, and they are ordinary human-filed
+tickets that PE delivered with the agent's help.
+
+A request's bucket comes from the linked MR's pe:<skill> label, then the footer's "via /<skill>"
+fragment (which names the skill reliably even though it does not qualify the issue), then the Jira
+label; the MR is matched to the issue by the DEVOPS-<n> key in its title. Delivery turnaround
 is created->earliest Done; SLA compliance scores the bucket's median against a p50 target and its p90 against a p90 target.
 Review turnaround is opened->merged on the linked MR. Agent success rate is the share of terminal
 AI requests that reached Done (v1 store-derived; CloudWatch source deferred -- see DEVOPS-9580).
+
+The headline block answers the three questions a human actually asks of a self-service programme:
+is it used (requests this month vs last), does it carry real load (share of ALL delivered PE work
+in the window), and is it faster (self-service median vs the non-self-service delivery median, both
+on the same business clock). Computing the comparison is why the main loop measures every delivered
+delivery-type issue, not only the agent-created ones.
 
 Every turnaround here is measured in BUSINESS hours (metrics.business_hours_between: Mon-Fri
 08:00-17:00 US/Pacific), not calendar hours -- the team is not on call for self-service
@@ -31,17 +48,28 @@ from darkstar.metrics import (
     DELIVERY_TYPES,
     SELF_SERVICE_EPOCH,
     business_hours_between,
+    business_month,
     pctile,
+    ready_hours,
     window_start,
 )
 
-_AI_PREFIX: str = "pe-"        # Jira watermark prefix (GitLab uses "pe:"); presence => agent-created
-# Jira labels that mark an agent-created request on their own, without a pe-* watermark. The
-# pe-* labels only began 2026-05-27, so on the March-May work these carry the signal instead.
-_AI_JIRA_LABELS: frozenset[str] = frozenset({"ai-generated", "self-service"})
-# The MR-description footer the skills stamp. Present on 521 of 2477 crawled MRs versus 288 for
-# the pe:* label, and it predates the labels, so it is the widest AI signal available. Matches the
-# emoji and :robot: variants alike, plus the trailing Anthropic co-author trailer.
+# TWO DIFFERENT THINGS, deliberately not merged:
+#
+#   SELF-SERVICE -- a *label* is present. The skills stamp pe-* on the Jira issue and pe:<skill> on
+#                   the MR, so a label means the request itself came through a self-service skill.
+#   AI-GENERATED -- the *footer* is present. "Generated with Claude Code" in the MR description
+#                   means the code was agent-written, whatever the origin of the request.
+#
+# Conflating them overstated self-service badly: 96 issues created since the labels existed are
+# footer-only, and they are ordinary human-filed tickets that PE happened to deliver with the agent
+# (reported by Adam, Omar, Samia...). Those are AI-generated, not self-service.
+_SELF_SERVICE_PREFIX: str = "pe-"   # Jira watermark; GitLab's equivalent is the pe:<skill> label
+# Jira labels the skills stamp that do not carry the pe- prefix.
+_SELF_SERVICE_JIRA_LABELS: frozenset[str] = frozenset({"ai-generated", "self-service"})
+# The MR-description footer. Present on 521 of 2477 crawled MRs against 288 for the pe:* label, and
+# it predates the labels by two months. Matches the emoji and :robot: variants alike, plus the
+# trailing Anthropic co-author trailer.
 _AGENT_FOOTER_RE = re.compile(
     r"generated\s+with\s+\[?claude\s+code|authored-by:\s*claude|claude\.com/claude-code",
     re.IGNORECASE,
@@ -125,10 +153,10 @@ SLA_TARGETS_HOURS: dict[str, dict[str, dict[str, float]]] = {
 }
 
 
-def _is_ai_issue(labels: list[str]) -> bool:
-    """True iff the Jira issue itself is watermarked: any pe-* label, or ai-generated/self-service."""
+def _is_self_service_issue(labels: list[str]) -> bool:
+    """True iff the Jira issue carries a skill-stamped label: pe-*, ai-generated or self-service."""
     return any(
-        label.startswith(_AI_PREFIX) or label in _AI_JIRA_LABELS
+        label.startswith(_SELF_SERVICE_PREFIX) or label in _SELF_SERVICE_JIRA_LABELS
         for label in (labels or [])
     )
 
@@ -195,41 +223,85 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
 
     # Per-issue-key MR info: bucket (from the MR's pe:<skill> label) + review turnaround. The MR
     # title references the DEVOPS-<n> key. First MR with a recognized bucket / valid times wins.
+    events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
+    for mr_id, kind, happened_at in connection.execute(
+        "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
+    ).fetchall():
+        events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
+
     mr_by_key: dict[str, dict] = {}
-    for title, opened_at, merged_at, mr_labels, description in connection.execute(
-        "SELECT title, opened_at, merged_at, labels, description FROM merge_requests "
+    for mr_id, title, opened_at, merged_at, mr_labels, description in connection.execute(
+        "SELECT id, title, opened_at, merged_at, labels, description FROM merge_requests "
         "WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
         match = _KEY_RE.search(title or "")
         if not match:
             continue
-        entry = mr_by_key.setdefault(match.group(0), {"bucket": None, "review_hours": None, "agent": False})
-        # The MR's pe:* label is the cleanest per-skill signal; its footer's "via /<skill>" is the
-        # widest. Take whichever the first MR offers, label first.
+        entry = mr_by_key.setdefault(
+            match.group(0),
+            {"bucket": None, "review_hours": None, "skill_label": False, "footer": False,
+             "first_review_hours": None})
+        # Bucketing may still read the footer's "via /<skill>" — it names the skill reliably. That is
+        # a separate question from whether the footer *qualifies* the issue as self-service.
         if entry["bucket"] is None:
             entry["bucket"] = _mr_bucket(mr_labels or []) or _footer_bucket(description)
-        entry["agent"] = entry["agent"] or has_agent_footer(description) or bool(_mr_bucket(mr_labels or []))
+        entry["skill_label"] = entry["skill_label"] or bool(_mr_bucket(mr_labels or []))
+        entry["footer"] = entry["footer"] or has_agent_footer(description)
         if entry["review_hours"] is None and opened_at and merged_at:
-            entry["review_hours"] = business_hours_between(opened_at, merged_at)
+            events = events_by_mr.get(mr_id, [])
+            entry["review_hours"] = ready_hours(opened_at, merged_at, events)
+            review_at = next((when for kind, when in events if kind == "review"), None)
+            if review_at is not None:
+                entry["first_review_hours"] = ready_hours(opened_at, min(review_at, merged_at), events)
 
     # bucket key -> accumulator
     buckets: dict[tuple[str, str], dict] = {}
     success_terminal = 0
     success_done = 0
+    # Headline counters. The comparison group is the whole non-self-service delivery population in
+    # the same window, measured on the same clock -- that is the only honest baseline for "is
+    # self-service faster", and it is why this loop no longer skips non-AI issues outright.
+    self_service_hours: list[float] = []
+    other_hours: list[float] = []
+    delivered_self_service = 0
+    delivered_ai_generated = 0
+    delivered_total = 0
+    first_review_waits: list[float] = []
+    self_service_reviewed = 0
+    created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
         mr = mr_by_key.get(key)
         # Agent-created if ANY signal fires: the Jira watermark, the linked MR's pe:* label, or the
         # linked MR's "Generated with Claude Code" footer. Any one alone misses a slice of the work.
-        if not (_is_ai_issue(labels) or (mr is not None and mr["agent"])):
+        # Self-service = a label somewhere. AI-generated = a footer on the MR. Independent.
+        is_self_service = _is_self_service_issue(labels) or (mr is not None and mr["skill_label"])
+        is_ai_generated = mr is not None and mr["footer"]
+        done_at = _earliest_done(transitions_by_key.get(key, []))
+
+        if done_at is not None:
+            delivered_total += 1
+            hours = business_hours_between(created, done_at)
+            (self_service_hours if is_self_service else other_hours).append(hours)
+            if is_self_service:
+                delivered_self_service += 1
+            if is_ai_generated:
+                delivered_ai_generated += 1
+        if is_self_service and mr is not None and mr["first_review_hours"] is not None:
+            self_service_reviewed += 1
+            first_review_waits.append(mr["first_review_hours"])
+        if is_self_service:
+            month = business_month(created)
+            created_by_month[month] = created_by_month.get(month, 0) + 1
+
+        if not is_self_service:
             continue
         rtype = (mr and mr["bucket"]) or _jira_fallback_bucket(labels)  # MR signal wins; Jira fallback
         audience = "ai"  # every issue reaching here carries a pe-* watermark; human-side is a follow-up
         acc = buckets.setdefault((audience, rtype), {"volume": 0, "turnarounds": [], "reviews": [], "closed": 0})
         acc["volume"] += 1
 
-        done_at = _earliest_done(transitions_by_key.get(key, []))
         if done_at is not None:
             acc["turnarounds"].append(business_hours_between(created, done_at))
             acc["closed"] += 1
@@ -272,6 +344,37 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             "review_hours_p90": pctile(reviews, 0.9),
         })
 
+    def _prev(month: tuple[int, int]) -> tuple[int, int]:
+        year, mon = month
+        return (year - 1, 12) if mon == 1 else (year, mon - 1)
+
+    this_month = business_month(now)
+    headline = {
+        # Share of ALL delivered PE work in the window that came through self-service. Self-
+        # normalising: filing more requests cannot flatter it, because the denominator grows too.
+        "share_pct": round(delivered_self_service / delivered_total * 100, 1) if delivered_total else None,
+        "share_delivered": delivered_self_service,
+        "share_total": delivered_total,
+        # The other dimension: delivered work whose MR carries a Claude footer, whoever filed the
+        # ticket. Strictly broader than self-service and answers a different question.
+        "ai_share_pct": round(delivered_ai_generated / delivered_total * 100, 1) if delivered_total else None,
+        "ai_delivered": delivered_ai_generated,
+        # Adoption. A share without its volume is unreadable -- 53% of 5 is not 53% of 172.
+        "requests_this_month": created_by_month.get(this_month, 0),
+        "requests_prev_month": created_by_month.get(_prev(this_month), 0),
+        # The value proposition, both sides measured on the same business clock.
+        "self_service_median_hours": round(statistics.median(self_service_hours), 1) if self_service_hours else None,
+        "other_median_hours": round(statistics.median(other_hours), 1) if other_hours else None,
+        "self_service_sample": len(self_service_hours),
+        "other_sample": len(other_hours),
+        # Time to the first human review comment on a self-service request's MR, on the ready-clock
+        # (bots and the author's own notes excluded at ingest). Separates "nobody looked" from
+        # "reviewed, then iterated" — the split the raw turnaround cannot express.
+        "first_review_reviewed": self_service_reviewed,
+        "first_review_median_hours": round(statistics.median(first_review_waits), 1) if first_review_waits else None,
+        "first_review_p90_hours": pctile(first_review_waits, 0.9),
+    }
+
     agent_success = {
         "terminal": success_terminal,
         "succeeded": success_done,
@@ -281,6 +384,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     generated_local = now.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ)
     return {
         "buckets": out_buckets,
+        "headline": headline,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],
         "targets": SLA_TARGETS_HOURS,

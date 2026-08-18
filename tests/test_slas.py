@@ -23,7 +23,7 @@ def _mr(id, key, labels, opened, merged, description=""):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"{key} do a thing", opened_at=opened, merged_at=merged, labels=labels,
-        web_url="u", fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
+        web_url="u", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
 
 
 def _seed():
@@ -195,15 +195,35 @@ def _fresh():
     return conn
 
 
-def test_mr_footer_alone_marks_a_request_as_agent_created():
-    """A March-era request: no pe-* label anywhere, only the footer on its MR."""
+def test_a_footer_alone_is_ai_generated_but_not_self_service():
+    """The correction that matters: a footer means the *code* was agent-written, nothing more.
+
+    96 issues created since the labels existed are footer-only, and they are ordinary human-filed
+    tickets PE delivered with the agent. Counting them as self-service put the share card at 100%
+    when the true figure was around 42%.
+    """
     conn = _fresh()
-    _done_issue(conn, "DEVOPS-20", ["DevOps"])            # no watermark at all
+    _done_issue(conn, "DEVOPS-20", ["DevOps"])            # human-filed: no label anywhere
     store.upsert_merge_requests(conn, [_mr(20, "DEVOPS-20", [], datetime(2026, 7, 20, 9, 0, 0),
                                            datetime(2026, 7, 20, 15, 0, 0), description=_FOOTER)])
     report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
-    assert sum(b["volume"] for b in report["buckets"]) == 1
-    assert report["buckets"][0]["type"] == "iac-request"   # skill read from the footer's "via /"
+    assert report["buckets"] == []                        # not a self-service request
+    head = report["headline"]
+    assert head["share_delivered"] == 0                   # ...so it is not in the self-service share
+    assert head["ai_delivered"] == 1                      # ...but it IS AI-generated
+    assert head["share_total"] == 1                       # and it counts in the delivery denominator
+
+
+def test_an_mr_skill_label_does_qualify_as_self_service():
+    """pe:<skill> is stamped by the skill itself, so it means the request came through one."""
+    conn = _fresh()
+    _done_issue(conn, "DEVOPS-26", ["DevOps"])
+    store.upsert_merge_requests(conn, [_mr(26, "DEVOPS-26", ["pe:iac-request"],
+                                           datetime(2026, 7, 20, 9, 0, 0),
+                                           datetime(2026, 7, 20, 15, 0, 0))])
+    report = _report(conn, datetime(2026, 7, 28, 12, 0, 0))
+    assert report["buckets"][0]["type"] == "iac-request"
+    assert report["headline"]["share_delivered"] == 1
 
 
 def test_ai_generated_jira_label_alone_is_enough():
@@ -216,9 +236,13 @@ def test_ai_generated_jira_label_alone_is_enough():
 
 
 def test_footer_skill_name_is_normalised_to_the_bucket():
-    """The skill is `tf-module-request` but the bucket and label are `tf-module`."""
+    """The skill is `tf-module-request` but the bucket and label are `tf-module`.
+
+    The footer still *buckets* a self-service request — it names the skill reliably — it just no
+    longer *qualifies* one, so this issue carries a Jira label to get into the population.
+    """
     conn = _fresh()
-    _done_issue(conn, "DEVOPS-22", ["DevOps"])
+    _done_issue(conn, "DEVOPS-22", ["DevOps", "ai-generated"])
     store.upsert_merge_requests(conn, [_mr(
         22, "DEVOPS-22", [], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 15, 0, 0),
         description=":robot: Generated with Claude Code via /tf-module-request")])

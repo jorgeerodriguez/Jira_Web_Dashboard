@@ -75,6 +75,9 @@
   .plot-note{font-family:var(--mono); font-size:11px; fill:var(--muted); letter-spacing:.08em; text-transform:uppercase}
   .val{font-family:var(--mono); font-size:12px; font-weight:600}
   .series-line{fill:none; stroke-width:2.4; stroke-linejoin:round; stroke-linecap:round}
+  .hit{fill:none; stroke:#000; stroke-opacity:0; stroke-width:14; pointer-events:stroke; cursor:pointer}
+  .series{transition:opacity .12s}
+  .chips .chip{transition:opacity .12s}
   .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
   .whisk{stroke-width:1.25; opacity:.55}
 
@@ -124,7 +127,9 @@
   .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
           border:1px solid var(--line2); border-radius:8px; padding:6px 11px; min-width:220px; text-transform:none;
           letter-spacing:0}
-  .filter input:focus-visible{outline:2px solid var(--line2); outline-offset:2px; border-color:var(--muted)}
+  .filter input:focus-visible,.filter select:focus-visible{outline:2px solid var(--line2); outline-offset:2px; border-color:var(--muted)}
+  .filter select{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 11px; text-transform:none}
   .filter-hint{display:block; font-size:12px; color:var(--muted); margin:0 0 10px}
   .controls{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:10px 0 4px}
   .controls .filter-hint{margin:0; flex:1 1 260px; min-width:200px}
@@ -138,9 +143,14 @@
   .chip button{background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px;
         padding:0; line-height:1}
   .chip button:hover{color:var(--ink)}
+  .chips .chip[aria-pressed]{border-style:solid; border-color:var(--c); color:var(--ink);
+        background:color-mix(in srgb, var(--c) 16%, transparent)}
+  .chips .chip .dot{width:9px; height:9px; border-radius:50%; background:var(--c); display:inline-block}
   .rowx{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1;
         padding:0 2px}
   .rowx:hover{color:var(--neg)}
+  .bar{display:block; height:8px; border-radius:2px; background:var(--ink2); opacity:.55; min-width:1px}
+  td.barcell{width:38%; padding-left:14px}
 </style>
 </head>
 <body>
@@ -169,7 +179,10 @@
     <span class="filter-hint" id="sinceHint"></span>
   </div>
 
-  <h2>Agent success</h2>
+  <h2>Self-service impact</h2>
+  <p class="h2sub">A <b>label</b> means the request came through a self-service skill; a
+  <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
+  overlap but are not the same, so the share card reports both.</p>
   <div class="cards" id="successStats"></div>
 
   <h2>By request type</h2>
@@ -181,9 +194,10 @@
   <div class="tbl-wrap"><table id="slaTbl"></table></div>
 
   <h2>MR turnaround by author</h2>
-  <p class="h2sub">Every merged MR the ingest attributes, opened → merged, slowest first, merged since
-  <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Note that an engineer working
-  EET can score near zero here, since their own workday falls inside the Pacific night.</p>
+  <p class="h2sub">Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
+  <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
+  excluded — the author is still working, not waiting on review. Note that an engineer working EET can
+  score near zero here, since their own workday falls inside the Pacific night.</p>
   <div class="controls">
     <label class="filter">Filter authors
       <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
@@ -196,13 +210,31 @@
       <input id="addName" type="text" placeholder="Display Name" autocomplete="off">
     </label>
     <button class="btn" id="addBtn" type="button">Add</button>
+    <label class="filter">Environment
+      <select id="envFilter">
+        <option value="all">all</option>
+        <option value="prod">production</option>
+        <option value="nonprod">non-production</option>
+        <option value="other">neither</option>
+      </select>
+    </label>
   </div>
   <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
-    name; it only narrows the view. Adding an author queues one full GitLab re-crawl, since their
-    existing MRs are not in the store yet. Use <b>×</b> on a row to hide someone.</span>
+    name. Environment is read from the repo name — <code>*-prod</code> is production,
+    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
+    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
+    yet. Use <b>×</b> on a row to hide someone.</span>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <p class="filter-hint" id="reviewNote"></p>
   <div id="hiddenChips" class="chips"></div>
+
+  <h2>Daily MR turnaround</h2>
+  <p class="h2sub">The same merged MRs, cut by the business-timezone day they landed rather than by
+  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
+  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
+  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
+  <div class="tbl-wrap"><div id="dailyChart"></div></div>
 
   <div class="foot">
     <div><b>What's counted.</b> DEVOPS issues carrying an agent watermark (a <code>pe-*</code> Jira label).
@@ -236,12 +268,30 @@ function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",
 const fmt = v => v==null ? '<span class="na">—</span>' : v;
 const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
 
-function renderSuccess(a){
-  const card=(k,v,sub)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+/* Three questions a human actually asks: is it used, does it carry real load, is it faster.
+   The old cards answered none of them — "90% success" only meant "the ticket was not cancelled". */
+function renderSuccess(h){
+  const card=(k,v,sub,cls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>`+
+    `<div class="s${cls?" "+cls:""}">${sub}</div></div>`;
+  const delta = h.requests_this_month - h.requests_prev_month;
+  const speed = (h.self_service_median_hours!=null && h.other_median_hours!=null)
+    ? `${h.self_service_median_hours}h vs ${h.other_median_hours}h`
+    : '—';
+  const factor = (h.self_service_median_hours>0 && h.other_median_hours!=null)
+    ? `${(h.other_median_hours/h.self_service_median_hours).toFixed(1)}× faster than the rest of PE delivery`
+    : 'no comparison population in this window';
+  const review = h.first_review_median_hours==null ? '—' : h.first_review_median_hours+'h';
   document.getElementById("successStats").innerHTML =
-    card("Agent success rate", a.rate_pct==null?'—':a.rate_pct+'%', a.succeeded+" of "+a.terminal+" terminal AI requests") +
-    card("Terminal AI requests", a.terminal, "reached a final state") +
-    card("Succeeded", a.succeeded, "reached Done");
+    card("Self-service share", h.share_pct==null?'—':h.share_pct+'%',
+         `${h.share_delivered} of ${h.share_total} delivered tickets came through a skill`+
+         (h.ai_share_pct==null ? '' : ` · ${h.ai_share_pct}% were AI-written`)) +
+    card("Requests this month", h.requests_this_month,
+         `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`, delta>=0?"pos":"neg") +
+    card("Self-service speed", speed, factor) +
+    card("Time to first review", review,
+         h.first_review_reviewed
+           ? `${h.first_review_reviewed} drew a human comment · p90 ${fmt(h.first_review_p90_hours)}h`
+           : "no human review comments in this window");
 }
 
 /* Each tier gets its own verdict: median vs the p50 target, p90 vs the p90 target. A bimodal
@@ -309,13 +359,24 @@ function renderMrTable(d){
 const SINCE_KEY = "darkstar.slas.since";
 let mrData = null, slaData = null;
 
-function sinceParam(){
-  const v = document.getElementById("since").value;
-  return v ? `?since=${encodeURIComponent(v)}` : "";
+/* Query string for a panel: the shared lookback, plus the author filter where the endpoint
+   supports it. Built with URLSearchParams so an empty value simply never appears. */
+function query(withMrFilters){
+  const p = new URLSearchParams();
+  const since = document.getElementById("since").value;
+  if(since) p.set("since", since);
+  if(withMrFilters){
+    const terms = mrFilterTerms();
+    if(terms.length) p.set("authors", terms.join(","));
+    const env = document.getElementById("envFilter").value;
+    if(env && env !== "all") p.set("env", env);
+  }
+  const q = p.toString();
+  return q ? `?${q}` : "";
 }
 
-async function getJSON(path){
-  const res = await fetch(path + sinceParam());
+async function getJSON(path, withAuthors){
+  const res = await fetch(path + query(withAuthors));
   if(!res.ok){
     let detail = "HTTP " + res.status;
     try{ detail = (await res.json()).detail || detail; }catch(e){}
@@ -354,18 +415,138 @@ function showError(message){
 }
 
 async function reload(){
-  [slaData, mrData] = await Promise.all([getJSON("api/slas"), getJSON("api/mr-turnaround")]);
-  renderSuccess(slaData.agent_success);
+  [slaData, mrData] = await Promise.all([
+    getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
+  renderSuccess(slaData.headline);
   renderTable(slaData.buckets);
   renderMrTable(mrData);
+  renderDailyChart(mrData);
   renderHidden();
   document.getElementById("windowNote").textContent = mrData.window_start;
+  const fr = mrData.first_review || {};
+  document.getElementById("reviewNote").innerHTML = fr.reviewed
+    ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
+      `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
+    : `No human review comments on these MRs in the window.`;
   document.getElementById("slaWindowNote").textContent = slaData.window_start;
   document.getElementById("placeholderNote").textContent =
     slaData.targets_are_placeholder ? "Targets are placeholders (DEVOPS-9580)." : "";
   document.getElementById("sinceHint").textContent = document.getElementById("since").value
     ? "Applied to every panel on this page."
     : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;
+}
+
+/* Median per day, with an inline bar scaled to the worst day in view — enough to see a trend
+   without an axis. Days with no merged MRs simply do not appear. */
+function niceCeil(v){
+  if(v <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  return Math.ceil(v / mag) * mag;
+}
+
+/* Same palette and per-series colouring as the velocity dashboard, so a person reads the same
+   across both pages. One line per author currently in view; the author filter above is the
+   selector. Each author's points sit only on days they actually merged, on a shared x axis. */
+const PALETTE = ["#ef6f9e","#6fd07f","#c084ef","#4cc4d6","#5b9dff","#f4a24c","#e8c24a",
+                 "#9a8cf5","#3fccc4","#f07b6b","#b9cf5a","#e57fd0","#7c93f5","#4fd0a0"];
+
+function renderDailyChart(d){
+  const host = document.getElementById("dailyChart");
+  const days = d.days || [];
+  const series = d.series || [];
+  if(!days.length){
+    host.innerHTML = `<p class="na" style="font-family:var(--mono);font-size:13px">`+
+      `No merged MRs in the window${(d.filter||[]).length ? " for that author filter" : ""}.</p>`;
+    return;
+  }
+  const W = 900, H = 280, L = 52, R = 14, T = 14, B = 34;
+  const top = niceCeil(Math.max(...series.flatMap(s => s.points.map(p => p.biz_hours_median || 0)), 1));
+  const idx = Object.fromEntries(days.map((day, i) => [day, i]));
+  const x = i => L + (days.length === 1 ? (W-L-R)/2 : i * (W-L-R) / (days.length-1));
+  const y = v => T + (H-T-B) * (1 - (v||0)/top);
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top*f));
+  const grid = ticks.map(t => `<line class="grid-line" x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}"/>`+
+    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join("");
+  const step = Math.max(1, Math.ceil(days.length/8));
+  const xlabels = days.map((day,i) => i % step ? "" :
+    `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
+
+  const lines = series.map((s, si) => {
+    const col = PALETTE[si % PALETTE.length];
+    const pts = s.points.filter(p => p.day in idx);
+    if(!pts.length) return "";
+    const path = pts.map((p,i) => `${i?"L":"M"}${x(idx[p.day]).toFixed(1)},${y(p.biz_hours_median).toFixed(1)}`).join("");
+    const dots = pts.map(p =>
+      `<circle cx="${x(idx[p.day]).toFixed(1)}" cy="${y(p.biz_hours_median).toFixed(1)}" r="3" fill="${col}">`+
+      `<title>${esc(s.name)} — ${esc(p.day)}, ${p.merged} MR${p.merged===1?"":"s"}, `+
+      `median ${fmt(p.biz_hours_median)}h, p90 ${fmt(p.biz_hours_p90)}h</title></circle>`).join("");
+    // Wrapped in a group with a fat transparent hit path, exactly as the velocity chart does, so a
+    // line is easy to hit and the whole series can be emphasised as one thing.
+    return `<g class="series" data-k="${si}">`+
+           `<path class="hit" d="${path}"/>`+
+           (pts.length > 1 ? `<path class="series-line" d="${path}" stroke="${col}"/>` : "") +
+           dots + `</g>`;
+  }).join("");
+
+  const legend = series.map((s, si) =>
+    `<span class="chip" data-k="${si}" aria-pressed="true" style="--c:${PALETTE[si % PALETTE.length]}">`+
+    `<span class="dot"></span>${esc(s.name)}</span>`).join("");
+
+  host.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Daily merge-request turnaround by author">
+       ${grid}
+       <line class="axis-base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>
+       ${lines}${xlabels}
+       <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
+     </svg>
+     <div class="chips" id="dailyLegend">${legend}</div>
+     <p class="filter-hint">${days.length} day${days.length===1?"":"s"} with at least one merged MR since ${esc(d.window_start)}`+
+       `${(d.filter||[]).length ? `, filtered to \u201c${esc(d.filter.join(", "))}\u201d` : ""}. `+
+       `Hover a line to isolate it, click to pin it; hover a point for exact figures.</p>`;
+  bindDailyHover();
+}
+
+/* Hover emphasis, matching the velocity chart: the hovered series stays at full opacity and the
+   rest drop to 0.13. Click pins a series, and while pinned only that series answers to hover.
+   Rebound on every render because the chart is re-created from innerHTML. */
+let dailyLocked = null;
+
+function bindDailyHover(){
+  const host = document.getElementById("dailyChart");
+  const svg = host.querySelector("svg");
+  if(!svg) return;
+  const groups = svg.querySelectorAll(".series");
+  const chips = host.querySelectorAll("#dailyLegend .chip");
+  const emphasise = k => {
+    groups.forEach(g => g.style.opacity = (k==null || g.dataset.k===k) ? "" : "0.13");
+    chips.forEach(c => c.style.opacity = (k==null || c.dataset.k===k) ? "" : "0.3");
+  };
+  const base = () => {
+    if(dailyLocked != null && !svg.querySelector(`.series[data-k="${dailyLocked}"]`)) dailyLocked = null;
+    emphasise(dailyLocked);
+  };
+  svg.addEventListener("mousemove", e => {
+    const g = e.target.closest(".series");
+    if(!g || (dailyLocked != null && g.dataset.k !== dailyLocked)){ base(); return; }
+    emphasise(g.dataset.k);
+  });
+  svg.addEventListener("mouseleave", base);
+  svg.addEventListener("click", e => {
+    const g = e.target.closest(".series");
+    dailyLocked = g ? (dailyLocked === g.dataset.k ? null : g.dataset.k) : null;
+    base();
+  });
+  chips.forEach(c => {
+    c.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(c.dataset.k); });
+    c.addEventListener("mouseleave", base);
+    c.style.cursor = "pointer";
+    c.addEventListener("click", () => {
+      dailyLocked = dailyLocked === c.dataset.k ? null : c.dataset.k;
+      base();
+    });
+  });
+  base();
 }
 
 async function init(){
@@ -386,7 +567,17 @@ async function init(){
     since.value = ""; localStorage.removeItem(SINCE_KEY);
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   });
-  document.getElementById("mrFilter").addEventListener("input", () => renderMrTable(mrData));
+  // Debounced refetch: the daily medians are computed server-side, so filtering must round-trip.
+  let filterTimer = null;
+  document.getElementById("mrFilter").addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(async () => {
+      try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+    }, 250);
+  });
+  document.getElementById("envFilter").addEventListener("change", async () => {
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  });
   document.getElementById("addBtn").addEventListener("click", () => {
     const user = document.getElementById("addUser").value.trim();
     const name = document.getElementById("addName").value.trim();

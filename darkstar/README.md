@@ -90,6 +90,46 @@ One further lever, independent of any target: roughly **18% of median turnaround
 merged** — work shipped, ticket still open (August p90 for that phase alone is 14h). An
 auto-transition on merge would reduce every figure here for no engineering effort.
 
+## The turnaround clock runs only while an MR is ready
+
+`opened_at → merged_at` measured the wrong thing. Across the 20 slowest MRs, **67% of all
+attributed hours were draft time** — one 612-hour MR was marked ready fifteen minutes before it
+merged, and eight MRs from a single branch each carried 140.6h of which essentially all was draft.
+An MR in draft is not waiting on review; the author is still working.
+
+`mrflow.ready_hours` therefore accrues only the spells an MR spent marked ready, from GitLab's own
+`marked this merge request as **draft**` / `**ready**` system notes, stored in `mr_events`. It
+handles repeated toggling, and an MR whose first event is `ready` was opened as a draft so its
+clock starts there. An MR with no events at all was never a draft and is measured whole.
+
+Three signals were tested and rejected before landing on this one, and are worth not re-trying:
+
+| signal | verdict |
+|---|---|
+| comment count (`user_notes_count`) | Spearman **+0.055** against turnaround — nothing. 37% of slow MRs have zero comments, and MRs with 11+ comments have a *median of 0.3h*: discussion means attention, and attention means merged. |
+| commit timestamps | Unusable. Rebasing rewrites them — a three-week-old MR carried a single commit dated four hours before its merge, with squash off. |
+| batching (many MRs per branch) | Real (37% of MRs share a branch, one produced 78) but not the driver: collapsing to one figure per branch leaves p90 unchanged at 18.0h. It distorts small samples, not the aggregate. |
+
+**Time to first review** (`first_review`) rides the same ready-clock: the first note from a human
+who is neither a bot nor the MR's own author. Bots are excluded by account name
+(`gitlab_ingest._BOT_USERNAMES`) because GitLab Duo comments on essentially every MR and would make
+each one look reviewed within seconds. This separates "nobody looked" from "reviewed, then
+iterated" — the distinction the raw turnaround cannot make.
+
+Reading the notes costs one extra API call per MR at ingest, doubling the per-MR calls (the crawl
+already fetches changed paths). Completeness is tracked by `merge_requests.events_fetched_at`, not
+by whether any events exist: an MR that was never a draft and drew no comments legitimately has
+none, so keying on that would make the backfill run forever.
+
+## Production vs non-production
+
+`gitlab_domains.environment_of` reads the deployment environment from the repo name. The check is
+**ordered and token-based**, never a substring test, because `nonprod` contains `prod` — a naive
+`"prod" in name` files every non-production repo as production. On the current corpus: 45 prod
+repos / 737 MRs, 48 nonprod / 856, and 84 / 884 in neither. That third bucket is `other`, not a
+failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-team-a2` and
+`tf-coreservices`, and folding it into either side would misreport both.
+
 ## Page controls
 
 Two controls on `/slas`, both server-backed rather than cosmetic:

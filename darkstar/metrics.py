@@ -69,6 +69,47 @@ SELF_SERVICE_EPOCH: datetime = (
 )
 
 
+def ready_hours(opened_at: datetime, merged_at: datetime,
+                events: list[tuple[str, datetime]]) -> float:
+    """Business hours the MR spent marked ready, i.e. actually waiting on PE.
+
+    An MR sitting in draft is not waiting on anyone -- the author is still working. Measuring from
+    `opened_at` charged that time to review: on the 20 slowest MRs, 67% of all attributed hours
+    were draft time, and one 612-hour MR was marked ready 15 minutes before it merged.
+
+    The clock starts ready and stops on every "draft", restarting on every "ready", so an MR that
+    toggles repeatedly accrues only its ready spells. An MR whose first event is "ready" was opened
+    as a draft, so the clock does not start until then.
+    """
+    toggles = [(kind, when) for kind, when in events if kind in ("ready", "draft")]
+    if not toggles:
+        return business_hours_between(opened_at, merged_at)
+
+    total = 0.0
+    is_ready = toggles[0][0] != "ready"   # first event "ready" => it was a draft before that
+    spell_start = opened_at
+    for kind, when in toggles:
+        moment = min(max(when, opened_at), merged_at)
+        if is_ready and kind == "draft":
+            total += business_hours_between(spell_start, moment)
+            is_ready = False
+        elif not is_ready and kind == "ready":
+            spell_start = moment
+            is_ready = True
+    if is_ready:
+        total += business_hours_between(spell_start, merged_at)
+    return total
+
+
+def business_date(when: datetime) -> date:
+    """Calendar date of a naive-UTC timestamp in the business timezone.
+
+    The day-level counterpart to business_month: an MR merged at 23:30 Pacific belongs to that
+    Pacific day, not to the following UTC one.
+    """
+    return when.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ).date()
+
+
 def window_start(now: datetime, months: int, floor: datetime) -> datetime:
     """Naive-UTC start of the trailing `months`-month window, never earlier than `floor`.
 

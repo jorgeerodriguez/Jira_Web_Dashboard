@@ -218,12 +218,22 @@ def api_slas(since: str | None = None) -> JSONResponse:
 
 
 @app.get("/api/mr-turnaround")
-def api_mr_turnaround(since: str | None = None) -> JSONResponse:
-    """Merge-request opened->merged turnaround per author, read from the store."""
+def api_mr_turnaround(since: str | None = None, authors: str | None = None,
+                      env: str | None = None) -> JSONResponse:
+    """Merge-request ready->merged turnaround per author and per day, read from the store.
+
+    `authors` is a comma-separated list of name substrings, and `env` one of prod/nonprod/other/all.
+    Both are applied server-side because the daily medians cannot be re-derived from per-author
+    medians in the page.
+    """
     now = _utcnow()
     roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    terms = [t.strip().lower() for t in (authors or "").split(",") if t.strip()]
+    environment = (env or "all").strip().lower()
+    if environment not in ("all", "prod", "nonprod", "other"):
+        raise HTTPException(status_code=400, detail=f"env must be all/prod/nonprod/other, got {env!r}")
     return JSONResponse(mrflow.mr_turnaround_report(
-        _db().cursor(), _since(since, mrflow.default_window_start(now)), roster))
+        _db().cursor(), _since(since, mrflow.default_window_start(now)), roster, terms, environment))
 
 
 @app.get("/api/mr-authors")

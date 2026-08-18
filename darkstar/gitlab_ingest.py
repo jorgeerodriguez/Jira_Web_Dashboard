@@ -86,6 +86,63 @@ def _changed_paths(session: requests.Session, project_id: int, iid: int) -> list
     return paths
 
 
+# Automated commenters. Their notes are not review activity: GitLab Duo answers on every MR, and
+# bot accounts post pipeline and security chatter. GitLab does not flag these reliably in the notes
+# payload, so match the account names instead.
+_BOT_USERNAMES: frozenset[str] = frozenset({"gitlabduo", "gitlab-duo", "ghost", "alert-bot"})
+_BOT_SUFFIXES: tuple[str, ...] = ("_bot", "-bot", "bot")
+
+_READY_NOTE: str = "as **ready**"
+_DRAFT_NOTE: str = "as **draft**"
+
+
+def _is_bot(username: str) -> bool:
+    """True for automated commenters, whose notes must not count as human review activity."""
+    name = (username or "").lower()
+    return name in _BOT_USERNAMES or name.endswith(_BOT_SUFFIXES)
+
+
+def _mr_notes(session: requests.Session, project_id: int, iid: int) -> list[dict]:
+    """Every note on an MR, system and user alike (one page is ample; MRs rarely exceed 100)."""
+    response = session.get(
+        f"{_API}/projects/{project_id}/merge_requests/{iid}/notes",
+        params={"per_page": _PER_PAGE}, timeout=_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[store.MergeRequestEventRow]:
+    """Draft/ready transitions and the first human review comment, from an MR's notes.
+
+    Draft state comes from GitLab's own system notes, which a rebase cannot rewrite -- unlike
+    commit timestamps, which proved useless for this (a three-week-old MR can carry a commit dated
+    minutes before the merge). "review" is the first note from a human who is not the MR's author:
+    a self-comment is not review, and neither is Duo's automatic reply.
+    """
+    events: list[tuple[str, datetime]] = []
+    review_at: datetime | None = None
+    for note in notes:
+        username = ((note.get("author") or {}).get("username")) or ""
+        created = _to_naive_utc(note["created_at"])
+        if note.get("system"):
+            body = note.get("body") or ""
+            if _READY_NOTE in body:
+                events.append(("ready", created))
+            elif _DRAFT_NOTE in body:
+                events.append(("draft", created))
+            continue
+        if _is_bot(username) or username == author_username:
+            continue
+        if review_at is None or created < review_at:
+            review_at = created
+    if review_at is not None:
+        events.append(("review", review_at))
+    events.sort(key=lambda pair: pair[1])
+    return [store.MergeRequestEventRow(mr_id=mr_id, kind=kind, happened_at=when, seq=i)
+            for i, (kind, when) in enumerate(events)]
+
+
 def _project_path(mr: dict) -> str:
     """The repo's full namespace path, e.g. 'audacy-inc/devops/pe-morning-report'."""
     full_reference = (mr.get("references") or {}).get("full", "")
@@ -93,7 +150,7 @@ def _project_path(mr: dict) -> str:
 
 
 def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> bool:
-    """True if in-window MRs lack opened_at/description, which an incremental crawl cannot repair.
+    """True if in-window MRs lack opened_at/description/events, which an incremental crawl cannot fix.
 
     Incremental crawls only re-fetch MRs *updated* since the watermark, so rows written before
     opened_at/labels existed (and MRs by an author added to MR_AUTHORS later) would stay incomplete
@@ -102,7 +159,8 @@ def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> 
     """
     missing = connection.execute(
         "SELECT count(*) FROM merge_requests "
-        "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL)", [cutoff]
+        "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
+        "  OR events_fetched_at IS NULL)", [cutoff]
     ).fetchone()[0]
     if missing:
         logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
@@ -143,6 +201,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
 
     mr_rows: list[store.MergeRequestRow] = []
     file_rows: list[tuple[int, str]] = []
+    event_rows: list[store.MergeRequestEventRow] = []
     seen_ids: set[int] = set()
 
     # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
@@ -173,6 +232,13 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
             except requests.RequestException as exc:
                 logger.warning("MR %s!%s changes fetch failed, no paths: %s", mr["project_id"], mr["iid"], exc)
                 paths = []
+            try:
+                notes = _mr_notes(session, mr["project_id"], mr["iid"])
+            except requests.RequestException as exc:
+                logger.warning("MR %s!%s notes fetch failed, no draft/review events: %s",
+                               mr["project_id"], mr["iid"], exc)
+                notes = []
+            event_rows.extend(_mr_events(mr_id, (mr.get("author") or {}).get("username", ""), notes))
             mr_rows.append(store.MergeRequestRow(
                 id=mr_id,
                 project_path=_project_path(mr),
@@ -184,11 +250,18 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 labels=list(mr.get("labels") or []),
                 web_url=mr.get("web_url") or "",
                 fetched_at=fetched_at,
+                events_fetched_at=fetched_at,
                 description=mr.get("description") or "",
             ))
             file_rows.extend((mr_id, path) for path in paths)
 
     store.upsert_merge_requests(connection, mr_rows)
     store.replace_mr_files(connection, [row.id for row in mr_rows], file_rows)
-    logger.info("gitlab sync: %d merge requests, %d file rows", len(mr_rows), len(file_rows))
+    by_mr: dict[int, list[store.MergeRequestEventRow]] = {row.id: [] for row in mr_rows}
+    for event in event_rows:
+        by_mr.setdefault(event.mr_id, []).append(event)
+    for mr_id, events in by_mr.items():
+        store.replace_mr_events(connection, mr_id, events)
+    logger.info("gitlab sync: %d merge requests, %d file rows, %d draft/review events",
+                len(mr_rows), len(file_rows), len(event_rows))
     return len(mr_rows), len(file_rows)

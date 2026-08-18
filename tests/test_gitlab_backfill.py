@@ -54,7 +54,7 @@ def _mr_row(id, opened, merged):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
-        web_url="u", fetched_at=_NOW, description="")
+        web_url="u", fetched_at=_NOW, events_fetched_at=_NOW, description="")
 
 
 def test_in_window_row_missing_opened_at_forces_a_full_crawl():

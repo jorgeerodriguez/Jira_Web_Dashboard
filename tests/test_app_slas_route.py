@@ -86,3 +86,16 @@ def test_author_edits_are_validated(monkeypatch, tmp_path):
     assert client.post("/api/mr-authors", json={"op": "add"}).status_code == 400
     assert client.post("/api/mr-authors", json={"op": "hide"}).status_code == 400
     assert client.post("/api/mr-authors", json={"op": "nope", "username": "x"}).status_code == 400
+
+
+def test_authors_param_filters_the_daily_series(monkeypatch, tmp_path):
+    """The page sends the filter to the server; both cuts must come back narrowed."""
+    client, conn = _client(monkeypatch, tmp_path, "f.duckdb")
+    body = client.get("/api/mr-turnaround", params={"authors": "ben, jeremy"}).json()
+    assert body["filter"] == ["ben", "jeremy"]
+    assert "daily" in body
+
+
+def test_blank_authors_param_is_no_filter(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, "g.duckdb")
+    assert client.get("/api/mr-turnaround", params={"authors": " , "}).json()["filter"] == []
