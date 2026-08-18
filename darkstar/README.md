@@ -26,12 +26,12 @@ time — everything reads the local store):
 Turnaround used to be raw calendar elapsed time, which is what made a request filed at 16:00 and
 closed at 09:00 next morning read as 17 hours.
 
-One clock, everywhere: **business hours**, `metrics.business_hours_between` — Mon–Fri 09:00–17:00
-`metrics.BUSINESS_TZ` (America/Denver), **excluding company holidays**. One business day is 8h and
-one business week 40h, so `SLA_TARGETS_HOURS` reads directly in working days. Audacy's users are
+One clock, everywhere: **business hours**, `metrics.business_hours_between` — Mon–Fri 08:00–17:00
+`metrics.BUSINESS_TZ` (America/Los_Angeles), **excluding company holidays**. One business day is 9h
+and one business week 45h, so `SLA_TARGETS_HOURS` reads directly in working days. Audacy's users are
 overwhelmingly North American, so turnaround is judged against their working day. On the pilot data
-this cut the iac-request median from 21.3 calendar hours to 7.0 business hours; the difference was
-entirely nights and weekends.
+this cut the iac-request median from 21.3 calendar hours to 6.3 business hours; the difference was
+nights, weekends and holidays.
 
 Raw calendar elapsed time is **not reported anywhere**. It bills a request for nights, weekends and
 holidays nobody was working, which says nothing useful about delivery speed.
@@ -43,8 +43,8 @@ Washington's Birthday, Columbus Day and Veterans Day, which most private employe
 company-specific closures (floating days, shutdown weeks) to `metrics.EXTRA_HOLIDAYS`.
 
 One property to know when reading a single row of the per-author MR table: PE also has engineers
-working EET, whose own working day falls inside Denver's night, so an MR they open and merge inside
-their own hours can score near 0.0 on the Denver clock.
+working EET, whose own working day falls inside the Pacific night, so an MR they open and merge
+inside their own hours can score near 0.0 on the business clock.
 
 Both aggregations use `metrics.window_start` — a rolling window floored at
 `metrics.SELF_SERVICE_EPOCH` (2026-03-01), including the current month, unlike
@@ -55,7 +55,7 @@ ramps 6 (Mar) / 21 (Apr) / 74 (May) / 96 (Jun) / 211 (Jul).
 The two views window differently, on purpose:
 
 - **SLA (`slas.py`) — 3 months.** Delivery turnaround improved roughly 100x over the pilot (p50 by
-  month created: 369.7h Apr, 102.0h May, 7.5h Jun, 12.9h Jul, 2.5h Aug), so six months calibrates
+  month created: 406.7h Apr, 114.0h May, 18.0h Jun, 13.9h Jul, 3.0h Aug), so six months calibrates
   against a team that no longer exists. Three keeps ~200 delivered requests, enough for a stable p90.
 - **MR turnaround (`mrflow.py`) — 6 months.** Tracked back to the epoch, because the point of that
   table is the whole self-service era, not just the current quarter.
@@ -63,7 +63,7 @@ The two views window differently, on purpose:
 ## SLA targets
 
 `SLA_TARGETS_HOURS` holds **two tiers per bucket** rather than one number, because delivery
-turnaround is bimodal: on August data 45% of requests closed inside 2h while the p90 sat at 25h. A
+turnaround is bimodal: on August data 39% of requests closed inside 2h while the p90 sat at 29.8h. A
 single "% under T" score blends those into a figure that is wrong about both ends. `p50` is what the
 common case should hit; `p90` is the tail backstop. Each is scored on the distribution — bucket
 median vs `p50`, bucket p90 vs `p90` — and `within_target_pct` is reported alongside as the "how
@@ -73,11 +73,18 @@ Targets are calibrated to **August 2026** capability while the window is **3 mon
 buckets currently read as breaching. That is deliberate and not a fault: it shows the gap between a
 good month and the trailing quarter, and it resolves itself as Jun/Jul age out of the window.
 
-| bucket | p50 | p90 | 3-month actual | August actual |
+Actuals below are on the Pacific 08:00–17:00 clock (p50 / p90 business hours):
+
+| bucket | p50 target | p90 target | 3-month actual | August actual |
 |---|---|---|---|---|
-| iac-request | 4h | 24h | 10.7h / 94.9h | 2.6h / 18.6h |
-| troubleshoot | 2h | 16h | 2.6h / 23.0h | 0.9h / 12.8h |
-| tf-module | 2h | 8h | 1.3h / 4.1h | 1.3h / 1.8h |
+| iac-request | 4h | 24h | 12.4h / 101.1h | 3.3h / 20.6h |
+| troubleshoot | 2h | 16h | 3.6h / 26.0h | 1.9h / 14.7h |
+| tf-module | 2h | 8h | 2.3h / 4.1h | 2.3h / 2.8h |
+| other | 4h | 24h | 5.4h / 55.7h | 2.7h / 29.8h |
+
+Widening the day from 8h to 9h nudged every figure up, so **tf-module's p50 now just misses its 2h
+target on August data (2.3h)** where it previously met it. Targets have not been retuned for the new
+clock — that is a team call.
 
 One further lever, independent of any target: roughly **18% of median turnaround falls after the MR
 merged** — work shipped, ticket still open (August p90 for that phase alone is 14h). An
@@ -151,7 +158,7 @@ retuned without another crawl.
 - **Jira poller** (`ingest.py`) — a one-time full crawl on the first run, then **incremental only**
   (`updated >= watermark`, no periodic full reconcile) plus a per-changed-issue changelog;
   completion is measured as the earliest transition to `Done` (resolutiondate is null on ~85% of
-  issues), attributed to the America/Denver business month.
+  issues), attributed to the business month (`metrics.BUSINESS_TZ`).
 - **GitLab ingest** (`gitlab_ingest.py`) — a one-time full **6-month** crawl on the first run, then
   **incremental** pulls of only the MRs updated since the last sync (watermark in `gitlab_sync_meta`,
   minus a small margin), from the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few

@@ -43,11 +43,11 @@ def test_tracked_authors_are_attributed_but_stay_off_the_roster():
 
 
 def test_overnight_wait_is_not_charged():
-    """Opened 16:00 Tue, merged 09:00 Wed: 1 business hour, though 17 hours elapsed on the clock."""
+    """Opened 15:00 Tue, merged 08:00 Wed: 2 business hours, though 17 hours elapsed on the clock."""
     conn = _seed([_mr(1, _BEN, datetime(2026, 8, 18, 22, 0), datetime(2026, 8, 19, 15, 0))])
     ben = next(a for a in _report(conn)["authors"] if a["name"] == "Ben Bonora")
     assert ben["merged"] == 1
-    assert ben["biz_hours_median"] == 1.0
+    assert ben["biz_hours_median"] == 2.0
     assert ben["tracked"] is True   # flagged as a non-roster author on the dashboard
 
 
@@ -93,14 +93,14 @@ def test_unmapped_author_is_dropped_from_rows_and_from_the_team_total():
     assert report["team"]["merged"] == 0
 
 
-def test_eet_work_scores_near_zero_on_the_denver_clock():
+def test_eet_work_scores_near_zero_on_the_business_clock():
     """A known and accepted property of standardising on one North American business day.
 
     An MR a Ukraine-based engineer opens and merges inside their own workday falls entirely
-    outside Denver 09:00-17:00 and scores 0.0. Recorded so the behaviour is deliberate rather
+    outside Pacific 08:00-17:00 and scores 0.0. Recorded so the behaviour is deliberate rather
     than a surprise when a row reads as instantaneous.
     """
-    # Opened 09:00 and merged 14:00 Kyiv (EEST, UTC+3) = 06:00-11:00 UTC = 00:00-05:00 Denver.
+    # Opened 09:00 and merged 14:00 Kyiv (EEST, UTC+3) = 06:00-11:00 UTC = 23:00-04:00 Pacific.
     conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 6, 0), datetime(2026, 8, 17, 11, 0))])
     assert _report(conn)["authors"][0]["biz_hours_median"] == 0.0
 

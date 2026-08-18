@@ -4,15 +4,15 @@ Reads only from the store. Answers "how fast does an author's work actually land
 author the GitLab ingest attributes (roster.MR_AUTHORS = the PE roster plus the non-roster
 contributors in roster.TRACKED_MR_AUTHORS), over the trailing window of MRs *merged* in it.
 
-Reported in business hours only (Mon-Fri 09:00-17:00 America/Denver, holidays excluded) -- one
+Reported in business hours only (Mon-Fri 08:00-17:00 US/Pacific, holidays excluded) -- one
 standard clock shared with the SLA view, because Audacy's users are overwhelmingly North American
 and turnaround is judged against their working day. Raw calendar elapsed time is deliberately not
 reported: it bills a request for nights, weekends and holidays nobody was working, which says
 nothing useful about delivery speed.
 
 One property to know when reading a single row: PE also has engineers working EET, whose own
-working day falls inside Denver's night, so an MR they open and merge inside their own hours can
-score near 0.0 on the Denver clock.
+working day falls inside Pacific's night, so an MR they open and merge inside their own hours can
+score near 0.0 on the business clock.
 
 Every merged MR counts -- unlike slas.py, which keeps one MR per Jira issue for bucketing, this
 makes no per-issue pick.

@@ -158,8 +158,8 @@
   <p class="dek">Request volume, delivery turnaround, SLA compliance, and PE review turnaround for
   agent self-service requests, bucketed by the skill that created them (from the linked MR's label).
   Agent success is the share of terminal AI requests that reached Done. Human-side tracking is a follow-up.
-  <b>All hours are business hours</b> — Mon–Fri 09:00–17:00 America/Denver, one standard clock, since
-  Audacy's users are overwhelmingly North American. The self-service workflows began 2026-03.</p>
+  <b>All hours are business hours</b> — Mon–Fri 08:00–17:00 US/Pacific, holidays excluded, one standard
+  clock, since Audacy's users are overwhelmingly North American. The workflows began 2026-03.</p>
 
   <div class="controls">
     <label class="filter">Lookback from
@@ -175,15 +175,15 @@
   <h2>By request type</h2>
   <p class="h2sub">AI self-service requests, bucketed by originating skill. Two tiers per bucket, scored
   separately: the <b>p50</b> is what the common case should hit, the <b>p90</b> is the tail backstop.
-  Turnaround is bimodal — most requests land in a couple of hours and a hard tail sits a day or more
-  out — so one blended figure would be wrong about both ends. Requests created since
+  Turnaround is bimodal — 39% of August requests closed inside 2h while the p90 sat at 29.8h — so one
+  blended figure would be wrong about both ends. Requests created since
   <span id="slaWindowNote">—</span>. <span id="placeholderNote"></span></p>
   <div class="tbl-wrap"><table id="slaTbl"></table></div>
 
   <h2>MR turnaround by author</h2>
   <p class="h2sub">Every merged MR the ingest attributes, opened → merged, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Note that an engineer working
-  EET can score near zero here, since their own workday falls inside Denver's night.</p>
+  EET can score near zero here, since their own workday falls inside the Pacific night.</p>
   <label class="filter">Filter authors
     <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
            aria-describedby="mrFilterHint">
@@ -210,16 +210,16 @@
     matched to the issue by its <code>DEVOPS-</code> key; an issue with no linked MR falls back to its Jira
     <code>pe-*</code> label. Delivery turnaround = created → first <code>Done</code> (changelog). Review
     turnaround = MR <code>opened_at</code> → <code>merged_at</code>. v1 tracks AI requests; human-side is a follow-up.</div>
-    <div><b>Business hours.</b> Mon–Fri 09:00–17:00 America/Denver, so a request filed 16:00 and closed
-    09:00 next morning is 1h, not 17h. Company holidays are not modelled. Targets are business hours too.</div>
+    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
+    filed 15:00 and closed 08:00 next morning is 2h, not 17h. Targets are business hours too.</div>
     <div><b>Review median vs. MR turnaround.</b> The per-type <b>review median</b> above keeps one MR per
     Jira issue (the earliest, for deterministic bucketing), so an issue delivered across several MRs
     contributes once. The <b>MR turnaround</b> table counts every merged MR. Only merged MRs are ingested,
     so neither is a queue depth — an MR still open is invisible until it lands.</div>
     <div><b>Targets are calibrated to August capability; the window is 3 months.</b> Most buckets
     therefore read as breaching, and that is the intended signal, not a fault — it is the gap between
-    a good month and the trailing quarter. Delivery p50 by month created ran 369.7h (Apr), 102.0h
-    (May), 7.5h (Jun), 12.9h (Jul), 2.5h (Aug), so a six-month window would calibrate against a team
+    a good month and the trailing quarter. Delivery p50 by month created ran 406.7h (Apr), 114.0h
+    (May), 18.0h (Jun), 13.9h (Jul), 3.0h (Aug), so a six-month window would calibrate against a team
     that no longer exists; the reading improves as Jun/Jul age out. MR turnaround below keeps its own
     six-month window back to the epoch, since that table is about the whole self-service era.</div>
     <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task). A Feature or

@@ -7,12 +7,12 @@ from zoneinfo import ZoneInfo
 import holidays
 
 DELIVERY_TYPES: tuple[str, ...] = ("Story", "Task", "Bug", "Hotfix", "Sub-task")
-BUSINESS_TZ: ZoneInfo = ZoneInfo("America/Denver")
-# The business day used by every turnaround/SLA clock: Mon-Fri, 09:00-17:00 in BUSINESS_TZ,
-# excluding the company holidays below.
-BUSINESS_DAY_START: time = time(9, 0)
+BUSINESS_TZ: ZoneInfo = ZoneInfo("America/Los_Angeles")
+# The business day used by every turnaround/SLA clock: Mon-Fri, 08:00-17:00 in BUSINESS_TZ,
+# excluding the company holidays below. Nine hours, so a business week is 45h.
+BUSINESS_DAY_START: time = time(8, 0)
 BUSINESS_DAY_END: time = time(17, 0)
-BUSINESS_HOURS_PER_DAY: float = 8.0
+BUSINESS_HOURS_PER_DAY: float = 9.0
 
 # Which US federal holidays Audacy actually closes for. The `holidays` package supplies the rules
 # (including observance shifts — Independence Day 2026 falls on a Saturday and is observed on
@@ -53,7 +53,7 @@ def is_holiday(day: date) -> bool:
                for part in name.split("; "))
 
 
-def denver_month(when: datetime) -> tuple[int, int]:
+def business_month(when: datetime) -> tuple[int, int]:
     """(year, month) of a naive-UTC timestamp, in the business timezone."""
     local = when.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ)
     return (local.year, local.month)

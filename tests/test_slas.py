@@ -29,9 +29,9 @@ def _mr(id, key, labels, opened, merged, description=""):
 def _seed():
     conn = duckdb.connect(":memory:")
     store.initialize_schema(conn)
-    # AI tf-module (MR label pe:tf-module). Created Mon 03:00 and done Tue 03:00 Denver: 24 calendar
-    # hours, but only Monday's 09:00-17:00 overlaps the business day, so 8 business hours. Same for
-    # its MR's open→merge. Meets the 48 business-hour placeholder either way.
+    # AI tf-module (MR label pe:tf-module). Created Mon 02:00 and done Tue 02:00 Pacific: 24 calendar
+    # hours, but only Monday's 08:00-17:00 overlaps the business day, so 9 business hours. Same for
+    # its MR's open→merge.
     store.upsert_issues(conn, [_issue("DEVOPS-1", ["DevOps", "pe-iac-request", "pe-tf-module"],
                                        datetime(2026, 7, 20, 9, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-1"],
@@ -76,21 +76,26 @@ def test_sla_compliance_uses_business_hour_delivery_turnaround():
     """
     r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
-    assert tm["turnaround_hours_median"] == 8.0    # 24 calendar hours, 8 of them in the business day
+    assert tm["turnaround_hours_median"] == 9.0    # 24 calendar hours, 9 of them in the business day
 
 
 def test_each_sla_tier_is_scored_independently():
     """A bimodal distribution needs two verdicts: the fast path and the tail fail separately.
 
-    tf-module's targets are p50 2h / p90 8h. The single seeded request took 8 business hours, so
-    the median blows the p50 target while the p90 exactly meets its own — which a single blended
-    "% under one target" score could not express.
+    tf-module's targets are p50 2h / p90 8h. This request takes 5 business hours (09:00→14:00
+    Pacific, one working day), so it blows the p50 target while comfortably meeting the p90 — a
+    split a single blended "% under one target" score could not express.
     """
-    r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
-    tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-50", ["DevOps", "pe-iac-request", "pe-tf-module"],
+                                      datetime(2026, 7, 20, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-50"], [store.TransitionRow(
+        key="DEVOPS-50", to_status="Done", changed_at=datetime(2026, 7, 20, 21, 0, 0), seq=0)])
+    tm = next(b for b in _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"]
+              if b["type"] == "tf-module")
     assert (tm["target_p50_hours"], tm["target_p90_hours"]) == (2, 8)
-    assert tm["turnaround_hours_median"] == 8.0 and tm["meets_p50"] is False
-    assert tm["turnaround_hours_p90"] == 8.0 and tm["meets_p90"] is True
+    assert tm["turnaround_hours_median"] == 5.0 and tm["meets_p50"] is False
+    assert tm["turnaround_hours_p90"] == 5.0 and tm["meets_p90"] is True
     assert tm["within_target_pct"] == 0.0          # 0 of 1 request inside the 2h fast path
 
 
@@ -131,7 +136,7 @@ def test_review_turnaround_from_linked_mr():
     """Review turnaround uses the same business-hour clock as delivery, so the two are comparable."""
     r = _report(_seed(), datetime(2026, 7, 28, 12, 0, 0))
     tm = next(b for b in r["buckets"] if b["type"] == "tf-module")
-    assert tm["review_hours_median"] == 8.0
+    assert tm["review_hours_median"] == 9.0
 
 
 def test_multiple_mrs_per_key_pick_is_deterministic():
@@ -143,14 +148,14 @@ def test_multiple_mrs_per_key_pick_is_deterministic():
                                        datetime(2026, 7, 20, 9, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-1"],
         [store.TransitionRow(key="DEVOPS-1", to_status="Done", changed_at=datetime(2026, 7, 21, 9, 0, 0), seq=0)])
-    # insert in reverse-id order; id=5 has 6 business hours, id=1 has 8. Lowest id (1) must win.
+    # insert in reverse-id order; id=5 has 6 business hours, id=1 has 9. Lowest id (1) must win.
     store.upsert_merge_requests(conn, [
         _mr(5, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 20, 21, 0, 0)),
         _mr(1, "DEVOPS-1", ["pe:tf-module"], datetime(2026, 7, 20, 9, 0, 0), datetime(2026, 7, 21, 9, 0, 0)),
     ])
     tm = next(b for b in _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"]
               if b["type"] == "tf-module")
-    assert tm["review_hours_median"] == 8.0  # id=1's 8h, not id=5's 6h
+    assert tm["review_hours_median"] == 9.0  # id=1's 9h, not id=5's 6h
 
 
 def test_reopened_issue_not_counted_as_terminal_success():

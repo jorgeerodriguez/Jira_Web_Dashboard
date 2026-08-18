@@ -9,9 +9,9 @@ Review turnaround is opened->merged on the linked MR. Agent success rate is the 
 AI requests that reached Done (v1 store-derived; CloudWatch source deferred -- see DEVOPS-9580).
 
 Every turnaround here is measured in BUSINESS hours (metrics.business_hours_between: Mon-Fri
-09:00-17:00 America/Denver), not calendar hours -- the team is not on call for self-service
+08:00-17:00 US/Pacific), not calendar hours -- the team is not on call for self-service
 requests overnight, so charging a request for hours nobody was working made a ticket filed at
-16:00 and closed 09:00 next morning read as 17h rather than 1h. Targets are business hours too.
+15:00 and closed 08:00 next morning read as 17h rather than 2h. Targets are business hours too.
 
 Population is the trailing _WINDOW_MONTHS months of requests *by creation date* -- a rolling
 window that includes the current month, unlike metrics.window_months, which yields complete
@@ -62,7 +62,7 @@ _ABANDONED: frozenset[str] = frozenset(
 )
 _KEY_RE = re.compile(r"DEVOPS-\d+")
 # Three months, not six: delivery turnaround has improved roughly 100x since the workflows began
-# (p50 by month created: Apr 369.7h, May 102.0h, Jun 7.5h, Jul 12.9h, Aug 2.5h), so a six-month
+# (p50 by month created: Apr 406.7h, May 114.0h, Jun 18.0h, Jul 13.9h, Aug 3.0h), so a six-month
 # window calibrates the targets against a team that no longer exists. Three keeps ~220 delivered
 # requests — enough for a stable p90 — while dropping the worst of the learning curve. mrflow keeps
 # its own six-month window on purpose; MR turnaround is tracked back to the epoch.
@@ -100,13 +100,13 @@ _JIRA_FALLBACK: tuple[tuple[str, str], ...] = (
 
 # -- SLA TARGETS (BUSINESS hours) -- two tiers per bucket, keyed [audience][bucket]. --
 #
-# Two numbers, not one, because delivery turnaround is bimodal: on August data 45% of requests
-# closed inside 2h while the p90 sat at 25h. A single "% under T" score cannot separate "slightly
+# Two numbers, not one, because delivery turnaround is bimodal: on August data 39% of requests
+# closed inside 2h while the p90 sat at 29.8h. A single "% under T" score cannot separate "slightly
 # late" from "a week late" — it just reports one blended percentage that is wrong about both ends.
 # `p50` is what the common case should hit; `p90` is the tail backstop.
 #
-# Calibrated against August actuals (p50 / p90): iac-request 2.7 / 24.9, troubleshoot 0.6 / 12.8,
-# tf-module 1.3 / 1.8. One business day = 8h, one business week = 40h.
+# Calibrated against August actuals -- see the README for the current figures.
+# One business day = 9h (08:00-17:00), one business week = 45h.
 SLA_TARGETS_HOURS: dict[str, dict[str, dict[str, float]]] = {
     "ai": {
         "iac-request":  {"p50": 4,  "p90": 24},
