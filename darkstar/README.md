@@ -14,12 +14,17 @@ time — everything reads the local store):
 | Route | What |
 |---|---|
 | `/intake` | Triage queue, team capacity, and the SME suggestion matrix |
+| `/slas` | Self-service delivery: impact cards, MR turnaround by author, daily turnaround |
 | `/delivery-forecast` | Monte-Carlo burn-down for the open Initiative + Features |
 | `/velocity` | Completed delivery tickets per engineer per month (changelog-derived) |
-| `/lead-time` | Lead / cycle time for delivered stories |
-| `/slas` | Self-service SLA compliance, agent success, and MR turnaround by author |
+| `/lead-time` | Lead / cycle time for delivered stories — **hidden from the nav**, still served |
 
-`/` redirects to `/intake` (the default landing page); the nav lists the dashboards in this order.
+`/` redirects to `/intake` (the default landing page); the nav lists Intake, Self-Service, Delivery
+Forecast, Velocity in that order. The `/slas` route keeps its name for existing bookmarks even
+though the page is now labelled Self-Service.
+`/lead-time` is intentionally absent from the nav — it was not earning its place — but the route,
+its `/api/lead-time` endpoint and `leadtime.py` are all untouched, so restoring it is a matter of
+putting the `<a href="lead-time">` entry back in the four dashboard navs.
 
 ## The turnaround clock
 
@@ -61,6 +66,10 @@ The two views window differently, on purpose:
   table is the whole self-service era, not just the current quarter.
 
 ## SLA targets
+
+The per-request-type SLA table was **dropped from the page** — the self-service view now shows
+impact, MR turnaround by author, and daily turnaround. `slas_report` still computes `buckets`, and
+`SLA_TARGETS_HOURS` still holds the targets, so restoring the panel is a dashboard change only.
 
 `SLA_TARGETS_HOURS` holds **two tiers per bucket** rather than one number, because delivery
 turnaround is bimodal: on August data 39% of requests closed inside 2h while the p90 sat at 29.8h. A

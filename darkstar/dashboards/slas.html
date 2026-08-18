@@ -157,17 +157,15 @@
 <nav class="nav">
   <span class="brand">Platform Eng</span>
   <a href="intake">Intake</a>
+  <a href="slas" class="active">Self-Service</a>
   <a href="delivery-forecast">Delivery Forecast</a>
   <a href="velocity">Velocity</a>
-  <a href="lead-time">Lead/Cycle Time</a>
-  <a href="slas" class="active">Self-Service SLAs</a>
 </nav>
 <main class="card">
   <p class="eyebrow">Platform Engineering · Self-Service</p>
-  <h1>Self-Service SLAs &amp; Agent Success</h1>
-  <p class="dek">Request volume, delivery turnaround, SLA compliance, and PE review turnaround for
-  agent self-service requests, bucketed by the skill that created them (from the linked MR's label).
-  Agent success is the share of terminal AI requests that reached Done. Human-side tracking is a follow-up.
+  <h1>Self-Service Delivery</h1>
+  <p class="dek">How much of PE's delivered work now comes through the self-service skills, how fast
+  those requests close, and how long merge requests take to land.
   <b>All hours are business hours</b> — Mon–Fri 08:00–17:00 US/Pacific, holidays excluded, one standard
   clock, since Audacy's users are overwhelmingly North American. The workflows began 2026-03.</p>
 
@@ -184,14 +182,6 @@
   <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
   overlap but are not the same, so the share card reports both.</p>
   <div class="cards" id="successStats"></div>
-
-  <h2>By request type</h2>
-  <p class="h2sub">AI self-service requests, bucketed by originating skill. Two tiers per bucket, scored
-  separately: the <b>p50</b> is what the common case should hit, the <b>p90</b> is the tail backstop.
-  Turnaround is bimodal — 39% of August requests closed inside 2h while the p90 sat at 29.8h — so one
-  blended figure would be wrong about both ends. Requests created since
-  <span id="slaWindowNote">—</span>. <span id="placeholderNote"></span></p>
-  <div class="tbl-wrap"><table id="slaTbl"></table></div>
 
   <h2>MR turnaround by author</h2>
   <p class="h2sub">Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
@@ -249,12 +239,9 @@
     Jira issue (the earliest, for deterministic bucketing), so an issue delivered across several MRs
     contributes once. The <b>MR turnaround</b> table counts every merged MR. Only merged MRs are ingested,
     so neither is a queue depth — an MR still open is invisible until it lands.</div>
-    <div><b>Targets are calibrated to August capability; the window is 3 months.</b> Most buckets
-    therefore read as breaching, and that is the intended signal, not a fault — it is the gap between
-    a good month and the trailing quarter. Delivery p50 by month created ran 406.7h (Apr), 114.0h
-    (May), 18.0h (Jun), 13.9h (Jul), 3.0h (Aug), so a six-month window would calibrate against a team
-    that no longer exists; the reading improves as Jun/Jul age out. MR turnaround below keeps its own
-    six-month window back to the epoch, since that table is about the whole self-service era.</div>
+    <div><b>Windows.</b> The impact cards read the trailing 3 months of requests by creation date;
+    MR turnaround keeps its own 6-month window back to 2026-03, when the workflows began. Both are
+    overridden by the lookback control at the top.</div>
     <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task). A Feature or
     Epic is a container for requests, not a request, and its lifetime distorts the median. Roughly
     18% of a typical request's turnaround falls <i>after</i> its MR merged — shipped work waiting to
@@ -292,34 +279,6 @@ function renderSuccess(h){
          h.first_review_reviewed
            ? `${h.first_review_reviewed} drew a human comment · p90 ${fmt(h.first_review_p90_hours)}h`
            : "no human review comments in this window");
-}
-
-/* Each tier gets its own verdict: median vs the p50 target, p90 vs the p90 target. A bimodal
-   distribution fails these independently, which one blended percentage cannot show. */
-function tier(value, target, meets){
-  if(value==null) return '<span class="na">—</span>';
-  const cls = meets==null ? "" : (meets ? "pos" : "neg");
-  const mark = meets==null ? "" : (meets ? " ✓" : " ✗");
-  return `<span class="${cls}">${value}${mark}</span>`+
-         (target==null ? "" : ` <span class="na">/ ${target}</span>`);
-}
-
-function renderTable(buckets){
-  let head=`<thead><tr><th>Audience</th><th>Type</th><th>Volume</th><th>Closed</th>`+
-           `<th>p50 / target (h)</th><th>p90 / target (h)</th><th>Inside p50 target</th>`+
-           `<th>Review median (h)</th></tr></thead>`;
-  const rows = buckets.map(b=>`<tr>
-     <td>${esc(b.audience.toUpperCase())}</td>
-     <td>${esc(b.type)}</td>
-     <td class="num">${b.volume}</td>
-     <td class="num">${b.closed}</td>
-     <td class="num">${tier(b.turnaround_hours_median, b.target_p50_hours, b.meets_p50)}</td>
-     <td class="num">${tier(b.turnaround_hours_p90, b.target_p90_hours, b.meets_p90)}</td>
-     <td class="num">${pct(b.within_target_pct)}</td>
-     <td class="num">${fmt(b.review_hours_median)}</td>
-   </tr>`).join("");
-  document.getElementById("slaTbl").innerHTML =
-    head + `<tbody>${rows || '<tr><td colspan="8" class="na">No self-service requests yet.</td></tr>'}</tbody>`;
 }
 
 /* Filter terms are comma-separated; a row survives if any term is a substring of the name.
@@ -418,7 +377,6 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
-  renderTable(slaData.buckets);
   renderMrTable(mrData);
   renderDailyChart(mrData);
   renderHidden();
@@ -428,9 +386,6 @@ async function reload(){
     ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
       `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
     : `No human review comments on these MRs in the window.`;
-  document.getElementById("slaWindowNote").textContent = slaData.window_start;
-  document.getElementById("placeholderNote").textContent =
-    slaData.targets_are_placeholder ? "Targets are placeholders (DEVOPS-9580)." : "";
   document.getElementById("sinceHint").textContent = document.getElementById("since").value
     ? "Applied to every panel on this page."
     : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;

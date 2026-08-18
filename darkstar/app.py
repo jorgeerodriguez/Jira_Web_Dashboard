@@ -133,6 +133,9 @@ async def velocity_dashboard() -> HTMLResponse:
     return _dashboard("velocity")
 
 
+# Unlinked from the nav on request — not currently useful — but deliberately still served, so an
+# existing bookmark keeps working and nothing has to be rebuilt to bring it back. Re-add the
+# `<a href="lead-time">` entry to the four dashboard navs to restore it.
 @app.get("/lead-time", response_class=HTMLResponse)
 async def lead_time_dashboard() -> HTMLResponse:
     """The lead/cycle-time dashboard (fetches /api/lead-time client-side)."""
