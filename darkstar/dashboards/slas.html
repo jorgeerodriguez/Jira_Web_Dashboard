@@ -150,6 +150,9 @@
   .panel > .tbl-wrap:last-child{flex:1}
   .panel.wide{grid-column:1 / -1}
   @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
+  /* Must outrank .filter's display, or the hidden attribute is ignored and a control the code
+     thinks is put away stays on screen. */
+  .controls [hidden]{display:none}
   .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
           text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
   .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
@@ -813,8 +816,11 @@ async function init(){
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   };
   preset.addEventListener("change", applyRange);
-  since.addEventListener("change", applyRange);
-  until.addEventListener("change", applyRange);
+  // Typing a date IS choosing a custom range. Without this, editing from/to while the select still
+  // said "Panel defaults" resolved to null and the dates were silently discarded.
+  const applyCustom = async () => { preset.value = "custom"; await applyRange(); };
+  since.addEventListener("change", applyCustom);
+  until.addEventListener("change", applyCustom);
   document.getElementById("sinceReset").addEventListener("click", async () => {
     preset.value = ""; since.value = ""; until.value = "";
     [PRESET_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));

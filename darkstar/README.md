@@ -270,6 +270,12 @@ Two controls on `/slas`, both server-backed rather than cosmetic:
     "Yesterday" at 09:00 local is still hours behind Pacific midnight, so a browser-local computation
     would fetch a different day than everyone else sees. Resolved via
     `toLocaleDateString("en-CA", {timeZone: "America/Los_Angeles"})`.
+  - **The custom from/to pair is hidden behind `.controls [hidden]{display:none}`**, which has to
+    outrank `.filter{display:inline-flex}`. An author `display` rule beats the UA stylesheet's
+    `[hidden]`, so on first cut the inputs stayed on screen while the code believed it had put them
+    away — and a date typed there resolved against a select still reading "Panel defaults", which
+    returns null, so the dates were silently dropped and the whole control looked inert. Editing
+    either date now also switches the select to Custom, so typing a date can never be a no-op.
   - **An inverted or zero-width window is a 400**, not an empty page. Empty panels read as "the team
     delivered nothing", which is a claim about the team rather than about the query.
   - **`until` bounds what is counted, not what is read** — in `slas.py` the merge-request query stays

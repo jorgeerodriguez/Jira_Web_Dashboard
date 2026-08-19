@@ -195,3 +195,46 @@ def test_both_bounds_reach_the_mr_turnaround_route(monkeypatch, tmp_path):
                       params={"since": "2026-07-01", "until": "2026-08-01"}).status_code == 200
     assert client.get("/api/mr-turnaround",
                       params={"since": "2026-08-01", "until": "2026-07-01"}).status_code == 400
+
+
+def _slas_page(monkeypatch, tmp_path, name):
+    client, _ = _client(monkeypatch, tmp_path, name)
+    response = client.get("/slas")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_the_hidden_custom_range_is_hidden_against_the_filter_display_rule(monkeypatch, tmp_path):
+    """`hidden` alone loses to an author `display` rule, which is how it broke.
+
+    `.filter{display:inline-flex}` outranks the UA stylesheet's `[hidden]{display:none}`, so the
+    custom from/to inputs stayed on screen while the code believed it had put them away. Anyone
+    reaching them while a preset was selected then found their dates ignored. The override has to be
+    at least as specific as `.filter`, so a bare `[hidden]` rule is not enough.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "hid.duckdb")
+    assert ".controls [hidden]{display:none}" in page, "hidden must outrank .filter's display"
+    assert 'id="customRange"' in page and "hidden" in page
+
+
+def test_editing_a_custom_date_selects_the_custom_preset(monkeypatch, tmp_path):
+    """Typing a date must never be a no-op.
+
+    presetRange() resolves from the SELECT, so a date typed while the select still read "Panel
+    defaults" resolved to null and was silently dropped — the lookback appeared not to work at all.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "cust.duckdb")
+    assert 'preset.value = "custom"' in page, "a date edit must switch the select to custom"
+    assert 'since.addEventListener("change", applyCustom)' in page
+    assert 'until.addEventListener("change", applyCustom)' in page
+
+
+def test_every_lookback_preset_the_page_offers_is_handled_by_the_resolver(monkeypatch, tmp_path):
+    """An option with no case in presetRange() falls to `default: return null` — a silent no-op."""
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "pre.duckdb")
+    control = page[page.index('<select id="preset">'):page.index("</select>")]
+    offered = {v for v in re.findall(r'<option value="([^"]*)"', control) if v}
+    resolver = page[page.index("function presetRange("):page.index("function query(")]
+    for preset in offered:
+        assert f'case "{preset}"' in resolver, f'preset {preset!r} has no case in presetRange()'
