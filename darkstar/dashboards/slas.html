@@ -120,6 +120,8 @@
   .foot[open] summary{margin-bottom:4px}
   .foot b{color:var(--ink2); font-weight:600}
   .foot code{font-family:var(--mono); color:var(--ink2)}
+  h3{font-size:12px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.1em;
+     color:var(--muted); font-weight:600; margin:26px 0 8px}
   h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
   h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--muted); transition:transform .18s; transform:translateY(-1px)}
   h2.collapsible[aria-expanded="true"]::before{transform:translateY(-1px) rotate(90deg)}
@@ -172,6 +174,8 @@
   .rowx{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1;
         padding:0 2px}
   .rowx:hover{color:var(--neg)}
+  .swatch{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px;
+        vertical-align:baseline}
   .bar{display:block; height:8px; border-radius:2px; background:var(--ink2); opacity:.55; min-width:1px}
   td.barcell{width:38%; padding-left:14px}
 </style>
@@ -219,8 +223,8 @@
   </details>
   <div class="tbl-wrap"><table id="monthlyTbl"></table></div>
   </section>
-  <section class="panel">
-  <h2>MR turnaround by author</h2>
+    <section class="panel">
+  <h2>MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
   <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
@@ -234,8 +238,12 @@
     <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
     Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
     yet. Use <b>×</b> on a row to hide someone.</p>
-    <p id="hiddenNote"></p>
+  <p>The same merged MRs, cut by the business-timezone day they landed rather than by
+  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
+  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
+  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
   </details>
+
   <div class="controls">
     <label class="filter">Filter authors
       <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
@@ -263,18 +271,9 @@
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
   <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
+  <h3>By day merged</h3>
 
-  </section>
-  <section class="panel">
-  <h2>Daily MR turnaround</h2>
-  <details class="note"><summary>About this panel</summary>
-  <p>The same merged MRs, cut by the business-timezone day they landed rather than by
-  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
-  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
-  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
-  </details>
   <div class="tbl-wrap"><div id="dailyChart"></div></div>
-
   </section>
   </div>
 
@@ -361,15 +360,24 @@ function mrFilterTerms(){
     .split(",").map(t=>t.trim().toLowerCase()).filter(Boolean);
 }
 
+function authorColours(d){
+  const map = new Map();
+  (d.series || []).forEach((sr, i) => map.set(sr.name, PALETTE[i % PALETTE.length]));
+  return map;
+}
+
 function renderMrTable(d){
+  const colour = authorColours(d);
   const terms = mrFilterTerms();
   const shown = terms.length
     ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
     : d.authors;
   const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median (h)</th>`+
              `<th>p90 (h)</th><th></th></tr></thead>`;
-  const row=(a,cls)=>`<tr class="${cls}">
-     <td>${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
+  const seriesKey = new Map((d.series || []).map((sr, i) => [sr.name, String(i)]));
+  const row=(a,cls)=>`<tr class="${cls}" data-k="${seriesKey.has(a.name) ? seriesKey.get(a.name) : ""}">
+     <td>${colour.get(a.name) ? `<span class="swatch" style="background:${colour.get(a.name)}"></span>` : ""}`+
+        `${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
      <td class="num">${a.merged}</td>
      <td class="num">${fmt(a.biz_hours_median)}</td>
      <td class="num">${fmt(a.biz_hours_p90)}</td>
@@ -559,8 +567,9 @@ function renderDailyChart(d){
   const xlabels = days.map((day,i) => i % step ? "" :
     `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
 
+  const colour = authorColours(d);
   const lines = series.map((s, si) => {
-    const col = PALETTE[si % PALETTE.length];
+    const col = colour.get(s.name) || PALETTE[si % PALETTE.length];
     const pts = s.points.filter(p => p.day in idx);
     if(!pts.length) return "";
     const path = pts.map((p,i) => `${i?"L":"M"}${x(idx[p.day]).toFixed(1)},${y(p.biz_hours_median).toFixed(1)}`).join("");
@@ -576,9 +585,8 @@ function renderDailyChart(d){
            dots + `</g>`;
   }).join("");
 
-  const legend = series.map((s, si) =>
-    `<span class="chip" data-k="${si}" aria-pressed="true" style="--c:${PALETTE[si % PALETTE.length]}">`+
-    `<span class="dot"></span>${esc(s.name)}</span>`).join("");
+  // No legend: the table above carries the same colours, and hovering one of its rows highlights
+  // the matching line, so a separate legend would only repeat it.
 
   host.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Daily merge-request turnaround by author">
@@ -587,7 +595,6 @@ function renderDailyChart(d){
        ${lines}${xlabels}
        <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
      </svg>
-     <div class="chips" id="dailyLegend">${legend}</div>
      ${d.mixed ? `<p class="filter-hint">${d.mixed} merge request${d.mixed===1?"":"s"} touched both the `+
         `production and non-production trees and ${d.mixed===1?"is":"are"} excluded from the environment `+
         `views — a change spanning both belongs to neither.</p>` : ""}
@@ -612,10 +619,11 @@ function bindDailyHover(){
   const svg = host.querySelector("svg");
   if(!svg) return;
   const groups = svg.querySelectorAll(".series");
-  const chips = host.querySelectorAll("#dailyLegend .chip");
+  const chips = [];
   const emphasise = k => {
     groups.forEach(g => g.style.opacity = (k==null || g.dataset.k===k) ? "" : "0.13");
-    chips.forEach(c => c.style.opacity = (k==null || c.dataset.k===k) ? "" : "0.3");
+    document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr =>
+      tr.style.opacity = (k==null || !tr.dataset.k || tr.dataset.k===k) ? "" : "0.35");
   };
   const base = () => {
     if(dailyLocked != null && !svg.querySelector(`.series[data-k="${dailyLocked}"]`)) dailyLocked = null;
@@ -632,14 +640,15 @@ function bindDailyHover(){
     dailyLocked = g ? (dailyLocked === g.dataset.k ? null : g.dataset.k) : null;
     base();
   });
-  chips.forEach(c => {
-    c.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(c.dataset.k); });
-    c.addEventListener("mouseleave", base);
-    c.style.cursor = "pointer";
-    c.addEventListener("click", () => {
-      dailyLocked = dailyLocked === c.dataset.k ? null : c.dataset.k;
-      base();
-    });
+  // The author table is the legend now: hovering a row isolates that author's line, clicking pins
+  // it. Rows without a series (no merged MRs in the window) carry an empty key and are inert.
+  document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr => {
+    const k = tr.dataset.k;
+    if(!k) return;
+    tr.style.cursor = "pointer";
+    tr.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(k); });
+    tr.addEventListener("mouseleave", base);
+    tr.addEventListener("click", () => { dailyLocked = dailyLocked === k ? null : k; base(); });
   });
   base();
 }

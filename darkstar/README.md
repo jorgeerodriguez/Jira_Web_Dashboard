@@ -49,8 +49,11 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   p50 has run 406.7h (Apr), 99.2h (May), 13.8h (Jun), 10.0h (Jul), 2.9h (Aug). Reported as a table
   with a bar for the share closed inside one working day, because the p50 spans two orders of
   magnitude and a linear axis would bury exactly the recent months the panel exists to show.
-- **Daily MR turnaround** — the same population cut by the day each MR merged, one coloured line
-  per author.
+- **MR turnaround** — one panel, because the table and the daily chart are the same population under
+  the same filters. Ready→merged per author, slowest first, then the same MRs cut by the day they
+  landed as one coloured line per author. The table **is** the chart's legend: colours are assigned
+  per author from the series order and shared by both, and hovering a table row isolates that
+  author's line (click to pin). There is no separate legend, because it would only repeat the table.
 
 The page is a two-column grid of bordered panels; the card row and the daily chart span both
 columns, collapsing to one column below 980px. Each panel's heading collapses its own section, and
