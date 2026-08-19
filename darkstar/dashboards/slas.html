@@ -82,7 +82,6 @@
   .whisk{stroke-width:1.25; opacity:.55}
 
   h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:38px 0 6px}
-  .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:70ch}
   .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--panel)}
   .stat .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
   .stat .v{font-family:var(--mono); font-size:29px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
@@ -127,9 +126,19 @@
   h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
   h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
   .sec-hidden{display:none !important}
+  .panel{border:1px solid var(--line); border-radius:12px; padding:4px 20px 18px; background:var(--panel)}
+  .panel h2{margin-top:24px}
+  /* One collapsed explainer per panel instead of a standing wall of prose. */
+  .note{margin:0 0 12px}
+  .note summary{cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase;
+        letter-spacing:.09em; color:var(--muted); user-select:none; list-style:none}
+  .note summary::-webkit-details-marker{display:none}
+  .note summary::before{content:"\24D8"; margin-right:6px}
+  .note summary:hover{color:var(--ink2)}
+  .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
   /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
      and the daily chart — span both. */
-  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px 34px; align-items:start}
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px; align-items:start}
   .panel{min-width:0}
   .panel.wide{grid-column:1 / -1}
   @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
@@ -175,10 +184,8 @@
 <main class="card">
   <p class="eyebrow">Platform Engineering · Self-Service</p>
   <h1>Self-Service Delivery</h1>
-  <p class="dek">How much of PE's delivered work now comes through the self-service skills, how fast
-  those requests close, and how long merge requests take to land.
-  <b>All hours are business hours</b> — Mon–Fri 08:00–17:00 US/Pacific, holidays excluded, one standard
-  clock, since Audacy's users are overwhelmingly North American. The workflows began 2026-03.</p>
+  <p class="dek">How much of PE's delivered work comes through the self-service skills, how fast those
+  requests close, and how long merge requests take to land. All hours are business hours.</p>
 
   <div class="controls">
     <label class="filter">Lookback from
@@ -191,30 +198,44 @@
   <div class="panels">
   <section class="panel wide">
   <h2>Self-service impact</h2>
-  <p class="h2sub">A <b>label</b> means the request came through a self-service skill; a
+  <details class="note"><summary>About this panel</summary>
+  <p>A <b>label</b> means the request came through a self-service skill; a
   <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
   overlap but are not the same, so the share card reports both.</p>
+  </details>
   <div class="cards" id="successStats"></div>
 
   </section>
   <section class="panel">
   <h2>Delivery turnaround by month</h2>
-  <p class="h2sub">Self-service requests grouped by the month they were <b>created</b>. A single
+  <details class="note"><summary>About this panel</summary>
+  <p>Self-service requests grouped by the month they were <b>created</b>. A single
   blended figure over the whole window libels current performance while the team is improving fast.
   The bar is the share closed inside one working day — the p50 range is wide enough that plotting it
   linearly would bury the recent months. Widen the lookback to see earlier months.</p>
+  </details>
   <div class="tbl-wrap"><table id="monthlyTbl"></table></div>
   </section>
   <section class="panel">
   <h2>MR turnaround by author</h2>
-  <p class="h2sub">Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
+  <details class="note"><summary>About this panel</summary>
+  <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
   excluded — the author is still working, not waiting on review. Note that an engineer working EET can
   score near zero here, since their own workday falls inside the Pacific night.</p>
+  <p>Filter is comma-separated and matches any part of a
+    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
+    by username and an email address matches nothing. Environment is read from the repo name, falling
+    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
+    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
+    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
+    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
+    yet. Use <b>×</b> on a row to hide someone.</p>
+  </details>
   <div class="controls">
     <label class="filter">Filter authors
       <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
-             aria-describedby="mrFilterHint">
+             >
     </label>
     <label class="filter">Add author
       <input id="addUser" type="text" placeholder="search GitLab users" autocomplete="off"
@@ -234,14 +255,6 @@
       </select>
     </label>
   </div>
-  <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
-    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
-    by username and an email address matches nothing. Environment is read from the repo name, falling
-    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
-    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
-    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
-    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
-    yet. Use <b>×</b> on a row to hide someone.</span>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
   <p class="filter-hint" id="crawlNote"></p>
@@ -251,10 +264,12 @@
   </section>
   <section class="panel wide">
   <h2>Daily MR turnaround</h2>
-  <p class="h2sub">The same merged MRs, cut by the business-timezone day they landed rather than by
+  <details class="note"><summary>About this panel</summary>
+  <p>The same merged MRs, cut by the business-timezone day they landed rather than by
   author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
   is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
   Hover a point for the exact figures. Days with nothing merged are omitted.</p>
+  </details>
   <div class="tbl-wrap"><div id="dailyChart"></div></div>
 
   </section>

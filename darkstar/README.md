@@ -47,9 +47,12 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
 - **Daily MR turnaround** — the same population cut by the day each MR merged, one coloured line
   per author.
 
-The page is a two-column grid; the card row and the daily chart span both columns. Each panel's
-heading collapses its own section, and the derivation notes at the foot are a `<details>` collapsed
-by default — reference material that dominated the page when always open.
+The page is a two-column grid of bordered panels; the card row and the daily chart span both
+columns, collapsing to one column below 980px. Each panel's heading collapses its own section, and
+each carries **one** collapsed "About this panel" explainer rather than standing prose — the page
+was mostly text otherwise. Dynamic status stays visible: a crawl still owed, rows that cannot be
+measured, mixed-environment exclusions, the result of adding an author. The derivation notes at the
+foot are a `<details>` collapsed by default.
 
 ## How a number gets made
 
