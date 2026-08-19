@@ -184,6 +184,14 @@
         transition:color .12s, background .12s, border-color .12s}
   tbody a:hover{color:#fff; border-bottom-color:#fff; background:var(--accent-soft)}
   caption a,.note a,.foot a{text-decoration:underline; text-underline-offset:2px}
+  /* The linkage strip sits under the impact cards: same row of facts, but about our own confidence
+     rather than about the team. */
+  .linkage{display:flex; flex-wrap:wrap; align-items:baseline; gap:7px 16px; margin-top:14px;
+        font-family:var(--mono); font-size:12px; color:var(--ink2)}
+  .linkage .lk-head{text-transform:uppercase; letter-spacing:.09em; color:var(--muted)}
+  .linkage .lk b{color:var(--ink); font-weight:600}
+  .linkage .gap{color:var(--muted)}
+  .linkage .gap b{color:var(--neg)}
   .pager{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
         margin-top:12px; font-family:var(--mono); font-size:12px; color:var(--muted)}
   .pager .pg-btns{display:inline-flex; align-items:center; gap:8px}
@@ -300,6 +308,7 @@
   overlap but are not the same, so the share card reports both.</p>
   </details>
   <div class="cards" id="successStats"></div>
+  <div class="linkage" id="linkage"></div>
 
   </section>
   <section class="panel">
@@ -474,6 +483,32 @@ const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
 
 /* Three questions a human actually asks: is it used, does it carry real load, is it faster.
    The old cards answered none of them — "90% success" only meant "the ticket was not cancelled". */
+/* How the requests on this page were tied to their code, most trusted route first.
+
+   Shown rather than folded away because the routes are not equally believable. A link from the Jira
+   "Merge Request" field is a URL somebody entered on purpose; a branch name follows a convention; a
+   title is prose typed for another purpose and can be wrong. A reader can only discount a figure that
+   rests on inference if the split is visible. `code_not_linked` is the honest counterpart: Jira's
+   development panel says code exists and nothing here could name it, which is a hole in our linkage
+   rather than a request without code. */
+const LINK_LABEL = {field: "Merge Request field", branch: "branch name", title: "MR title"};
+const LINK_NOTE = {field: "entered deliberately", branch: "convention", title: "typed prose"};
+
+function renderLinkage(l){
+  if(!l){ document.getElementById("linkage").innerHTML = ""; return; }
+  const rows = Object.entries(l.by_source).filter(([, n]) => n > 0).map(([src, n]) =>
+    `<span class="lk"><b>${n}</b> ${esc(LINK_LABEL[src] || src)}`+
+    `<span class="na">&nbsp;·&nbsp;${esc(LINK_NOTE[src] || "")}</span></span>`).join("");
+  const gap = l.code_not_linked
+    ? `<span class="lk gap" title="Jira's development panel reports code on these, but nothing here `+
+      `could name the merge request — a gap in linkage, not requests without code">`+
+      `<b>${l.code_not_linked}</b> code exists, not linked</span>`
+    : "";
+  document.getElementById("linkage").innerHTML = l.linked || l.code_not_linked
+    ? `<span class="lk-head">Linked to code</span>${rows}${gap}`
+    : "";
+}
+
 function renderSuccess(h){
   const card=(k,v,sub,cls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>`+
     `<div class="s${cls?" "+cls:""}">${sub}</div></div>`;
@@ -677,6 +712,7 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
+  renderLinkage(slaData.linkage);
   renderTurnaroundTable(slaData.turnaround, slaData.grain);
   renderOriginTable(slaData.origin, slaData.grain);
   renderMrTable(mrData);

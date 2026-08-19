@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -34,8 +35,31 @@ logger = logging.getLogger("darkstar.ingest")
 # Only the fields the dashboards need (keeps the payload small).
 _ISSUE_FIELDS: str = (
     "summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,"
-    "parent,project,customfield_11751,customfield_10946,customfield_10947"
+    "parent,project,customfield_11751,customfield_10946,customfield_10947,"
+    # customfield_11534 = "Merge Request" (free text, a GitLab MR URL); customfield_10400 =
+    # "Development", Jira's cached dev-panel summary. Both come free with this call.
+    "customfield_11534,customfield_10400"
 )
+
+# Jira serves the Development field as a summary blob rather than structured JSON: a Java-style
+# toString with a `json={...}` member holding the real counts. Only the counts are wanted, and only
+# to tell "has code we did not link" apart from "has no code", so the counts are read out of the
+# outer blob with a regex rather than by parsing the embedded JSON.
+_DEV_PR_RE = re.compile(r"pullrequest\s*=\s*\{[^}]*?count\s*=\s*(\d+)")
+_DEV_COMMIT_RE = re.compile(r"repository\s*=\s*\{[^}]*?count\s*=\s*(\d+)")
+
+
+def _dev_counts(raw: object) -> tuple[int | None, int | None]:
+    """(pull requests, commit-carrying repositories) from Jira's Development summary field.
+
+    None, not 0, when the field is absent: absent means Jira told us nothing, while 0 means Jira
+    positively reported no linked code, and only the latter is evidence.
+    """
+    if not isinstance(raw, str) or not raw:
+        return (None, None)
+    prs = _DEV_PR_RE.search(raw)
+    commits = _DEV_COMMIT_RE.search(raw)
+    return (int(prs.group(1)) if prs else 0, int(commits.group(1)) if commits else 0)
 _FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
 _PAGE_SIZE: int = 100
 _WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
@@ -157,6 +181,9 @@ def _map_issue(issue: Issue, fetched_at: datetime) -> store.IssueRow:
         planned_start=_parse_date(fields.get("customfield_10946")),
         target_end=_parse_date(fields.get("customfield_10947")),
         labels=list(fields.get("labels") or []),
+        mr_field_url=(fields.get("customfield_11534") or None),
+        dev_pr_count=_dev_counts(fields.get("customfield_10400"))[0],
+        dev_commit_count=_dev_counts(fields.get("customfield_10400"))[1],
         fetched_at=fetched_at,
     )
 

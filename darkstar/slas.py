@@ -102,31 +102,74 @@ _ABANDONED: frozenset[str] = frozenset(
 _KEY_RE = re.compile(r"DEVOPS[-_ ]?(\d+)", re.IGNORECASE)
 
 
-def _mr_issue_keys(title: str, source_branch: str, description: str) -> list[str]:
-    """Which DEVOPS issues a merge request implements, strongest evidence only.
+_MR_URL_RE = re.compile(
+    r"gitlab\.com/(?P<project>[^\s?#]+?)/-/merge_requests/(?P<iid>\d+)", re.IGNORECASE)
 
-    Jira's own development panel links a ticket to code through the branch name and commit messages
-    as well as the title, and reading the title alone missed a lot: measured over 284 requests and
-    5,878 merged MRs, title-only reached 25.7% of requests, adding the branch 29.6%, adding the
-    description 31.7%. Commit messages were sampled separately and add ~nothing -- 1 of 60 MRs.
+# Ranked by how much the link can be trusted, most trusted first. "field" is a URL somebody entered
+# deliberately on the request; "branch" is a name generated from a convention; "title" is prose typed
+# for another purpose. Adam's ranking, and the reason each link records which route found it: the
+# panels can then show how much of a figure rests on inference.
+LINK_SOURCES: tuple[str, ...] = ("field", "branch", "title")
 
-    The sources are tried in order rather than unioned, and that is deliberate. A title or branch
-    naming a ticket means "this MR implements it"; a description mentioning one might only mean
-    "supersedes DEVOPS-1234" or "see DEVOPS-1234". Unioning lets a cross-reference in prose mark an
-    unrelated ticket as self-service, and a false positive corrupts a metric where a missed link
-    merely leaves a request unclassified. It costs about nine requests in 284 -- the safe direction.
+
+def _keys_in(text: str | None) -> list[str]:
+    r"""Every DEVOPS key mentioned in a piece of text, in first-seen order.
+
+    Case-insensitive with a loose separator, because GitLab humanises a branch into an MR title and
+    mangles the key doing it: "Devops 9426", "Feature/devops 9257 prod cognito userpools",
+    "devops_10073". A strict DEVOPS-\d+ misses 48 of 5,878 merged MRs on those variants alone. It
+    does NOT rescue a bare number like "feat(10117)" -- nothing can, without matching every integer --
+    which is why the branch name is read as well.
     """
-    for text in (title, source_branch, description):
-        found = _KEY_RE.findall(text or "")
-        if found:
-            # dict.fromkeys keeps first-seen order, so the primary reference stays first
-            return list(dict.fromkeys(f"DEVOPS-{n}" for n in found))
-    return []
-# Three months, not six: delivery turnaround has improved roughly 100x since the workflows began
-# (p50 by month created: Apr 406.7h, May 114.0h, Jun 18.0h, Jul 13.9h, Aug 3.0h), so a six-month
-# window calibrates the targets against a team that no longer exists. Three keeps ~220 delivered
-# requests — enough for a stable p90 — while dropping the worst of the learning curve. mrflow keeps
-# its own six-month window on purpose; MR turnaround is tracked back to the epoch.
+    return list(dict.fromkeys(f"DEVOPS-{n}" for n in _KEY_RE.findall(text or "")))
+
+
+def _mr_field_ref(url: str | None) -> tuple[str, int] | None:
+    """(project_path, iid) from the Jira "Merge Request" field, or None if it holds no MR URL.
+
+    The field is free text, so it can hold anything; sampled across August it was clean, every value
+    a single canonical https://gitlab.com/<group>/<project>/-/merge_requests/<iid>. Anything that does
+    not parse is treated as absent rather than guessed at.
+    """
+    if not url:
+        return None
+    match = _MR_URL_RE.search(url)
+    return (match.group("project"), int(match.group("iid"))) if match else None
+
+
+def _resolve_link(key: str, mr_field_url: str | None, mr_signals: dict,
+                  refs_by_branch: dict, refs_by_title: dict) -> tuple[dict | None, str | None]:
+    """The merge-request signals for a request, and which route found them.
+
+    Tried most-trusted first and never unioned. A title naming a ticket is weak evidence and a
+    description saying "Supersedes DEVOPS-9001" is not evidence at all, so the description is not
+    read: it was worth about two points of coverage and carried the risk of marking an unrelated
+    request self-service. A false positive corrupts a metric; a missing link only leaves a request
+    unclassified, and is now reported as such.
+    """
+    field_ref = _mr_field_ref(mr_field_url)
+    routes = (
+        ("field", [field_ref] if field_ref is not None else []),
+        ("branch", refs_by_branch.get(key) or []),
+        ("title", refs_by_title.get(key) or []),
+    )
+    for source, refs in routes:
+        found = [mr_signals[ref] for ref in refs if ref in mr_signals]
+        if not found:
+            continue
+        merged = {
+            "bucket": next((f["bucket"] for f in found if f["bucket"]), None),
+            "skill_label": any(f["skill_label"] for f in found),
+            "footer": any(f["footer"] for f in found),
+            "review_hours": next((f["review_hours"] for f in found
+                                  if f["review_hours"] is not None), None),
+            "first_review_hours": next((f["first_review_hours"] for f in found
+                                        if f["first_review_hours"] is not None), None),
+        }
+        return (merged, source)
+    return (None, None)
+
+
 _WINDOW_MONTHS: int = 3
 _BUCKETS: tuple[str, ...] = ("iac-request", "k8s-request", "tf-module", "troubleshoot")
 
@@ -262,7 +305,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     grain = grain or choose_grain(since, until, now)
     delivery = ", ".join(["?"] * len(DELIVERY_TYPES))
     issues = connection.execute(
-        f"SELECT key, status, status_category, created, labels FROM issues "
+        f"SELECT key, status, status_category, created, labels, mr_field_url, dev_pr_count, "
+        f"dev_commit_count FROM issues "
         f"WHERE created >= ? AND (? IS NULL OR created < ?) AND issuetype IN ({delivery})",
         [since, until, until, *DELIVERY_TYPES],
     ).fetchall()
@@ -282,33 +326,45 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     ).fetchall():
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
-    mr_by_key: dict[str, dict] = {}
-    for (mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by,
-         source_branch) in connection.execute(
-        "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by, "
-        "source_branch FROM merge_requests WHERE merged_at >= ? ORDER BY id",
+    # Per-merge-request signals, indexed two ways: by (project_path, iid) so the Jira "Merge Request"
+    # field can address one exactly, and by issue key for the weaker regex routes. Keeping them apart
+    # is what lets a request report WHICH route linked it.
+    mr_signals: dict[tuple[str, int], dict] = {}
+    refs_by_branch: dict[str, list[tuple[str, int]]] = {}
+    refs_by_title: dict[str, list[tuple[str, int]]] = {}
+    for (mr_id, project_path, iid, title, opened_at, merged_at, mr_labels, description,
+         author_account_id, merged_by, source_branch) in connection.execute(
+        "SELECT id, project_path, iid, title, opened_at, merged_at, labels, description, "
+        "author_account_id, merged_by, source_branch "
+        "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
-        for key in _mr_issue_keys(title, source_branch, description):
-            entry = mr_by_key.setdefault(
-                key,
-                {"bucket": None, "review_hours": None, "skill_label": False, "footer": False,
-                 "first_review_hours": None})
+        ref = (project_path, iid)
+        entry = {
             # Bucketing may still read the footer's "via /<skill>" — it names the skill reliably.
             # That is a separate question from whether the footer *qualifies* the issue as
             # self-service.
-            if entry["bucket"] is None:
-                entry["bucket"] = _mr_bucket(mr_labels or []) or _footer_bucket(description)
-            entry["skill_label"] = entry["skill_label"] or bool(_mr_bucket(mr_labels or []))
-            entry["footer"] = entry["footer"] or has_agent_footer(description)
-            if entry["review_hours"] is None and opened_at and merged_at:
-                events = events_by_mr.get(mr_id, [])
-                entry["review_hours"] = ready_hours(opened_at, merged_at, events)
-                author_is_merger = (not merged_by) or merged_by == author_account_id
-                review_at = first_review_at(events, merged_at, author_is_merger)
-                if review_at is not None:
-                    entry["first_review_hours"] = ready_hours(
-                        opened_at, min(review_at, merged_at), events)
+            "bucket": _mr_bucket(mr_labels or []) or _footer_bucket(description),
+            "skill_label": bool(_mr_bucket(mr_labels or [])),
+            "footer": has_agent_footer(description),
+            "review_hours": None,
+            "first_review_hours": None,
+        }
+        if opened_at and merged_at:
+            events = events_by_mr.get(mr_id, [])
+            entry["review_hours"] = ready_hours(opened_at, merged_at, events)
+            author_is_merger = (not merged_by) or merged_by == author_account_id
+            review_at = first_review_at(events, merged_at, author_is_merger)
+            if review_at is not None:
+                entry["first_review_hours"] = ready_hours(
+                    opened_at, min(review_at, merged_at), events)
+        mr_signals[ref] = entry
+        # A branch is generated from a convention; a title is typed by a person. They are recorded
+        # separately so the weaker one can be reported as weaker, per Adam's ranking.
+        for key in _keys_in(source_branch):
+            refs_by_branch.setdefault(key, []).append(ref)
+        for key in _keys_in(title):
+            refs_by_title.setdefault(key, []).append(ref)
 
     # bucket key -> accumulator
     buckets: dict[tuple[str, str], dict] = {}
@@ -328,9 +384,20 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     created_by_period: dict[date, int] = {}
     origin_by_period: dict[date, dict[str, int]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
+    linked_by_source: dict[str, int] = {}
+    code_not_linked = 0
 
-    for key, status, status_category, created, labels in issues:
-        mr = mr_by_key.get(key)
+    for (key, status, status_category, created, labels, mr_field_url, dev_pr_count,
+         dev_commit_count) in issues:
+        mr, link_source = _resolve_link(key, mr_field_url, mr_signals, refs_by_branch, refs_by_title)
+        if link_source is not None:
+            linked_by_source[link_source] = linked_by_source.get(link_source, 0) + 1
+        # Jira's Development field says code exists but nothing here could name the merge request.
+        # Counted, because "we could not attach it" and "there is none" are different facts and only
+        # one of them is about the team. The PR count alone under-reports -- on DEVOPS-10117 the
+        # summary blob listed four repositories and no pull requests at all -- so either signal counts.
+        elif (dev_pr_count or 0) > 0 or (dev_commit_count or 0) > 0:
+            code_not_linked += 1
         # Agent-created if ANY signal fires: the Jira watermark, the linked MR's pe:* label, or the
         # linked MR's "Generated with Claude Code" footer. Any one alone misses a slice of the work.
         # Self-service = a label somewhere. AI-generated = a footer on the MR. Independent.
@@ -511,6 +578,15 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     return {
         "buckets": out_buckets,
         "headline": headline,
+        # How each linked request was linked, most trusted route first, plus the requests Jira says
+        # have code that nothing here could name. Reported rather than folded away: a share resting
+        # on a typed title deserves less weight than one resting on a URL somebody entered, and the
+        # reader can only discount it if the split is visible.
+        "linkage": {
+            "by_source": {source: linked_by_source.get(source, 0) for source in LINK_SOURCES},
+            "linked": sum(linked_by_source.values()),
+            "code_not_linked": code_not_linked,
+        },
         "grain": grain,
         "turnaround": turnaround,
         "origin": origin,

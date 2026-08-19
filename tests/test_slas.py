@@ -13,7 +13,8 @@ def _report(conn, now, grain="week"):
     return slas.slas_report(conn, now, slas.default_window_start(now), None, grain)
 
 
-def _issue(key, labels, created, status="Done", issuetype="Story"):
+def _issue(key, labels, created, status="Done", issuetype="Story", mr_url=None,
+           dev_prs=None, dev_commits=None):
     return store.IssueRow(
         key=key, id=int(key.split("-")[1]), project="DEVOPS", issuetype=issuetype,
         status=status, status_category=("done" if status in ("Done", "Will Not Do") else "indeterminate"),
@@ -21,6 +22,7 @@ def _issue(key, labels, created, status="Done", issuetype="Story"):
         reporter=None, business_lead=None, parent_key=None,
         created=created, updated=created, resolutiondate=None,
         planned_start=None, target_end=None, labels=labels,
+        mr_field_url=mr_url, dev_pr_count=dev_prs, dev_commit_count=dev_commits,
         fetched_at=datetime(2026, 7, 28, 0, 0, 0))
 
 
@@ -602,15 +604,23 @@ def test_a_description_cross_reference_does_not_hijack_an_unrelated_request():
     assert row["human"] == 1, "the merely-mentioned request stays human-filed"
 
 
-def test_the_description_is_read_when_nothing_stronger_names_a_request():
-    """It is the weakest signal, not an unused one — worth ~2 points of coverage on its own."""
+def test_the_description_is_no_longer_read_as_a_link():
+    """Deliberately dropped: prose is the weakest evidence and it was worth ~2 points of coverage.
+
+    A description saying "Implements DEVOPS-9002" is usually true and "Supersedes DEVOPS-9001" is
+    usually not, and nothing in the text separates them. A false positive corrupts a metric while a
+    missing link only leaves a request unclassified — and unclassified is now counted and shown, so
+    the cheaper error is the one that stays visible.
+    """
     conn = _fresh()
     store.upsert_issues(conn, [_issue("DEVOPS-9002", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0))])
     store.upsert_merge_requests(conn, [_mr(
         1, "no-key-here", ["pe:iac-request"],
         datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
         description="Implements DEVOPS-9002.", branch="chore/tidy")])
-    assert _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]["agent"] == 1
+    report = _report(conn, datetime(2026, 8, 18, 12, 0, 0))
+    assert report["origin"][0]["agent"] == 0, "a description must not link a request"
+    assert report["linkage"]["linked"] == 0
 
 
 def test_one_merge_request_can_implement_several_requests():
@@ -649,3 +659,74 @@ def test_a_humanised_branch_title_still_links():
             events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch="")])
     row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
     assert (row["agent"], row["human"]) == (2, 0), "both humanised titles must link"
+
+
+def test_the_merge_request_field_outranks_a_branch_pointing_elsewhere():
+    """The field is the only link somebody stated on purpose, so it wins outright.
+
+    Adam's ranking: the Merge Request field first, the branch second, a typed title last. When the
+    field names one MR and a branch regex finds another, the field decides — otherwise the most
+    trustworthy signal available could be overridden by the least.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue(
+        "DEVOPS-500", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0),
+        mr_url="https://gitlab.com/audacy-inc/devops/terraform/tf-aardvark2-prod/-/merge_requests/9")])
+    store.upsert_merge_requests(conn, [
+        # the MR the field names: no skill label at all
+        store.MergeRequestRow(
+            id=1, project_path="audacy-inc/devops/terraform/tf-aardvark2-prod", iid=9,
+            author_account_id="a", title="unrelated title", opened_at=datetime(2026, 8, 5, 16, 0, 0),
+            merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=[], web_url="u", merged_by="",
+            fetched_at=datetime(2026, 8, 6, 0, 0, 0),
+            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch=""),
+        # a different MR whose branch names the same request, and which IS labelled
+        _mr(2, "other", ["pe:iac-request"], datetime(2026, 8, 5, 16, 0, 0),
+            datetime(2026, 8, 5, 17, 0, 0), branch="DEVOPS-500-something"),
+    ])
+    report = _report(conn, datetime(2026, 8, 18, 12, 0, 0))
+    assert report["linkage"]["by_source"] == {"field": 1, "branch": 0, "title": 0}
+    assert report["origin"][0]["agent"] == 0, "the field's MR carries no skill label, so not agent"
+
+
+def test_a_field_url_that_names_no_crawled_merge_request_falls_through():
+    """A URL to an MR the crawl has not reached is not a link yet, and must not block the fallback."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue(
+        "DEVOPS-501", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0),
+        mr_url="https://gitlab.com/audacy-inc/devops/terraform/never-crawled/-/merge_requests/1")])
+    store.upsert_merge_requests(conn, [_mr(
+        1, "other", ["pe:iac-request"], datetime(2026, 8, 5, 16, 0, 0),
+        datetime(2026, 8, 5, 17, 0, 0), branch="DEVOPS-501-thing")])
+    report = _report(conn, datetime(2026, 8, 18, 12, 0, 0))
+    assert report["linkage"]["by_source"] == {"field": 0, "branch": 1, "title": 0}
+
+
+def test_free_text_in_the_field_is_treated_as_absent_not_guessed_at():
+    """It is a plain text field, so it can hold anything; unparseable is not a link."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-502", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0),
+                                      mr_url="ask Ben, it went out with the cluster upgrade")])
+    assert _report(conn, datetime(2026, 8, 18, 12, 0, 0))["linkage"]["linked"] == 0
+
+
+def test_jira_reporting_code_with_no_link_found_is_counted_as_a_gap():
+    """"We could not attach it" and "there is none" are different facts about different things.
+
+    Jira's Development field says this request has code. Nothing here can name the merge request, so
+    it must not be filed alongside requests that genuinely have none — that would blame the team for
+    a hole in our own linkage.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-503", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0), dev_prs=2, dev_commits=3),
+        # the shape seen on DEVOPS-10117: repositories reported, pull requests absent from the blob
+        _issue("DEVOPS-504", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0), dev_prs=0, dev_commits=4),
+        # Jira positively reports nothing linked
+        _issue("DEVOPS-505", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0), dev_prs=0, dev_commits=0),
+        # Jira told us nothing at all
+        _issue("DEVOPS-506", ["DevOps"], datetime(2026, 8, 6, 17, 0, 0)),
+    ])
+    linkage = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["linkage"]
+    assert linkage["code_not_linked"] == 2, "either count is enough; a real zero and a null are not"
+    assert linkage["linked"] == 0

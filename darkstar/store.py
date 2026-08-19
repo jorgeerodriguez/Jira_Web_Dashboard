@@ -43,6 +43,17 @@ class IssueRow:
     planned_start: date | None
     target_end: date | None
     labels: list[str]
+    # The "Merge Request" field (customfield_11534), a free-text field holding a full GitLab MR URL.
+    # The most authoritative link a request has: someone stated it deliberately, rather than it being
+    # inferred from text a human typed for another purpose. Sampled clean -- 18 of 18 were a single
+    # canonical https://gitlab.com/<group>/<project>/-/merge_requests/<iid>.
+    mr_field_url: str | None
+    # Counts from Jira's Development field (customfield_10400), which summarises the dev panel. They
+    # identify no particular merge request, so they cannot link anything -- but a non-zero count with
+    # no link found means "this request HAS code we failed to attach", which is a reportable gap
+    # rather than a request with no code. The value Jira serves is a cached summary and can be stale.
+    dev_pr_count: int | None
+    dev_commit_count: int | None
     fetched_at: datetime
 
 
@@ -120,7 +131,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "fetched_at",
+    "labels", "mr_field_url", "dev_pr_count", "dev_commit_count", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
@@ -151,6 +162,9 @@ CREATE TABLE IF NOT EXISTS issues (
     planned_start       DATE,
     target_end          DATE,
     labels              VARCHAR[] NOT NULL,
+    mr_field_url        VARCHAR,
+    dev_pr_count        INTEGER,
+    dev_commit_count    INTEGER,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -230,6 +244,9 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_pr_count INTEGER")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_commit_count INTEGER")
     logger.debug("schema initialized")
 
 

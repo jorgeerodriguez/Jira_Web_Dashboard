@@ -452,34 +452,60 @@ matching only the latter scored every abandoned request as a success and pinned 
 ## Linking a request to its code
 
 A request is tied to merge requests so the panels can read the MR's `pe:*` label, its agent footer and
-its review timing. Darkstar used to look for the key in the **MR title only**, which missed a lot.
-Jira's own development panel links through branch names and commit messages too, and measuring against
-5,878 merged MRs showed how much that costs — 284 requests created May–Jun 2026:
+its review timing. Four routes exist, and they are **not** equally believable, so they are tried
+most-trusted-first and never unioned — and every link records which route found it.
 
-| linking signal | requests classifiable by environment | unlinked |
-|---|---|---|
-| MR title only | 25.7% | 181 |
-| + branch name | 29.6% | 155 |
-| + branch + MR description | **31.7%** | 146 |
-| + commit messages | ~32% | ~143 |
+| rank | route | source | why it ranks there |
+|---|---|---|---|
+| 1 | **Merge Request field** | Jira `customfield_11534` | a full GitLab MR URL somebody entered on purpose. Sampled clean: 18 of 18 were a single canonical `https://gitlab.com/<group>/<project>/-/merge_requests/<iid>` |
+| 2 | **Branch name** | GitLab `source_branch` | generated from a convention, not typed as prose |
+| 3 | **MR title** | GitLab | prose typed for another purpose; can be wrong |
+| — | **MR description** | not read | `Supersedes DEVOPS-9001` is not a claim to have implemented it |
 
-Commit messages were sampled rather than assumed: of 60 PE-repo MRs with no key in title, branch or
-description, **one** had it in a commit. Not worth an API call per merge request, so they are not read.
+Coverage on the 221 requests created in August 2026: the Merge Request field is populated on **71**
+(32%), Jira's development panel reports code on **105** (48%), and regex over titles and branches
+reaches about 90 keys. The field catches **10** the development panel misses, so it is additive rather
+than redundant. Neither Jira nor the regex is a superset of the other: on the same population Jira's
+panel found **18** links the regex missed, and the regex found **9** Jira's panel did not.
 
-**The sources are tried strongest-first, never unioned.** A title or branch naming a ticket means
-"this MR implements it"; a description saying `Supersedes DEVOPS-9001` does not. Unioning lets prose
-mark an unrelated request self-service, and a false positive corrupts a metric where a missed link
-merely leaves a request unclassified. It costs roughly nine requests in 284 — the safe direction.
+**The description was dropped deliberately.** It was worth about two points of coverage and carried the
+risk of marking an unrelated request self-service. A false positive corrupts a metric; a missing link
+only leaves a request unclassified — and unclassified is now counted and shown, so the cheaper error is
+the visible one.
 
-The key pattern is case-insensitive with a loose separator, because GitLab humanises a branch into an
-MR title and mangles the key doing it: `Devops 9426`, `Feature/devops 9257 prod cognito userpools`,
-`devops_10073`. A strict `DEVOPS-\d+` misses 48 of those 5,878 MRs, and on the existing store the
-looser pattern alone finds 34 more tickets from titles already crawled. It does **not** rescue a bare
-number like `feat(10117)` — nothing can, short of matching every integer — which is precisely why the
-branch has to be read as well.
+The key pattern used for routes 2 and 3 is case-insensitive with a loose separator, because GitLab
+humanises a branch into an MR title and mangles the key doing it: `Devops 9426`,
+`Feature/devops 9257 prod cognito userpools`, `devops_10073`. A strict `DEVOPS-\d+` misses 48 of 5,878
+merged MRs on those variants alone. It does **not** rescue a bare `feat(10117)` — nothing can, short of
+matching every integer — which is why the branch is read at all.
 
-`source_branch` is nullable and joins the ALTER-added set, so `_needs_backfill` forces one full
-re-crawl to fill it on the 2,594 existing rows rather than leaving history permanently unlinked.
+### Reported, not hidden
+
+The **Linked to code** strip under the impact cards breaks the count down by route, because a share
+resting on a typed title deserves less weight than one resting on a URL somebody entered, and a reader
+can only discount it if the split is visible. On a store whose syncs have not yet refilled the new
+columns it reads *198 · MR title* and nothing else — which is the point.
+
+Beside it, **code exists, not linked** counts requests where Jira's development panel
+(`customfield_10400`) reports commits or pull requests but nothing here could name the merge request.
+That is a hole in our linkage, not a request without code, and the two must not be added together. The
+pull-request count in that field under-reports — on DEVOPS-10117 the summary blob listed four
+repositories and no pull requests at all, while JQL reports pull requests on the same issue — so either
+count is taken as evidence. A `NULL` means Jira said nothing and is never treated as zero.
+
+### Migration
+
+`source_branch` on `merge_requests` and `mr_field_url` / `dev_pr_count` / `dev_commit_count` on
+`issues` are all nullable and ALTER-added. `_needs_backfill` forces one full GitLab re-crawl for the
+branch; the Jira fields refill on the next issue sync. Until both run, the linkage strip will
+correctly show every link coming from titles.
+
+### Not attempted
+
+A **page-wide prod/nonprod filter**. Even with every route, ~68% of requests cannot be classified by
+environment, because about half link to no merged MR at all. The filter stays on the MR turnaround
+panel, where environment is intrinsic to the merge request and nothing is lost. If a request-level
+split is ever needed the answer is an environment field on the issue, not inference.
 
 ## Detecting a self-service request
 
