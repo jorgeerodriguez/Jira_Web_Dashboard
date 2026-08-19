@@ -484,6 +484,11 @@ function renderDailyChart(d){
        <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
      </svg>
      <div class="chips" id="dailyLegend">${legend}</div>
+     ${d.incomplete ? `<p class="filter-hint" style="color:var(--neg)">`+
+        `${d.incomplete} merged MR${d.incomplete===1?"":"s"} in this window cannot be measured yet — `+
+        `they were crawled before the ready-clock existed and have no opened time. The chart therefore `+
+        `starts at ${esc(d.earliest_measurable || "the first measurable day")} rather than `+
+        `${esc(d.window_start)}. The next full GitLab crawl repairs them.</p>` : ""}
      <p class="filter-hint">${days.length} day${days.length===1?"":"s"} with at least one merged MR since ${esc(d.window_start)}`+
        `${(d.filter||[]).length ? `, filtered to \u201c${esc(d.filter.join(", "))}\u201d` : ""}. `+
        `Hover a line to isolate it, click to pin it; hover a point for exact figures.</p>`;

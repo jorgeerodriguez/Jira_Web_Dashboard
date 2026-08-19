@@ -312,3 +312,33 @@ def test_unreviewed_mrs_are_absent_from_the_first_review_stat():
     conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 23, 0))])
     fr = _report(conn)["first_review"]
     assert fr["reviewed"] == 0 and fr["hours_median"] is None
+
+
+def test_unmeasurable_rows_are_counted_not_silently_dropped():
+    """A store mid-backfill must not look like a team that did no work before a certain date.
+
+    Rows crawled before opened_at existed cannot be measured, and excluding them quietly made the
+    chart start late for no visible reason — reported as "no data older than 7/29".
+    """
+    # Built the way prod got here: rows written before opened_at existed, then migrated.
+    conn = duckdb.connect(":memory:")
+    conn.execute("""CREATE TABLE merge_requests (
+        id BIGINT PRIMARY KEY, project_path VARCHAR NOT NULL, iid BIGINT NOT NULL,
+        author_account_id VARCHAR NOT NULL, title VARCHAR NOT NULL, merged_at TIMESTAMP NOT NULL,
+        web_url VARCHAR NOT NULL, fetched_at TIMESTAMP NOT NULL)""")
+    conn.execute("INSERT INTO merge_requests VALUES (2, 'audacy-inc/devops/x', 2, ?, 'old', "
+                 "TIMESTAMP '2026-05-01 15:00:00', 'u', ?)", [_ADAM, _NOW])
+    store.initialize_schema(conn)
+    store.upsert_merge_requests(conn, [_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0),
+                                           datetime(2026, 8, 17, 16, 0))])
+    r = _report(conn)
+    assert r["incomplete"] == 1
+    assert r["earliest_measurable"] == "2026-08-17"
+    assert r["team"]["merged"] == 1          # still excluded from the figures, just not in silence
+
+
+def test_a_fully_backfilled_store_reports_nothing_incomplete():
+    conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0))])
+    r = _report(conn)
+    assert r["incomplete"] == 0
+    assert r["earliest_measurable"] == "2026-08-17"
