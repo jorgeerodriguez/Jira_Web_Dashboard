@@ -94,6 +94,37 @@ was mostly text otherwise. Dynamic status stays visible: a crawl still owed, row
 measured, mixed-environment exclusions, the result of adding an author. The derivation notes at the
 foot are a `<details>` collapsed by default.
 
+## Durations are formatted, never printed raw
+
+Every duration on the page is business hours, and printing them as decimal hours made the reader do
+the arithmetic: time to first review read `0.1h` for what is six minutes, and the MR medians read
+`0.3h` and `0.1h` for eighteen and six. One formatter (`durText`) now owns all of them, in three
+tiers because the values span four orders of magnitude:
+
+| range | rendered | example |
+|---|---|---|
+| under a minute | `<1m` | 0.001h |
+| under an hour | minutes | 0.1h → `6m` |
+| under a working day | hours and minutes | 2.9h → `2h 54m` |
+| a working day or more | working days and hours | 174.8h → `19d 3h` |
+
+**A day here is nine hours, not twenty-four**, because that is what the clock counts — so 45h renders
+as `5d`, a working week, and rendering it as `1d 21h` would be a different kind of wrong. The decimal
+figure stays in each cell's `title`, so nothing is lost. The chart's y axis stays in plain hours: it
+is a linear hour scale, and mixed units on the ticks would make even spacing look arbitrary.
+
+## Inspecting an outlier
+
+**Slowest merge requests** under the MR turnaround chart is the drill-down behind the aggregates —
+the same population, same filters, slowest first, capped at 25 with the number left out reported
+rather than the list quietly ending.
+
+Each row carries **two** clocks, and the pair is the point. `Ready → merged` is the figure the table
+and chart are built from; `Open` is the whole span; `Draft` is the difference. An MR open five days
+with two ready hours was the author still working, and one with five ready days was waiting on
+review — a single "age" column cannot tell those apart, which is exactly the question the panel gets
+asked. `To review` is the wait for the first human comment on the same ready clock.
+
 ## Visual hierarchy
 
 The page reported as reading flat, and the cause was measurable rather than a matter of taste:
