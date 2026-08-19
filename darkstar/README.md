@@ -158,7 +158,17 @@ fetch their history. `POST /api/mr-authors` with `op: add` therefore clears the 
 (`store.clear_gitlab_watermark`) to force a full-window crawl **and starts that crawl immediately**
 as a background task, returning `recrawl_queued: true` so the page can say so.
 
-Starting it matters. The poller's default interval is `DARKSTAR_GITLAB_INTERVAL_SECONDS = 86400`,
+What forces the full crawl is a **monotonic roster version**, not the watermark. Every add bumps
+`version` in `darkstar_mr_authors.json`; a crawl reads the roster once at the start and records
+*that* version when it finishes. An author added while a crawl is in flight therefore leaves
+`version` ahead of what was recorded, so the next crawl is full and picks them up.
+
+Recording the version at the *end* instead would be the bug: the crawl would stamp a version it
+never actually crawled, the next crawl would go incremental, and the second author's existing merge
+requests would never be fetched — silently, permanently, with no error anywhere. `_sync_scopes`
+takes the roster as an argument rather than re-reading it for the same reason.
+
+Starting it promptly matters too. The poller's default interval is `DARKSTAR_GITLAB_INTERVAL_SECONDS = 86400`,
 so clearing the watermark alone meant a newly added author's merge requests might not appear for a
 day — from the dashboard that is indistinguishable from the add having failed. The crawl is
 serialized against the poller by the same `_write_lock`, and a failure is logged rather than

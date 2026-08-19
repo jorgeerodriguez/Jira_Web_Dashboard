@@ -61,14 +61,14 @@ def test_a_malformed_since_is_rejected_not_ignored(monkeypatch, tmp_path):
     assert res.status_code == 400 and "YYYY-MM-DD" in res.json()["detail"]
 
 
-def test_adding_an_author_clears_the_gitlab_watermark(monkeypatch, tmp_path):
-    """The API must queue the re-crawl, or the added author's table row stays empty forever."""
+def test_adding_an_author_bumps_the_roster_version(monkeypatch, tmp_path):
+    """The version, not the watermark, is what forces the next crawl to cover the full window."""
     client, conn = _client(monkeypatch, tmp_path, "a.duckdb")
-    store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
+    monkeypatch.setattr(app_module, "_run_gitlab_cycle", lambda: None)
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person",
                                                "display_name": "New Person"})
     assert res.status_code == 200 and res.json()["recrawl_queued"] is True
-    assert store.get_gitlab_watermark(conn) is None
+    assert client.get("/api/mr-authors").json()["version"] == 1
 
 
 def test_hiding_an_author_does_not_clear_the_watermark(monkeypatch, tmp_path):
@@ -143,8 +143,7 @@ def test_adding_an_author_starts_the_crawl_immediately(monkeypatch, tmp_path):
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person",
                                                "display_name": "New Person"})
     assert res.status_code == 200 and res.json()["recrawl_queued"] is True
-    assert store.get_gitlab_watermark(conn) is None      # next crawl is a full one
-    assert calls == ["crawled"]                          # ...and it already ran
+    assert calls == ["crawled"]                          # the crawl already ran
 
 
 def test_hiding_an_author_does_not_start_a_crawl(monkeypatch, tmp_path):

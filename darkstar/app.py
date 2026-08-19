@@ -282,9 +282,10 @@ def api_mr_authors() -> JSONResponse:
 def set_mr_authors(payload: dict, background: BackgroundTasks) -> JSONResponse:
     """Add/remove a tracked GitLab author, or hide/show one; returns the updated roster.
 
-    Adding forces a full GitLab crawl and starts it immediately: an incremental pull only returns
-    MRs updated since the watermark, so a newly tracked author's history would never arrive, and
-    waiting for the next scheduled poll meant up to 24 hours of the author simply not appearing.
+    Adding bumps the roster version, which forces the next crawl to cover the full window, and
+    starts that crawl immediately: an incremental pull only returns MRs updated since the
+    watermark, so a newly tracked author's history would never arrive, and waiting for the next
+    scheduled poll meant up to 24 hours of the author simply not appearing.
     """
     op = payload.get("op")
     username, display_name = payload.get("username", ""), payload.get("display_name", "")
@@ -303,8 +304,9 @@ def set_mr_authors(payload: dict, background: BackgroundTasks) -> JSONResponse:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if needs_recrawl:
-        with _write_lock:
-            store.clear_gitlab_watermark(_db())
+        # mr_authors.apply already bumped the roster version, which is what forces the next crawl
+        # to be a full one — including the crawl started here, and any crawl that follows it if a
+        # second author is added while this one runs. The watermark is deliberately left alone.
         background.add_task(_recrawl_now)
-        logger.info("mr-author %s added; watermark cleared and a full re-crawl started", username)
+        logger.info("mr-author %s added; roster version bumped and a full re-crawl started", username)
     return JSONResponse({**roster, "recrawl_queued": needs_recrawl})

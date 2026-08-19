@@ -191,8 +191,9 @@ CREATE TABLE IF NOT EXISTS mr_files (
 );
 
 CREATE TABLE IF NOT EXISTS gitlab_sync_meta (
-    id        INTEGER PRIMARY KEY,
-    last_sync TIMESTAMP
+    id             INTEGER PRIMARY KEY,
+    last_sync      TIMESTAMP,
+    roster_version INTEGER
 );
 """
 
@@ -215,6 +216,7 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS labels VARCHAR[]")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS description VARCHAR")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS events_fetched_at TIMESTAMP")
+    connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
     logger.debug("schema initialized")
 
 
@@ -322,6 +324,20 @@ def get_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> datetime | No
     """Return the last successful GitLab sync time, or None if never crawled (→ full window)."""
     row = connection.execute("SELECT last_sync FROM gitlab_sync_meta WHERE id = 1").fetchone()
     return row[0] if row else None
+
+
+def get_roster_version(connection: duckdb.DuckDBPyConnection) -> int:
+    """The MR-author roster version the last successful crawl was built from (0 if never)."""
+    row = connection.execute("SELECT roster_version FROM gitlab_sync_meta WHERE id = 1").fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def set_roster_version(connection: duckdb.DuckDBPyConnection, version: int) -> None:
+    """Record the roster version a crawl was built from, without disturbing the watermark."""
+    connection.execute(
+        "INSERT INTO gitlab_sync_meta (id, last_sync, roster_version) VALUES (1, NULL, ?) "
+        "ON CONFLICT (id) DO UPDATE SET roster_version = excluded.roster_version", [version]
+    )
 
 
 def clear_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> None:
