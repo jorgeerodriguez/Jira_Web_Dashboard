@@ -9,6 +9,12 @@
     --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
     --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
     --pos:#41c98a; --neg:#f2705f;
+    /* Three surfaces, not one: --head reads as raised (a panel's title bar), --well as recessed (the
+       thing holding a number). Everything used to sit on --panel, so a score card had nothing but a
+       1px border separating it from its own container. */
+    --head:#202836; --well:#151b25;
+    /* One accent, taken from the chart palette so it is already in the page's vocabulary. */
+    --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
@@ -29,7 +35,7 @@
     border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
     padding:clamp(22px,4vw,44px);
   }
-  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:0 0 12px}
   h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
   .dek{color:var(--ink2); font-size:16px; margin:0; max-width:66ch}
 
@@ -78,9 +84,10 @@
   .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
   .whisk{stroke-width:1.25; opacity:.55}
 
-  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:38px 0 6px}
+  h2{font-size:14px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.085em; color:var(--ink); font-weight:700; margin:38px 0 6px}
   .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:70ch}
-  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--panel)}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--well);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
   .stat .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
   .stat .v{font-family:var(--mono); font-size:29px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
   .stat .s{font-size:12px; color:var(--ink2); margin-top:3px}
@@ -94,7 +101,10 @@
   caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
   th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+        color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line2); padding-bottom:9px}
+  tbody tr{transition:background .12s}
+  tbody tr:hover td{background:rgba(255,255,255,.03)}
   tbody td{border-bottom:1px solid var(--line)}
   td.num{font-family:var(--mono)}
   tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
@@ -103,7 +113,8 @@
   .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
 
   .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
-  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--panel)}
+  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--well);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
   .fc .who{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px}
   .fc .dot-badge{width:9px; height:9px; border-radius:50%}
   .fc .big{font-family:var(--mono); font-size:28px; font-weight:600; letter-spacing:-.02em; margin:6px 0 1px; font-variant-numeric:tabular-nums}

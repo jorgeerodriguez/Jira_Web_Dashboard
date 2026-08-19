@@ -87,6 +87,30 @@ was mostly text otherwise. Dynamic status stays visible: a crawl still owed, row
 measured, mixed-environment exclusions, the result of adding an author. The derivation notes at the
 foot are a `<details>` collapsed by default.
 
+## Visual hierarchy
+
+The page reported as reading flat, and the cause was measurable rather than a matter of taste:
+
+- `h2` and `h3` were 13px and 12px, both `--muted` at weight 600 — one pixel apart and identical in
+  every other respect. A panel title was painted the *dimmest* ink on the page, the same colour as
+  captions, hints and explainer prose. `h2` is now 14px in `--ink` at weight 700; `h3` is 11px and
+  stays `--muted`, so the tiers separate on size, weight and brightness at once.
+- `.stat`, `.fc` and `.panel` all used `var(--panel)`, so a score card sitting inside a panel had a
+  1px border and nothing else dividing it from its own container. There are now three surfaces:
+  `--panel`, `--head` (raised — a panel's title bar) and `--well` (recessed — anything holding a
+  number).
+- Panel titles are now bars rather than floating text: `.panel > h2` reaches back out through the
+  panel's padding with negative margins and carries `--head` plus a bottom hairline.
+- One accent (`--accent`, the `#5b9dff` already in the chart palette and already named `--blue` on
+  two pages) marks only where the eye should land first: panel disclosure triangles, the eyebrow,
+  focus rings, and the share bars in tables.
+
+All five dashboards duplicate their own `<style>` and `:root`, so each of these had to be applied
+five times, and two pages' token blocks had already diverged. `test_app_slas_route.py` pins the type
+scale, the card surfaces, and that **no page references a token it does not declare** — a CSS
+variable with no value fails silently, so nothing else would surface it. Extracting one shared
+stylesheet is the real fix and is not done here.
+
 ## How a number gets made
 
 1. **Jira poller** (`ingest.py`) — one full crawl, then incremental by `updated` watermark, plus

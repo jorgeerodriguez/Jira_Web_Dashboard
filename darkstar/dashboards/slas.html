@@ -9,6 +9,13 @@
     --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
     --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
     --pos:#41c98a; --neg:#f2705f;
+    /* Three surfaces, not one. Everything used to sit on --panel, so a score card inside a panel had
+       nothing but a 1px border to separate it from its own container. --head reads as raised (the
+       panel's title bar), --well as recessed (the thing holding a number). */
+    --head:#202836; --well:#151b25;
+    /* One accent, taken from the chart palette so it is already in the page's vocabulary. Used only
+       where the eye should land first: panel disclosure markers and the focused control. */
+    --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
@@ -29,11 +36,14 @@
     border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
     padding:clamp(22px,4vw,44px);
   }
-  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+        color:var(--accent); margin:0 0 12px}
   h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
   .dek{color:var(--ink2); font-size:16px; margin:0; max-width:66ch}
 
-  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 4px}
+  /* The lookback drives every panel, so it reads as a toolbar rather than as loose inputs. */
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 22px;
+        background:var(--well); border:1px solid var(--line); border-radius:11px; padding:12px 14px}
   .controls .lbl{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-right:2px}
   .chip{
     display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
@@ -81,10 +91,16 @@
   .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
   .whisk{stroke-width:1.25; opacity:.55}
 
-  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:38px 0 6px}
-  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--panel)}
-  .stat .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
-  .stat .v{font-family:var(--mono); font-size:29px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
+  /* Panel titles are the brightest, largest mono on the page; sub-headings stay small and dim. They
+     were 13px/12px both in --muted at weight 600, which is why nothing read as a heading. */
+  h2{font-size:14px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.085em;
+     color:var(--ink); font-weight:700; margin:38px 0 6px}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--well);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.025); transition:border-color .15s}
+  .stat:hover{border-color:var(--line2)}
+  .stat .k{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted)}
+  .stat .v{font-family:var(--mono); font-size:30px; font-weight:600; letter-spacing:-.025em; color:var(--ink);
+        margin-top:5px; line-height:1.05; font-variant-numeric:tabular-nums}
   .stat .s{font-size:12px; color:var(--ink2); margin-top:3px}
   .stat .s.pos{color:var(--pos)} .stat .s.neg{color:var(--neg)}
   .tbar-val{font-family:var(--mono); font-size:13px; font-weight:600; fill:var(--ink)}
@@ -96,8 +112,17 @@
   caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
   th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+        color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line2); padding-bottom:9px}
   tbody td{border-bottom:1px solid var(--line)}
+  /* Wide rows of tabular numbers are hard to track across; a hover band does the work a zebra
+     stripe would without adding permanent noise. */
+  tbody tr{transition:background .12s}
+  tbody tr:hover td{background:rgba(255,255,255,.03)}
+  tbody tr:last-child td{border-bottom:none}
+  /* The first column is the row's identity (a week, an author), so it carries more weight than the
+     numbers it labels. */
+  tbody td:first-child{color:var(--ink); font-weight:560}
   td.num{font-family:var(--mono)}
   tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
   tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
@@ -105,7 +130,8 @@
   .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
 
   .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
-  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--panel)}
+  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--well);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
   .fc .who{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px}
   .fc .dot-badge{width:9px; height:9px; border-radius:50%}
   .fc .big{font-family:var(--mono); font-size:28px; font-weight:600; letter-spacing:-.02em; margin:6px 0 1px; font-variant-numeric:tabular-nums}
@@ -120,16 +146,23 @@
   .foot[open] summary{margin-bottom:4px}
   .foot b{color:var(--ink2); font-weight:600}
   .foot code{font-family:var(--mono); color:var(--ink2)}
-  h3{font-size:12px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.1em;
+  h3{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.13em;
      color:var(--muted); font-weight:600; margin:26px 0 8px}
   h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
-  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--muted); transition:transform .18s; transform:translateY(-1px)}
+  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--accent);
+        transition:transform .18s; transform:translateY(-1px)}
   h2.collapsible[aria-expanded="true"]::before{transform:translateY(-1px) rotate(90deg)}
-  h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
-  h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
+  h2.collapsible:hover{color:#fff}
+  h2.collapsible:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:5px}
   .sec-hidden{display:none !important}
-  .panel{border:1px solid var(--line); border-radius:12px; padding:4px 20px 18px; background:var(--panel)}
-  .panel h2{margin-top:24px}
+  .panel{border:1px solid var(--line); border-radius:12px; padding:0 20px 18px; background:var(--panel);
+         box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 18px 40px -30px rgba(0,0,0,.8);
+         transition:border-color .15s}
+  .panel:hover{border-color:var(--line2)}
+  /* The title becomes a bar spanning the panel: negative margins reach back out through the panel's
+     own padding, and the radius matches the panel minus its 1px border. */
+  .panel > h2{margin:0 -20px 14px; padding:13px 20px; background:var(--head);
+              border-bottom:1px solid var(--line); border-radius:11px 11px 0 0}
   /* One collapsed explainer per panel instead of a standing wall of prose. */
   .note{margin:0 0 12px}
   .note summary{cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase;
@@ -145,7 +178,7 @@
      and the daily chart — span both. */
   /* No align-items:start — grid's default stretch is what makes two panels in a row match height.
      The panel is a flex column so its table takes the slack rather than leaving a gap. */
-  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px}
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:22px}
   .panel{min-width:0; display:flex; flex-direction:column}
   .panel > .tbl-wrap:last-child{flex:1}
   .panel.wide{grid-column:1 / -1}
@@ -155,6 +188,9 @@
   .controls [hidden]{display:none}
   .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
           text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
+  .filter select{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 10px; text-transform:none}
+  .filter select:focus-visible,.filter input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
   .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
           border:1px solid var(--line2); border-radius:8px; padding:6px 11px; min-width:220px; text-transform:none;
           letter-spacing:0}
@@ -182,7 +218,8 @@
   .rowx:hover{color:var(--neg)}
   .swatch{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px;
         vertical-align:baseline}
-  .bar{display:block; height:8px; border-radius:2px; background:var(--ink2); opacity:.55; min-width:1px}
+  .bar{display:block; height:7px; border-radius:999px; min-width:2px;
+       background:linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent))}
   td.barcell{width:38%; padding-left:14px}
   .mini{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:7px}
 </style>

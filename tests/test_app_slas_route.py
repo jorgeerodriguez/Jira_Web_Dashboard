@@ -272,3 +272,52 @@ def test_the_first_load_runs_after_every_listener_is_wired(monkeypatch, tmp_path
     # between the load and the wiring. With the load last, there is no "between" left.
     assert init.rindex("await reload()") > init.rindex('addEventListener("click"'), \
         "the first reload must come after the last listener init() attaches"
+
+
+def test_no_dashboard_uses_a_css_token_it_never_declares(monkeypatch, tmp_path):
+    """Each page carries its own copy of :root, so a token added to one is missing from the others.
+
+    Propagating the surface tokens hit exactly this: two pages' :root blocks had diverged, so they
+    referenced var(--well) and var(--accent) without declaring them. A CSS variable with no value
+    fails silently — the colour just does not apply — so nothing surfaces it but a check like this.
+    """
+    import pathlib
+    import re
+    pages = sorted(pathlib.Path("darkstar/dashboards").glob("*.html"))
+    assert pages, "no dashboards found"
+    for page in pages:
+        css = page.read_text()
+        css = css[css.index("<style>") + 7:css.index("</style>")]
+        # --c is assigned per element inline by the chip renderer, never in :root.
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", css)) - {"--c"}
+        declared = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+        assert not (used - declared), f"{page.name} uses undeclared {sorted(used - declared)}"
+
+
+def test_panel_headings_outrank_sub_headings(monkeypatch, tmp_path):
+    """They were 13px and 12px, both --muted at weight 600 — one pixel apart and nothing else.
+
+    That is what made the page read flat: a panel title was painted the dimmest ink available, the
+    same as captions and hints. The scale only works if h2 is brighter AND larger than h3.
+    """
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "type.duckdb")
+    css = page[page.index("<style>") + 7:page.index("</style>")]
+    h2 = re.search(r"\bh2\{([^}]*)\}", css).group(1)
+    h3 = re.search(r"\bh3\{([^}]*)\}", css).group(1)
+    h2_size = float(re.search(r"font-size:([\d.]+)px", h2).group(1))
+    h3_size = float(re.search(r"font-size:([\d.]+)px", h3).group(1))
+    assert h2_size > h3_size, f"h2 ({h2_size}px) must be larger than h3 ({h3_size}px)"
+    assert "var(--ink)" in h2, "a panel title must use the brightest ink, not --muted"
+    assert "var(--muted)" in h3, "a sub-heading should stay dim so the tiers separate"
+
+
+def test_score_cards_do_not_share_a_surface_with_the_panel_holding_them(monkeypatch, tmp_path):
+    """.stat, .fc and .panel all used var(--panel), leaving a 1px border as the only separation."""
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "surf.duckdb")
+    css = page[page.index("<style>") + 7:page.index("</style>")]
+    for selector in (r"\.stat\{", r"\.fc\{"):
+        rule = re.search(selector + r"([^}]*)\}", css).group(1)
+        assert "var(--well)" in rule, f"{selector} must sit on the recessed surface"
+        assert "background:var(--panel)" not in rule
