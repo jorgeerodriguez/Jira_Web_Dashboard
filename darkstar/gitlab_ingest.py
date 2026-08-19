@@ -45,6 +45,30 @@ def _token() -> str:
     return token
 
 
+def search_members(query: str, limit: int) -> list[dict]:
+    """GitLab users in the PE groups matching `query`, for the dashboard's author picker.
+
+    Without this the author field is a bare text box: you have to already know the exact GitLab
+    username, and anything else — an email address, a display name — is accepted and silently
+    matches no merge requests at all. Searching the groups keeps the picker to people who could
+    plausibly have MRs in the store.
+    """
+    session = requests.Session()
+    session.headers["PRIVATE-TOKEN"] = _token()
+    seen: dict[str, dict] = {}
+    for group_id in _PE_GROUP_IDS:
+        response = session.get(
+            f"{_API}/groups/{group_id}/members/all",
+            params={"query": query, "per_page": limit}, timeout=_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        for member in response.json():
+            username = member.get("username")
+            if username and username not in seen:
+                seen[username] = {"username": username, "name": member.get("name") or username}
+    return sorted(seen.values(), key=lambda m: m["username"])[:limit]
+
+
 def _to_naive_utc(value: str) -> datetime:
     """Parse a GitLab ISO-8601 timestamp ('...Z' or offset) to a naive-UTC datetime."""
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
