@@ -73,8 +73,8 @@ class MergeRequestEventRow:
 
     Stored as events rather than as a derived duration so the business-hour rules can change
     without a re-crawl, and so an MR that toggles draft->ready more than once is representable.
-    kind is "ready", "draft", or "review" (the first human, non-bot comment by someone other than
-    the author).
+    kind is "ready", "draft", "review" (first human non-bot comment by someone other than the
+    author) or "approval" (first approval by someone other than the author).
     """
 
     mr_id: int
@@ -96,6 +96,9 @@ class MergeRequestRow:
     merged_at: datetime
     labels: list[str]
     web_url: str
+    # GitLab username of whoever pressed merge, or "" when GitLab reports none. Never NULL once
+    # crawled, so NULL strictly means "predates this column" and the backfill terminates.
+    merged_by: str
     fetched_at: datetime
     # When the MR's notes were last read for draft/ready/review events. Distinct from having any
     # events: an MR that was never a draft and drew no comments legitimately has none, so absence
@@ -118,7 +121,8 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
     "id", "project_path", "iid", "author_account_id", "title",
-    "opened_at", "merged_at", "labels", "web_url", "fetched_at", "events_fetched_at", "description",
+    "opened_at", "merged_at", "labels", "web_url", "merged_by", "fetched_at", "events_fetched_at",
+    "description",
 )
 
 _SCHEMA_SQL: str = """
@@ -172,6 +176,7 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     merged_at         TIMESTAMP NOT NULL,
     labels            VARCHAR[] NOT NULL,
     web_url           VARCHAR NOT NULL,
+    merged_by         VARCHAR NOT NULL,
     fetched_at        TIMESTAMP NOT NULL,
     events_fetched_at TIMESTAMP NOT NULL,
     description       VARCHAR NOT NULL
@@ -217,6 +222,7 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS description VARCHAR")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS events_fetched_at TIMESTAMP")
     connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
     logger.debug("schema initialized")
 
 

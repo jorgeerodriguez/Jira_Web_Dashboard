@@ -70,6 +70,29 @@ def default_window_start(now: datetime) -> datetime:
     return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
 
 
+def first_review_at(events: list[tuple[str, datetime]], merged_at: datetime,
+                    author_is_merger: bool) -> datetime | None:
+    """When someone other than the author first engaged with the MR, or None if nobody did.
+
+    Three signals, earliest wins, because PE's workflow produces different evidence depending on
+    who raised the MR:
+
+      comment   a human other than the author said something.
+      approval  a colleague approved it. PE engineers merge their OWN work once another engineer
+                approves, so for PE-authored MRs this is the review — the merge that follows is
+                just the mechanic. Counting comments alone measured conversation, not review.
+      merge     someone other than the author merged it. Requests from outside PE cannot be merged
+                by the requester, so for that work the merge itself IS PE's review action.
+
+    A self-merge is deliberately NOT a signal on its own: it is normal for PE and says nothing
+    about whether anyone looked.
+    """
+    candidates = [when for kind, when in events if kind in ("review", "approval")]
+    if not author_is_merger:
+        candidates.append(merged_at)
+    return min(candidates) if candidates else None
+
+
 def _matches(name: str, terms: list[str]) -> bool:
     """True if no filter is set, or any term is a substring of the name (case-insensitive)."""
     return not terms or any(term in name.lower() for term in terms)
@@ -145,9 +168,9 @@ def mr_turnaround_report(
     review_waits: list[float] = []
     reviewed = 0
     mixed = 0
-    for mr_id, account_id, project_path, opened_at, merged_at in connection.execute(
-        "SELECT id, author_account_id, project_path, opened_at, merged_at FROM merge_requests "
-        "WHERE merged_at >= ? AND opened_at IS NOT NULL",
+    for mr_id, account_id, project_path, opened_at, merged_at, merged_by in connection.execute(
+        "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by "
+        "FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
         [since],
     ).fetchall():
         name = names.get(account_id)
@@ -163,7 +186,11 @@ def mr_turnaround_report(
             continue
         events = events_by_mr.get(mr_id, [])
         hours = ready_hours(opened_at, merged_at, events)
-        review_at = next((when for kind, when in events if kind == "review"), None)
+        # merged_by holds a GitLab username; account_id is the Jira accountId for roster members,
+        # so compare on the username the ingest attributed the MR under where it has one.
+        # An unknown merger counts as a self-merge: absence of evidence is not review.
+        author_is_merger = (not merged_by) or merged_by == account_id
+        review_at = first_review_at(events, merged_at, author_is_merger)
         if review_at is not None:
             reviewed += 1
             review_waits.append(ready_hours(opened_at, min(review_at, merged_at), events))

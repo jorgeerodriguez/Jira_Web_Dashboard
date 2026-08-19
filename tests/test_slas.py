@@ -24,7 +24,7 @@ def _mr(id, key, labels, opened, merged, description=""):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"{key} do a thing", opened_at=opened, merged_at=merged, labels=labels,
-        web_url="u", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
+        web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
 
 
 def _seed():

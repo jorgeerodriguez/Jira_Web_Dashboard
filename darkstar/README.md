@@ -67,6 +67,22 @@ PE merges them, so for that work the merge itself is the review action.
 This is why review engagement cannot be read from comments alone: on the crawled sample 111 of 124
 MRs carried an approval while only 23 drew a human comment.
 
+**Time to first review** therefore takes the earliest of three signals
+(`mrflow.first_review_at`):
+
+| signal | what it means |
+|---|---|
+| comment | a human other than the author said something |
+| approval | a colleague approved — the review for PE-authored MRs, since the self-merge follows it |
+| merge by another | someone else pressed merge — the review for externally-raised MRs, which the requester cannot merge |
+
+A **self-merge is not a signal on its own**: it is normal for PE and says nothing about whether
+anyone looked. An **unknown merger** counts as a self-merge — absence of evidence is not review.
+
+Counting comments alone covered 23 of 124 sampled MRs and reported a p90 of 5.4h; all three
+signals cover 114 of 124 and report 22.7h, because the comment-only sample was the chatty, fast
+minority.
+
 ## The turnaround clock
 
 Turnaround used to be raw calendar elapsed time, which is what made a request filed at 16:00 and
