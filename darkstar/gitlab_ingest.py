@@ -118,6 +118,7 @@ _BOT_SUFFIXES: tuple[str, ...] = ("_bot", "-bot", "bot")
 
 _READY_NOTE: str = "as **ready**"
 _DRAFT_NOTE: str = "as **draft**"
+_APPROVAL_NOTE: str = "approved this merge request"
 
 
 def _is_bot(username: str) -> bool:
@@ -146,6 +147,7 @@ def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[stor
     """
     events: list[tuple[str, datetime]] = []
     review_at: datetime | None = None
+    approval_at: datetime | None = None
     for note in notes:
         username = ((note.get("author") or {}).get("username")) or ""
         created = _to_naive_utc(note["created_at"])
@@ -155,6 +157,13 @@ def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[stor
                 events.append(("ready", created))
             elif _DRAFT_NOTE in body:
                 events.append(("draft", created))
+            elif (_APPROVAL_NOTE in body and username != author_username
+                  and not _is_bot(username)):
+                # An approval IS the review. PE merges its own work once a colleague approves, so
+                # counting comments alone measured conversation, not review: on the crawled sample
+                # 111 of 124 MRs carried an approval and only 23 drew a comment.
+                if approval_at is None or created < approval_at:
+                    approval_at = created
             continue
         if _is_bot(username) or username == author_username:
             continue
@@ -162,6 +171,8 @@ def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[stor
             review_at = created
     if review_at is not None:
         events.append(("review", review_at))
+    if approval_at is not None:
+        events.append(("approval", approval_at))
     events.sort(key=lambda pair: pair[1])
     return [store.MergeRequestEventRow(mr_id=mr_id, kind=kind, happened_at=when, seq=i)
             for i, (kind, when) in enumerate(events)]
@@ -184,7 +195,7 @@ def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> 
     missing = connection.execute(
         "SELECT count(*) FROM merge_requests "
         "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
-        "  OR events_fetched_at IS NULL)", [cutoff]
+        "  OR events_fetched_at IS NULL OR merged_by IS NULL)", [cutoff]
     ).fetchone()[0]
     if missing:
         logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
@@ -291,6 +302,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 merged_at=merged_naive,
                 labels=list(mr.get("labels") or []),
                 web_url=mr.get("web_url") or "",
+                merged_by=((mr.get("merged_by") or {}).get("username")) or "",
                 fetched_at=fetched_at,
                 events_fetched_at=fetched_at,
                 description=mr.get("description") or "",

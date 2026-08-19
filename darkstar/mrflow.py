@@ -39,7 +39,7 @@ from datetime import datetime
 
 import duckdb
 
-from darkstar.gitlab_domains import environment_of
+from darkstar.gitlab_domains import MIXED_ENVIRONMENT, OTHER_ENVIRONMENT, environment_of
 from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
@@ -68,6 +68,29 @@ def _stats(business: list[float]) -> dict:
 def default_window_start(now: datetime) -> datetime:
     """The window this view uses unless the page overrides it: six months, floored at the epoch."""
     return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
+
+
+def first_review_at(events: list[tuple[str, datetime]], merged_at: datetime,
+                    author_is_merger: bool) -> datetime | None:
+    """When someone other than the author first engaged with the MR, or None if nobody did.
+
+    Three signals, earliest wins, because PE's workflow produces different evidence depending on
+    who raised the MR:
+
+      comment   a human other than the author said something.
+      approval  a colleague approved it. PE engineers merge their OWN work once another engineer
+                approves, so for PE-authored MRs this is the review — the merge that follows is
+                just the mechanic. Counting comments alone measured conversation, not review.
+      merge     someone other than the author merged it. Requests from outside PE cannot be merged
+                by the requester, so for that work the merge itself IS PE's review action.
+
+    A self-merge is deliberately NOT a signal on its own: it is normal for PE and says nothing
+    about whether anyone looked.
+    """
+    candidates = [when for kind, when in events if kind in ("review", "approval")]
+    if not author_is_merger:
+        candidates.append(merged_at)
+    return min(candidates) if candidates else None
 
 
 def _matches(name: str, terms: list[str]) -> bool:
@@ -108,6 +131,23 @@ def mr_turnaround_report(
     hidden = set(roster.get("hidden") or [])
     # One pass, two cuts: keep (account, merged-day, hours) per MR so the per-author and per-day
     # views are guaranteed to describe exactly the same population.
+    # Changed paths are only needed where the repo name says nothing, so fetch them for that
+    # subset rather than loading every path row on every request.
+    unnamed = [
+        mr_id for mr_id, project_path in connection.execute(
+            "SELECT id, project_path FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
+            [since],
+        ).fetchall()
+        if environment_of(project_path, []) == OTHER_ENVIRONMENT
+    ]
+    paths_by_mr: dict[int, list[str]] = {}
+    if unnamed:
+        placeholders = ", ".join(["?"] * len(unnamed))
+        for mr_id, path in connection.execute(
+            f"SELECT mr_id, path FROM mr_files WHERE mr_id IN ({placeholders})", unnamed
+        ).fetchall():
+            paths_by_mr.setdefault(mr_id, []).append(path)
+
     events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
     for mr_id, kind, happened_at in connection.execute(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
@@ -127,19 +167,30 @@ def mr_turnaround_report(
     by_author_day: dict[str, dict[str, list[float]]] = {}
     review_waits: list[float] = []
     reviewed = 0
-    for mr_id, account_id, project_path, opened_at, merged_at in connection.execute(
-        "SELECT id, author_account_id, project_path, opened_at, merged_at FROM merge_requests "
-        "WHERE merged_at >= ? AND opened_at IS NOT NULL",
+    mixed = 0
+    for mr_id, account_id, project_path, opened_at, merged_at, merged_by in connection.execute(
+        "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by "
+        "FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
         [since],
     ).fetchall():
         name = names.get(account_id)
         if name is None or name in hidden or not _matches(name, name_filter):
             continue
-        if environment != _ALL_ENVIRONMENTS and environment_of(project_path) != environment:
+        env = environment_of(project_path, paths_by_mr.get(mr_id, []))
+        if env == MIXED_ENVIRONMENT:
+            # An MR spanning both trees belongs to neither bucket; counted, never folded in.
+            mixed += 1
+            if environment != _ALL_ENVIRONMENTS:
+                continue
+        elif environment != _ALL_ENVIRONMENTS and env != environment:
             continue
         events = events_by_mr.get(mr_id, [])
         hours = ready_hours(opened_at, merged_at, events)
-        review_at = next((when for kind, when in events if kind == "review"), None)
+        # merged_by holds a GitLab username; account_id is the Jira accountId for roster members,
+        # so compare on the username the ingest attributed the MR under where it has one.
+        # An unknown merger counts as a self-merge: absence of evidence is not review.
+        author_is_merger = (not merged_by) or merged_by == account_id
+        review_at = first_review_at(events, merged_at, author_is_merger)
         if review_at is not None:
             reviewed += 1
             review_waits.append(ready_hours(opened_at, min(review_at, merged_at), events))
@@ -188,6 +239,7 @@ def mr_turnaround_report(
         "filter": name_filter,
         "environment": environment,
         "crawl": crawl_state(connection, roster),
+        "mixed": mixed,
         "incomplete": int(incomplete or 0),
         "earliest_measurable": earliest_measurable.date().isoformat() if earliest_measurable else None,
         # Time to the first human review comment (bots and the author's own notes excluded at

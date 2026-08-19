@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 
 import duckdb
 
+from darkstar.mrflow import first_review_at
 from darkstar.metrics import (
     BUSINESS_TZ,
     DELIVERY_TYPES,
@@ -230,9 +231,9 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
     mr_by_key: dict[str, dict] = {}
-    for mr_id, title, opened_at, merged_at, mr_labels, description in connection.execute(
-        "SELECT id, title, opened_at, merged_at, labels, description FROM merge_requests "
-        "WHERE merged_at >= ? ORDER BY id",
+    for mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by in connection.execute(
+        "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by "
+        "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
         match = _KEY_RE.search(title or "")
@@ -251,7 +252,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         if entry["review_hours"] is None and opened_at and merged_at:
             events = events_by_mr.get(mr_id, [])
             entry["review_hours"] = ready_hours(opened_at, merged_at, events)
-            review_at = next((when for kind, when in events if kind == "review"), None)
+            author_is_merger = (not merged_by) or merged_by == author_account_id
+            review_at = first_review_at(events, merged_at, author_is_merger)
             if review_at is not None:
                 entry["first_review_hours"] = ready_hours(opened_at, min(review_at, merged_at), events)
 
@@ -348,7 +350,17 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         year, mon = month
         return (year - 1, 12) if mon == 1 else (year, mon - 1)
 
+    def _month_start(month: tuple[int, int]) -> datetime:
+        """Naive-UTC first instant of a business-tz month."""
+        return (datetime(month[0], month[1], 1, tzinfo=BUSINESS_TZ)
+                .astimezone(timezone.utc).replace(tzinfo=None))
+
     this_month = business_month(now)
+    previous_month = _prev(this_month)
+    # Only compare against last month if the window actually covers the whole of it. Counting from
+    # a window that opens mid-comparison reports "up from 0" — a fact about the lookback, not the
+    # team, and one that renders as spectacular growth.
+    previous_comparable = since <= _month_start(previous_month)
     headline = {
         # Share of ALL delivered PE work in the window that came through self-service. Self-
         # normalising: filing more requests cannot flatter it, because the denominator grows too.
@@ -361,7 +373,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "ai_delivered": delivered_ai_generated,
         # Adoption. A share without its volume is unreadable -- 53% of 5 is not 53% of 172.
         "requests_this_month": created_by_month.get(this_month, 0),
-        "requests_prev_month": created_by_month.get(_prev(this_month), 0),
+        "requests_prev_month": created_by_month.get(previous_month, 0) if previous_comparable else None,
         # The value proposition, both sides measured on the same business clock.
         "self_service_median_hours": round(statistics.median(self_service_hours), 1) if self_service_hours else None,
         "other_median_hours": round(statistics.median(other_hours), 1) if other_hours else None,

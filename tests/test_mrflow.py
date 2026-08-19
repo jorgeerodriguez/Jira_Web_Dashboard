@@ -20,7 +20,7 @@ def _mr(id, account_id, opened, merged):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
-        web_url="u", fetched_at=_NOW, events_fetched_at=_NOW, description="")
+        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="")
 
 
 def _report(conn, roster=None, name_filter=None, environment="all"):
@@ -256,7 +256,7 @@ def _mr_in(id, account_id, project_path, opened, merged):
     return store.MergeRequestRow(
         id=id, project_path=project_path, iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
-        web_url="u", fetched_at=_NOW, events_fetched_at=_NOW, description="")
+        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="")
 
 
 def test_environment_filter_splits_prod_from_nonprod():
@@ -371,3 +371,54 @@ def test_a_roster_member_re_added_is_not_split_into_two_rows():
     added = {"audacy-adam.shero": "Adam Shero"}
     attributable = {**{u: u for u in added}, **MR_AUTHORS}
     assert attributable["audacy-adam.shero"] == MR_AUTHORS["audacy-adam.shero"]  # accountId wins
+
+
+# --- environment from changed paths ------------------------------------------------------------
+
+def _mr_with_paths(conn, id, account_id, project_path, opened, merged, paths):
+    store.upsert_merge_requests(conn, [_mr_in(id, account_id, project_path, opened, merged)])
+    store.replace_mr_files(conn, [id], [(id, p) for p in paths])
+
+
+def test_paths_classify_a_repo_whose_name_says_nothing():
+    """gitops-k8s-team-a2 holds both trees, so the repo name is silent but the change is not.
+
+    This is the real case: three ST-975 cutover MRs under clusters/prod-fluxv2/.../prod/ were
+    filed as "other", hiding a production coordination delay in an unclassified bucket.
+    """
+    conn = _seed([])
+    _mr_with_paths(conn, 1, _ADAM, "audacy-inc/devops/gitops/gitops-k8s-team-a2",
+                   datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0),
+                   ["clusters/prod-fluxv2/namespaces/app/prod/wp-cms/ingress.yaml"])
+    assert _report(conn, environment="prod")["team"]["merged"] == 1
+    assert _report(conn, environment="other")["team"]["merged"] == 0
+
+
+def test_the_repo_name_beats_a_contradictory_path():
+    """A repo named -prod deploys to production whatever directory the change sits in."""
+    conn = _seed([])
+    _mr_with_paths(conn, 1, _ADAM, "audacy-inc/devops/terraform/tf-aardvark2-prod",
+                   datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0),
+                   ["some/nonprod/path.tf"])
+    assert _report(conn, environment="prod")["team"]["merged"] == 1
+    assert _report(conn, environment="nonprod")["team"]["merged"] == 0
+
+
+def test_a_change_spanning_both_trees_is_excluded_and_counted():
+    """Mixed is unexpected; folding it into either bucket would misreport that bucket."""
+    conn = _seed([])
+    _mr_with_paths(conn, 1, _ADAM, "audacy-inc/devops/gitops/gitops-k8s-team-a2",
+                   datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0),
+                   ["clusters/prod-fluxv2/x/prod/a.yaml", "clusters/nonprod-fluxv2/x/b.yaml"])
+    for env in ("prod", "nonprod", "other"):
+        assert _report(conn, environment=env)["team"]["merged"] == 0, env
+    everything = _report(conn, environment="all")
+    assert everything["team"]["merged"] == 1      # still in the unfiltered total
+    assert everything["mixed"] == 1               # ...and reported, not dropped in silence
+
+
+def test_an_mr_with_no_environment_signal_stays_other():
+    conn = _seed([])
+    _mr_with_paths(conn, 1, _ADAM, "audacy-inc/devops/pe-morning-report",
+                   datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0), ["darkstar/app.py"])
+    assert _report(conn, environment="other")["team"]["merged"] == 1

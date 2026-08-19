@@ -1,6 +1,7 @@
 from datetime import datetime
 import duckdb
 from darkstar import store, slas
+from darkstar.metrics import SELF_SERVICE_EPOCH
 
 
 def _report(conn, now):
@@ -23,7 +24,7 @@ def _mr(id, key, labels, opened, merged, description=""):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"{key} do a thing", opened_at=opened, merged_at=merged, labels=labels,
-        web_url="u", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
+        web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
 
 
 def _seed():
@@ -303,3 +304,35 @@ def test_container_issue_types_are_excluded_from_turnaround():
     bucket = _report(conn, datetime(2026, 7, 28, 12, 0, 0))["buckets"][0]
     assert bucket["volume"] == 1                      # the Feature is not a request
     assert bucket["turnaround_hours_median"] == 6.0   # not dragged toward the Feature's ~120h
+
+
+def test_last_month_is_not_reported_as_zero_when_it_is_outside_the_window():
+    """"108 this month, up from 0" was a fact about the lookback, not about the team.
+
+    created_by_month only counts issues inside the window, so a lookback starting on the 1st of
+    this month leaves last month empty by construction - and the card rendered that as growth.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-60", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-60"], [store.TransitionRow(
+        key="DEVOPS-60", to_status="Done", changed_at=datetime(2026, 8, 5, 21, 0, 0), seq=0)])
+    now = datetime(2026, 8, 18, 12, 0, 0)
+
+    # Window opens 2026-08-01: July is not in scope, so there is nothing to compare against.
+    cut = slas.window_start(now, 1, SELF_SERVICE_EPOCH)
+    assert slas.slas_report(conn, now, cut)["headline"]["requests_prev_month"] is None
+
+    # Window opens 2026-06-01: July is fully covered, so a real (here zero) count is honest.
+    cut = slas.window_start(now, 3, SELF_SERVICE_EPOCH)
+    assert slas.slas_report(conn, now, cut)["headline"]["requests_prev_month"] == 0
+
+
+def test_this_month_is_still_reported_either_way():
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-61", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-61"], [])
+    now = datetime(2026, 8, 18, 12, 0, 0)
+    head = slas.slas_report(conn, now, slas.window_start(now, 1, SELF_SERVICE_EPOCH))["headline"]
+    assert head["requests_this_month"] == 1

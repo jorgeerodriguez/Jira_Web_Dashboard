@@ -92,3 +92,43 @@ def test_draft_and_ready_system_notes_become_events():
 def test_an_mr_with_nothing_to_record_yields_no_events():
     """Which is why completeness is tracked by events_fetched_at, not by having any events."""
     assert _mr_events(1, "a", [_note("GitLabDuo", "hi", "2026-08-17T15:00:00Z")]) == []
+
+
+# -- what counts as review -----------------------------------------------------------------------
+
+def test_an_approval_is_review_even_with_no_comment():
+    """PE merges its own work once a colleague approves, so the approval IS the review.
+
+    Counting comments alone measured conversation, not review: on the crawled sample 111 of 124
+    MRs carried an approval and only 23 drew a comment.
+    """
+    notes = [_note("pavlo.myshok", "approved this merge request",
+                   "2026-08-17T17:00:00Z", system=True)]
+    events = _mr_events(1, "audacy-adam.shero", notes)
+    assert [(e.kind, e.happened_at) for e in events] == [("approval", datetime(2026, 8, 17, 17, 0))]
+
+
+def test_a_self_approval_is_not_review():
+    notes = [_note("audacy-adam.shero", "approved this merge request",
+                   "2026-08-17T17:00:00Z", system=True)]
+    assert _mr_events(1, "audacy-adam.shero", notes) == []
+
+
+def test_first_review_takes_the_earliest_of_the_three_signals():
+    from darkstar.mrflow import first_review_at
+    merged = datetime(2026, 8, 17, 23, 0)
+    comment = ("review", datetime(2026, 8, 17, 20, 0))
+    approval = ("approval", datetime(2026, 8, 17, 18, 0))
+
+    # approval precedes the comment
+    assert first_review_at([comment, approval], merged, author_is_merger=True) == approval[1]
+    # no events, but someone else merged it — that merge is the review
+    assert first_review_at([], merged, author_is_merger=False) == merged
+    # a colleague's approval still beats the later merge
+    assert first_review_at([approval], merged, author_is_merger=False) == approval[1]
+
+
+def test_a_self_merge_with_no_approval_or_comment_is_not_review():
+    """A self-merge is normal for PE and says nothing on its own about whether anyone looked."""
+    from darkstar.mrflow import first_review_at
+    assert first_review_at([], datetime(2026, 8, 17, 23, 0), author_is_merger=True) is None

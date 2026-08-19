@@ -213,7 +213,9 @@
   </div>
   <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
     name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
-    by username and an email address matches nothing. Environment is read from the repo name — <code>*-prod</code> is production,
+    by username and an email address matches nothing. Environment is read from the repo name, falling
+    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
+    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
     <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
     Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
     yet. Use <b>×</b> on a row to hide someone.</span>
@@ -264,7 +266,8 @@ const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
 function renderSuccess(h){
   const card=(k,v,sub,cls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>`+
     `<div class="s${cls?" "+cls:""}">${sub}</div></div>`;
-  const delta = h.requests_this_month - h.requests_prev_month;
+  const comparable = h.requests_prev_month != null;
+  const delta = comparable ? h.requests_this_month - h.requests_prev_month : null;
   const speed = (h.self_service_median_hours!=null && h.other_median_hours!=null)
     ? `${h.self_service_median_hours}h vs ${h.other_median_hours}h`
     : '—';
@@ -277,7 +280,9 @@ function renderSuccess(h){
          `${h.share_delivered} of ${h.share_total} delivered tickets came through a skill`+
          (h.ai_share_pct==null ? '' : ` · ${h.ai_share_pct}% were AI-written`)) +
     card("Requests this month", h.requests_this_month,
-         `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`, delta>=0?"pos":"neg") +
+         comparable ? `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`
+                    : "last month is outside the selected lookback, so there is nothing to compare",
+         comparable ? (delta>=0?"pos":"neg") : "") +
     card("Self-service speed", speed, factor) +
     card("Time to first review", review,
          h.first_review_reviewed
@@ -494,6 +499,9 @@ function renderDailyChart(d){
        <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
      </svg>
      <div class="chips" id="dailyLegend">${legend}</div>
+     ${d.mixed ? `<p class="filter-hint">${d.mixed} merge request${d.mixed===1?"":"s"} touched both the `+
+        `production and non-production trees and ${d.mixed===1?"is":"are"} excluded from the environment `+
+        `views — a change spanning both belongs to neither.</p>` : ""}
      ${d.incomplete ? `<p class="filter-hint" style="color:var(--neg)">`+
         `${d.incomplete} merged MR${d.incomplete===1?"":"s"} in this window cannot be measured yet — `+
         `they were crawled before the ready-clock existed and have no opened time. The chart therefore `+

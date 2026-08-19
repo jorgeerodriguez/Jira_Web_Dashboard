@@ -1,30 +1,87 @@
-# darkstar — Platform Engineering Jira dashboards (v2)
+# darkstar — Platform Engineering delivery dashboards
 
-A self-contained FastAPI app that replaces the manual "Connect / Fetch" flow of the v1
-Streamlit report with an automated store the dashboards read from. It lives in this repo but
-shares no code with the Streamlit `app.py`; it has its own entrypoint and workload, and rides
-the **same container image** as pe-reports (an isolated virtualenv keeps their dependencies
-apart — see Deploy).
+## What it is
 
-## Dashboards
+A FastAPI app that answers four questions about how Platform Engineering is doing, from data it
+already has: **who should pick up the next ticket**, **when the open work will land**, **how much
+each engineer is completing**, and **how much of PE's output now comes through the self-service
+skills, and how fast**.
 
-Served as static HTML that fetch their data client-side from `/api/*` (no Jira call at request
-time — everything reads the local store):
+It is not an AI product and uses no model. Every figure is arithmetic over two sources — the Jira
+changelog and the GitLab merge-request API — pulled into a local DuckDB store by two background
+pollers. Dashboards read only that store, so a page load makes no upstream call and cannot be
+slowed or broken by Jira being slow.
 
-| Route | What |
+It replaces the manual "Connect / Fetch" flow of the v1 Streamlit report. It lives in this repo but
+shares no code with the Streamlit `app.py`; it has its own entrypoint and workload, and rides the
+**same container image** (an isolated virtualenv keeps their dependencies apart — see Deploy).
+
+## The panels, and what each is for
+
+| Route | The question it answers | Derived from |
+|---|---|---|
+| `/intake` | Who should pick up this ticket? | Open Jira tickets + per-engineer capacity + an expertise signal built from what people actually build in GitLab |
+| `/slas` | Is self-service carrying real load, and how fast does it deliver? | Jira labels + MR labels/footers, MR ready→merged times |
+| `/delivery-forecast` | When will the open Initiative and Features land? | Monte-Carlo simulation over recent completion pace |
+| `/velocity` | How much is each engineer completing per month? | Earliest Jira changelog transition to Done |
+| `/lead-time` | How long do delivered stories take, and how much of it is waiting? | Lead (created→Done) vs cycle (time in active statuses) — **hidden from the nav**, still served |
+
+`/` redirects to `/intake`; the nav lists Intake, Self-Service, Delivery Forecast, Velocity in that
+order. `/slas` keeps its route name for existing bookmarks though the page is labelled Self-Service.
+`/lead-time` is deliberately unlinked — it was not earning its place — but the route, its
+`/api/lead-time` endpoint and `leadtime.py` are untouched; restoring it means putting the
+`<a href="lead-time">` entry back in the four dashboard navs.
+
+### What the self-service page shows
+
+- **Impact cards** — share of all delivered PE work that came through a skill (with the share whose
+  code was AI-written beside it), requests this month vs last, self-service delivery speed against
+  the rest of PE delivery, and time to first review.
+- **MR turnaround by author** — ready→merged per author, slowest first, filterable by author and
+  by environment.
+- **Daily MR turnaround** — the same population cut by the day each MR merged, one coloured line
+  per author.
+
+## How a number gets made
+
+1. **Jira poller** (`ingest.py`) — one full crawl, then incremental by `updated` watermark, plus
+   each changed issue's changelog. Completion is the **earliest transition to `Done`**, not
+   `resolutiondate`, which is null on ~85% of issues.
+2. **GitLab poller** (`gitlab_ingest.py`) — merged MRs from the PE groups over a trailing window,
+   plus each MR's changed file paths and its draft/ready/review events.
+3. **Aggregation** — one module per view (`intake`, `delivery`, `velocity`, `leadtime`, `slas`,
+   `mrflow`), each reading the store and returning JSON.
+4. **Dashboards** — static HTML that fetch `/api/*` client-side.
+
+Everything is a median or a nearest-rank percentile (`metrics.pctile`) over a windowed population;
+there is no smoothing, weighting or modelling except the velocity forecast (a recency-weighted
+average of the last three complete months) and the delivery forecast (Monte Carlo).
+
+## Who merges what — and why it matters to the review metrics
+
+PE engineers **merge their own MRs once another engineer has approved**. A self-merge is therefore
+normal and is *not* evidence that nothing was reviewed — the approval is the review, and the merge
+is the mechanic. Merge requests raised from **outside PE cannot be merged by the requester**;
+PE merges them, so for that work the merge itself is the review action.
+
+This is why review engagement cannot be read from comments alone: on the crawled sample 111 of 124
+MRs carried an approval while only 23 drew a human comment.
+
+**Time to first review** therefore takes the earliest of three signals
+(`mrflow.first_review_at`):
+
+| signal | what it means |
 |---|---|
-| `/intake` | Triage queue, team capacity, and the SME suggestion matrix |
-| `/slas` | Self-service delivery: impact cards, MR turnaround by author, daily turnaround |
-| `/delivery-forecast` | Monte-Carlo burn-down for the open Initiative + Features |
-| `/velocity` | Completed delivery tickets per engineer per month (changelog-derived) |
-| `/lead-time` | Lead / cycle time for delivered stories — **hidden from the nav**, still served |
+| comment | a human other than the author said something |
+| approval | a colleague approved — the review for PE-authored MRs, since the self-merge follows it |
+| merge by another | someone else pressed merge — the review for externally-raised MRs, which the requester cannot merge |
 
-`/` redirects to `/intake` (the default landing page); the nav lists Intake, Self-Service, Delivery
-Forecast, Velocity in that order. The `/slas` route keeps its name for existing bookmarks even
-though the page is now labelled Self-Service.
-`/lead-time` is intentionally absent from the nav — it was not earning its place — but the route,
-its `/api/lead-time` endpoint and `leadtime.py` are all untouched, so restoring it is a matter of
-putting the `<a href="lead-time">` entry back in the four dashboard navs.
+A **self-merge is not a signal on its own**: it is normal for PE and says nothing about whether
+anyone looked. An **unknown merger** counts as a self-merge — absence of evidence is not review.
+
+Counting comments alone covered 23 of 124 sampled MRs and reported a p90 of 5.4h; all three
+signals cover 114 of 124 and report 22.7h, because the comment-only sample was the chatty, fast
+minority.
 
 ## The turnaround clock
 
@@ -65,6 +122,37 @@ The two views window differently, on purpose:
 - **MR turnaround (`mrflow.py`) — 6 months.** Tracked back to the epoch, because the point of that
   table is the whole self-service era, not just the current quarter.
 
+### The clock runs only while an MR is ready
+
+`opened_at → merged_at` measured the wrong thing. Across the 20 slowest MRs, **67% of all
+attributed hours were draft time** — one 612-hour MR was marked ready fifteen minutes before it
+merged, and eight MRs from a single branch each carried 140.6h of which essentially all was draft.
+An MR in draft is not waiting on review; the author is still working.
+
+`mrflow.ready_hours` therefore accrues only the spells an MR spent marked ready, from GitLab's own
+`marked this merge request as **draft**` / `**ready**` system notes, stored in `mr_events`. It
+handles repeated toggling, and an MR whose first event is `ready` was opened as a draft so its
+clock starts there. An MR with no events at all was never a draft and is measured whole.
+
+Three signals were tested and rejected before landing on this one, and are worth not re-trying:
+
+| signal | verdict |
+|---|---|
+| comment count (`user_notes_count`) | Spearman **+0.055** against turnaround — nothing. 37% of slow MRs have zero comments, and MRs with 11+ comments have a *median of 0.3h*: discussion means attention, and attention means merged. |
+| commit timestamps | Unusable. Rebasing rewrites them — a three-week-old MR carried a single commit dated four hours before its merge, with squash off. |
+| batching (many MRs per branch) | Real (37% of MRs share a branch, one produced 78) but not the driver: collapsing to one figure per branch leaves p90 unchanged at 18.0h. It distorts small samples, not the aggregate. |
+
+**Time to first review** (`first_review`) rides the same ready-clock: the first note from a human
+who is neither a bot nor the MR's own author. Bots are excluded by account name
+(`gitlab_ingest._BOT_USERNAMES`) because GitLab Duo comments on essentially every MR and would make
+each one look reviewed within seconds. This separates "nobody looked" from "reviewed, then
+iterated" — the distinction the raw turnaround cannot make.
+
+Reading the notes costs one extra API call per MR at ingest, doubling the per-MR calls (the crawl
+already fetches changed paths). Completeness is tracked by `merge_requests.events_fetched_at`, not
+by whether any events exist: an MR that was never a draft and drew no comments legitimately has
+none, so keying on that would make the backfill run forever.
+
 ## SLA targets
 
 The per-request-type SLA table was **dropped from the page** — the self-service view now shows
@@ -99,42 +187,25 @@ One further lever, independent of any target: roughly **18% of median turnaround
 merged** — work shipped, ticket still open (August p90 for that phase alone is 14h). An
 auto-transition on merge would reduce every figure here for no engineering effort.
 
-## The turnaround clock runs only while an MR is ready
-
-`opened_at → merged_at` measured the wrong thing. Across the 20 slowest MRs, **67% of all
-attributed hours were draft time** — one 612-hour MR was marked ready fifteen minutes before it
-merged, and eight MRs from a single branch each carried 140.6h of which essentially all was draft.
-An MR in draft is not waiting on review; the author is still working.
-
-`mrflow.ready_hours` therefore accrues only the spells an MR spent marked ready, from GitLab's own
-`marked this merge request as **draft**` / `**ready**` system notes, stored in `mr_events`. It
-handles repeated toggling, and an MR whose first event is `ready` was opened as a draft so its
-clock starts there. An MR with no events at all was never a draft and is measured whole.
-
-Three signals were tested and rejected before landing on this one, and are worth not re-trying:
-
-| signal | verdict |
-|---|---|
-| comment count (`user_notes_count`) | Spearman **+0.055** against turnaround — nothing. 37% of slow MRs have zero comments, and MRs with 11+ comments have a *median of 0.3h*: discussion means attention, and attention means merged. |
-| commit timestamps | Unusable. Rebasing rewrites them — a three-week-old MR carried a single commit dated four hours before its merge, with squash off. |
-| batching (many MRs per branch) | Real (37% of MRs share a branch, one produced 78) but not the driver: collapsing to one figure per branch leaves p90 unchanged at 18.0h. It distorts small samples, not the aggregate. |
-
-**Time to first review** (`first_review`) rides the same ready-clock: the first note from a human
-who is neither a bot nor the MR's own author. Bots are excluded by account name
-(`gitlab_ingest._BOT_USERNAMES`) because GitLab Duo comments on essentially every MR and would make
-each one look reviewed within seconds. This separates "nobody looked" from "reviewed, then
-iterated" — the distinction the raw turnaround cannot make.
-
-Reading the notes costs one extra API call per MR at ingest, doubling the per-MR calls (the crawl
-already fetches changed paths). Completeness is tracked by `merge_requests.events_fetched_at`, not
-by whether any events exist: an MR that was never a draft and drew no comments legitimately has
-none, so keying on that would make the backfill run forever.
-
 ## Production vs non-production
 
-`gitlab_domains.environment_of` reads the deployment environment from the repo name. The check is
-**ordered and token-based**, never a substring test, because `nonprod` contains `prod` — a naive
-`"prod" in name` files every non-production repo as production. On the current corpus: 45 prod
+`gitlab_domains.environment_of` reads the deployment environment from the repo name first, falling
+back to the MR's changed file paths when the name says nothing. The check is **ordered and
+token-based**, never a substring test, because `nonprod` contains `prod` — a naive `"prod" in name`
+files every non-production repo as production.
+
+The repo name wins outright: a repo called `tf-aardvark2-prod` deploys to production whatever
+directory a change sits in. Paths only decide the cases the name cannot, which matters because
+several repos hold both trees — `gitops-k8s-team-a2` keeps
+`clusters/prod-fluxv2/namespaces/app/prod/...` beside its nonprod tree. Three ST-975 cutover MRs
+there were filed as `other`, hiding a production coordination delay in an unclassified bucket. On
+the crawled corpus paths classify **192 of the 955** otherwise-unknown MRs (104 prod, 88 nonprod),
+roughly 8% of all merge requests.
+
+An MR touching **both** trees is `mixed`: excluded from the environment views, because folding a
+cross-environment change into either bucket misreports that bucket, and reported as a count so the
+exclusion is visible rather than silent. Paths are fetched only for MRs whose repo name is silent,
+not for every row. On the current corpus: 45 prod
 repos / 737 MRs, 48 nonprod / 856, and 84 / 884 in neither. That third bucket is `other`, not a
 failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-team-a2` and
 `tf-coreservices`, and folding it into either side would misreport both.
@@ -178,6 +249,14 @@ seconds — the added author appears on the next page load after it finishes. Ad
 **GitLab username** rather than a Jira accountId, precisely so they cannot leak into the
 roster-gated views — velocity, capacity and the SME matrix all look up `ROSTER` by accountId and
 simply miss.
+
+## Month-over-month comparison
+
+`requests_prev_month` is `None`, not `0`, whenever the window opens after the start of last month.
+`created_by_month` only counts issues inside the window, so a lookback beginning on the 1st leaves
+last month empty *by construction* — and the card rendered that as "up from 0", in green, which
+reads as spectacular growth. It is a fact about the lookback, not the team. The card now says the
+comparison is unavailable instead.
 
 ## Population
 
