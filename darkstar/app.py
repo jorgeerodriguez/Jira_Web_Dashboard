@@ -248,11 +248,20 @@ def _until(value: str | None, since: datetime) -> datetime | None:
 
 
 @app.get("/api/slas")
-def api_slas(since: str | None = None, until: str | None = None) -> JSONResponse:
-    """Self-service SLA compliance, turnaround, and agent success rate (no Jira call)."""
+def api_slas(since: str | None = None, until: str | None = None,
+             grain: str | None = None) -> JSONResponse:
+    """Self-service SLA compliance, turnaround, and agent success rate (no Jira call).
+
+    `grain` forces day/week/month row grouping; omitted, it follows the width of the window.
+    """
     now = _utcnow()
     start = _since(since, slas.default_window_start(now))
-    return JSONResponse(slas.slas_report(_db().cursor(), now, start, _until(until, start)))
+    if grain is not None and grain not in metrics.GRAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"grain must be one of {', '.join(metrics.GRAINS)}, got {grain!r}")
+    return JSONResponse(
+        slas.slas_report(_db().cursor(), now, start, _until(until, start), grain))
 
 
 @app.get("/api/mr-turnaround")

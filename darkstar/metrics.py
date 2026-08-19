@@ -59,6 +59,50 @@ def business_month(when: datetime) -> tuple[int, int]:
     return (local.year, local.month)
 
 
+# How many rows a table can carry before it stops being readable. Past this, the grain coarsens
+# rather than the table growing: 90 days is 14 weekly rows, which is a list to scroll rather than a
+# trend to read.
+GRAINS: tuple[str, ...] = ("day", "week", "month")
+
+
+def choose_grain(since: datetime, until: datetime | None, now: datetime) -> str:
+    """Pick day/week/month from how much time the window spans.
+
+    A grain is only legible while it produces a handful of rows. A two-week window in weekly buckets
+    is two rows and says nothing; a 90-day window is 14 and reads as a list. The thresholds are set
+    so every lookback preset lands on a grain that fits in roughly four to thirteen rows.
+    """
+    span_days = ((min(until, now) if until is not None else now) - since).days
+    if span_days <= 14:
+        return "day"
+    if span_days <= 31:
+        return "week"
+    return "month"
+
+
+def period_start(when: datetime, grain: str) -> date:
+    """The first business-tz date of the day/week/month containing a naive-UTC timestamp."""
+    if grain == "day":
+        return business_date(when)
+    if grain == "week":
+        return business_week(when)
+    if grain == "month":
+        day = business_date(when)
+        return day.replace(day=1)
+    raise ValueError(f"grain must be one of {GRAINS}, got {grain!r}")
+
+
+def period_end(start: date, grain: str) -> date:
+    """The exclusive end date of a period that began on `start`."""
+    if grain == "day":
+        return start + timedelta(days=1)
+    if grain == "week":
+        return start + timedelta(days=7)
+    if grain == "month":
+        return (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    raise ValueError(f"grain must be one of {GRAINS}, got {grain!r}")
+
+
 def business_week(when: datetime) -> date:
     """The Monday of the week containing a naive-UTC timestamp, in the business timezone.
 

@@ -257,6 +257,14 @@
       <span>to</span>
       <input id="until" type="date" min="2026-01-01">
     </label>
+    <label class="filter">Rows
+      <select id="grain">
+        <option value="">Auto</option>
+        <option value="day">Daily</option>
+        <option value="week">Weekly</option>
+        <option value="month">Monthly</option>
+      </select>
+    </label>
     <button class="btn" id="sinceReset" type="button">Reset to defaults</button>
     <span class="filter-hint" id="sinceHint"></span>
   </div>
@@ -273,24 +281,26 @@
 
   </section>
   <section class="panel">
-  <h2>Delivery turnaround by week</h2>
+  <h2>Delivery turnaround</h2>
   <details class="note"><summary>About this panel</summary>
-  <p>Self-service requests grouped by the week they were <b>created</b>, labelled by the Monday
-  commencing. Weekly rather than monthly because a month is too coarse to see a change land — four
-  weeks inside one month routinely diverge while the team is still improving.</p>
-  <p>Grouping by arrival means a recent week's cohort may not have closed. <b>In</b> is what arrived,
-  <b>Done</b> what has landed, and a <b>*</b> marks the gap: that week's p50 counts only the requests
-  that finished, so it reads faster than it will once the rest land. A week the window or the clock
-  cuts short is marked <b>partial</b>.</p>
-  <p>The bar is the share closed inside one working day, scaled to the best week shown — the p50
-  range is wide enough that plotting it linearly would bury the recent weeks.</p>
+  <p>Self-service requests grouped by the period they were <b>created</b>. The grain follows the
+  lookback: up to two weeks is daily, up to a month is weekly, and anything longer is monthly, so the
+  table stays a handful of rows rather than growing with the window. <b>Rows</b> in the toolbar forces
+  a grain when you want one — 90 days week by week is 14 rows, which is sometimes what you want.</p>
+  <p>Grouping by arrival means a recent cohort may not have closed. <b>In</b> is what arrived,
+  <b>Done</b> what has landed, and a <b>*</b> marks the gap: that period's p50 counts only the
+  requests that finished, so it reads faster than it will once the rest land. A period the window or
+  the clock cuts short is marked <b>partial</b> — which includes the first row whenever the lookback
+  starts mid-period, and it almost always does.</p>
+  <p>The bar is the share closed inside one working day, scaled to the best period shown — the p50
+  range is wide enough that plotting it linearly would bury the recent periods.</p>
   </details>
-  <div class="tbl-wrap"><table id="weeklyTbl"></table></div>
+  <div class="tbl-wrap"><table id="turnaroundTbl"></table></div>
   </section>
   <section class="panel">
   <h2>How requests arrive</h2>
   <details class="note"><summary>About this panel</summary>
-  <p>Every request created that week, split by <b>how it was created</b>: filed by a self-service
+  <p>Every request created that period, split by <b>how it was created</b>: filed by a self-service
   skill, or filed by a person. The bar is the self-service share, and it is the capacity argument in
   the only unit that means anything here — demand PE absorbed without a person writing the ticket.</p>
   <p>The unit is <b>requests, not merge requests</b>. One request counts once however many MRs it
@@ -301,9 +311,9 @@
   request it produced carries a <b>pe:*</b> label — some early skill-filed tickets never got the
   watermark, and that label is the only remaining evidence. Reading a merge request for that signal
   is not the same as counting it, so the bounded lookback deliberately does not cut it off.</p>
-  <p>A week is marked <b>partial</b> whenever the window or the clock cuts it short — the first week
-  of a lookback that began mid-week, the last week of a bounded range, and the week in progress. All
-  three hold a part-week of requests and would otherwise read as a real dip.</p>
+  <p>A period is marked <b>partial</b> whenever the window or the clock cuts it short — the first
+  period of a lookback that began mid-period, the last period of a bounded range, and the period in
+  progress. All three hold a part-period of requests and would otherwise read as a real dip.</p>
   </details>
   <div class="tbl-wrap"><table id="originTbl"></table></div>
   </section>
@@ -487,6 +497,7 @@ function renderMrTable(d){
    computation would ask for the wrong day and quietly show them different numbers than everyone
    else. `until` is exclusive, matching the API. */
 const PRESET_KEY = "darkstar.slas.preset";
+const GRAIN_KEY = "darkstar.slas.grain";
 const SINCE_KEY = "darkstar.slas.since";
 const UNTIL_KEY = "darkstar.slas.until";
 const BUSINESS_TZ = "America/Los_Angeles";
@@ -530,6 +541,8 @@ function query(withMrFilters){
   const range = presetRange(document.getElementById("preset").value);
   if(range && range.since) p.set("since", range.since);
   if(range && range.until) p.set("until", range.until);
+  const grain = document.getElementById("grain").value;
+  if(grain) p.set("grain", grain);
   if(withMrFilters){
     const terms = mrFilterTerms();
     if(terms.length) p.set("authors", terms.join(","));
@@ -611,8 +624,8 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
-  renderWeeklyTable(slaData.weekly);
-  renderOriginTable(slaData.origin);
+  renderTurnaroundTable(slaData.turnaround, slaData.grain);
+  renderOriginTable(slaData.origin, slaData.grain);
   renderMrTable(mrData);
   renderDailyChart(mrData);
   renderHidden();
@@ -632,9 +645,12 @@ async function reload(){
       `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
     : `No human review comments on these MRs in the window.`;
   const range = presetRange(document.getElementById("preset").value);
+  const rows = `Rows grouped by ${GRAIN_NOUN[slaData.grain] || slaData.grain}`+
+    `${document.getElementById("grain").value ? "" : " (chosen from the window)"}.`;
   document.getElementById("sinceHint").textContent = range
-    ? `${range.since} to ${range.until || "now"} (end exclusive), applied to every panel.`
-    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;
+    ? `${range.since} to ${range.until || "now"} (end exclusive), applied to every panel. ${rows}`
+    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround `+
+      `${mrData.window_months} months from ${mrData.window_start}. ${rows}`;
 }
 
 /* Median per day, with an inline bar scaled to the worst day in view — enough to see a trend
@@ -645,15 +661,28 @@ async function reload(){
 /* Weekly, and labelled by the Monday commencing, because a week label has to be a date a person
    can look up. `created` sits beside `delivered`: these rows group by the week a request came IN,
    so a week whose cohort has not closed shows only what finished fast. */
-function renderWeeklyTable(rows){
-  const head=`<thead><tr><th>Week of</th><th>In</th><th>Done</th><th>p50</th><th>p90</th>`+
-             `<th class="barcell">Inside a day</th></tr></thead>`;
+/* One renderer for whichever grain the window resolved to. `created` sits beside `delivered`: these
+   rows group by the period a request came IN, so a period whose cohort has not closed shows only
+   what finished fast. */
+const GRAIN_LABEL = {day: "Day", week: "Week of", month: "Month"};
+const GRAIN_NOUN = {day: "day", week: "week", month: "month"};
+
+function periodLabel(iso, grain){
+  if(grain !== "month") return iso;
+  const [y, m] = iso.split("-");
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]} ${y}`;
+}
+
+function renderTurnaroundTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>In</th><th>Done</th>`+
+             `<th>p50</th><th>p90</th><th class="barcell">Inside a day</th></tr></thead>`;
   const best=Math.max(1,...(rows||[]).map(r=>r.within_day_pct||0));
   const body=(rows||[]).map(r=>`<tr>
-     <td>${esc(r.week)}${r.partial?' <span class="na" title="part-week: the window or the clock cuts it short">·&nbsp;partial</span>':''}</td>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
      <td class="num">${r.created}</td>
      <td class="num">${r.delivered < r.created
-        ? `<span title="${r.created - r.delivered} still open, so this week is still settling">${r.delivered}*</span>`
+        ? `<span title="${r.created - r.delivered} still open, so this ${noun} is still settling">${r.delivered}*</span>`
         : r.delivered}</td>
      <td class="num">${fmt(r.p50_hours)}${r.p50_hours!=null?"h":""}</td>
      <td class="num">${fmt(r.p90_hours)}${r.p90_hours!=null?"h":""}</td>
@@ -661,23 +690,24 @@ function renderWeeklyTable(rows){
         : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/best)}%"></span>`+
           `<span class="mini">${r.within_day_pct}%</span>`}</td>
    </tr>`).join("");
-  document.getElementById("weeklyTbl").innerHTML = head +
+  document.getElementById("turnaroundTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="6" class="na">No requests created in the window.</td></tr>'}</tbody>` +
-    `<caption>Business hours from created to done, by the week the request arrived. “In” is requests `+
-    `created that week and “Done” how many have landed — a <b>*</b> marks a cohort still settling, `+
-    `whose p50 counts only the ones that finished. The bar is the share closed inside one working `+
-    `day, scaled to the best week shown.</caption>`;
+    `<caption>Business hours from created to done, by the ${noun} the request arrived. “In” is `+
+    `requests created that ${noun} and “Done” how many have landed — a <b>*</b> marks a cohort still `+
+    `settling, whose p50 counts only the ones that finished. The bar is the share closed inside one `+
+    `working day, scaled to the best ${noun} shown.</caption>`;
 }
 
 /* How requests arrive: skill-filed against human-filed, counted in REQUESTS.
 
    Not merge requests. One request routinely spawns several — July ran 643 MRs against 117 distinct
    tickets — so an MR count answers a question about branches while looking like one about demand. */
-function renderOriginTable(rows){
-  const head=`<thead><tr><th>Week of</th><th>Self-service</th><th>Human-filed</th><th>All</th>`+
-             `<th class="barcell">Self-service share</th></tr></thead>`;
+function renderOriginTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>Self-service</th>`+
+             `<th>Human-filed</th><th>All</th><th class="barcell">Self-service share</th></tr></thead>`;
   const body=(rows||[]).map(r=>`<tr>
-     <td>${esc(r.week)}${r.partial?' <span class="na" title="part-week: the window or the clock cuts it short">·&nbsp;partial</span>':''}</td>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
      <td class="num">${r.agent}</td>
      <td class="num">${r.human}</td>
      <td class="num">${r.total}</td>
@@ -687,13 +717,13 @@ function renderOriginTable(rows){
    </tr>`).join("");
   const solid=(rows||[]).filter(r=>r.agent_share_pct!=null && !r.partial);
   const arc=(solid.length>1)
-    ? `Self-service went from ${solid[0].agent_share_pct}% of requests in the week of `+
-      `${solid[0].week} to ${solid[solid.length-1].agent_share_pct}% in the week of `+
-      `${solid[solid.length-1].week}.`
+    ? `Self-service went from ${solid[0].agent_share_pct}% of requests in `+
+      `${periodLabel(solid[0].period, grain)} to ${solid[solid.length-1].agent_share_pct}% in `+
+      `${periodLabel(solid[solid.length-1].period, grain)}.`
     : "Widen the lookback to see the trend.";
   document.getElementById("originTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="5" class="na">No requests created in the window.</td></tr>'}</tbody>` +
-    `<caption>${arc} Counted in <b>requests</b>, by the week each was created — one request counts `+
+    `<caption>${arc} Counted in <b>requests</b>, by the ${noun} each was created — one request counts `+
     `once however many merge requests it took.</caption>`;
 }
 
@@ -829,8 +859,10 @@ function syncCustomVisibility(){
    author filter, environment, add and hide. A broken panel has to cost that panel, not the page. */
 async function init(){
   const preset = document.getElementById("preset");
+  const grain = document.getElementById("grain");
   const since = document.getElementById("since");
   const until = document.getElementById("until");
+  grain.value = localStorage.getItem(GRAIN_KEY) || "";
   since.value = localStorage.getItem(SINCE_KEY) || "";
   until.value = localStorage.getItem(UNTIL_KEY) || "";
   // A stored bare date predates the presets. Carry it over as a custom range rather than dropping
@@ -840,20 +872,22 @@ async function init(){
 
   const applyRange = async () => {
     localStorage.setItem(PRESET_KEY, preset.value);
+    localStorage.setItem(GRAIN_KEY, grain.value);
     localStorage.setItem(SINCE_KEY, since.value);
     localStorage.setItem(UNTIL_KEY, until.value);
     syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   };
   preset.addEventListener("change", applyRange);
+  grain.addEventListener("change", applyRange);
   // Typing a date IS choosing a custom range. Without this, editing from/to while the select still
   // said "Panel defaults" resolved to null and the dates were silently discarded.
   const applyCustom = async () => { preset.value = "custom"; await applyRange(); };
   since.addEventListener("change", applyCustom);
   until.addEventListener("change", applyCustom);
   document.getElementById("sinceReset").addEventListener("click", async () => {
-    preset.value = ""; since.value = ""; until.value = "";
-    [PRESET_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));
+    preset.value = ""; grain.value = ""; since.value = ""; until.value = "";
+    [PRESET_KEY, GRAIN_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));
     syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   });

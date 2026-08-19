@@ -38,12 +38,19 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   code was AI-written beside it), requests this month vs last, self-service delivery speed against
   the rest of PE delivery, and time to first review. That speed card carries the same significance
   caveat as the dropped monthly column — see **Delivery turnaround by month** below.
-- **Delivery turnaround by week** — self-service requests grouped by the week they were created,
-  labelled by the Monday commencing. Weekly rather than monthly because a month is too coarse to see
-  a change land: over the last 30 days the weekly p50 ran 4.9h, 5.5h, 1.7h, 3.6h — movement a single
-  monthly figure flattens away. Reported as a table with a bar for the share closed inside one
-  working day, because the p50 spans two orders of magnitude and a linear axis would bury exactly the
-  recent weeks the panel exists to show.
+- **Delivery turnaround** — self-service requests grouped by the period they were created. **The
+  grain follows the lookback** rather than being fixed: ≤14 days is daily, ≤31 days weekly, longer
+  monthly. A fixed weekly grain broke at both ends — a 90-day window was 14 rows to scroll, and a
+  7-day window was one row that said nothing about the week. Every preset now lands on one to five
+  rows, and `?grain=day|week|month` (the **Rows** control) forces one when the default is not what you
+  want. Medians cannot be re-aggregated from coarser medians, so the folding happens server-side from
+  raw hours, not by collapsing rows in the browser.
+
+  The grain matters because both readings are true at different zooms: monthly, the p50 runs 99.2h →
+  13.8h → 10.0h → 2.9h across May to August, which is the improvement arc; weekly inside the last 30
+  days it runs 4.9h, 5.5h, 1.7h, 3.6h, which is the noise floor the arc is made of. Reported as a
+  table with a bar for the share closed inside one working day, because the p50 spans two orders of
+  magnitude and a linear axis would bury exactly the recent periods the panel exists to show.
 
   Grouping by arrival means a recent cohort may not have closed, so the row carries **In** (requests
   created that week) beside **Done** (how many have landed). A `*` marks the gap: that week's p50
@@ -57,7 +64,7 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   worse in the tail, Mann-Whitney z=+1.44 at n=26, which is not significant. A monthly multiple
   would read as a finding the sample cannot carry. What the work does demonstrate is capacity, which
   the next panel reports.
-- **How requests arrive** — every request created that week split by **how it was created**: filed
+- **How requests arrive** — every request created that period split by **how it was created**: filed
   by a self-service skill, or filed by a person. The bar is the self-service share. This is the
   capacity argument in the unit that means something for it — demand PE absorbed without a person
   writing the ticket.
@@ -352,11 +359,11 @@ simply miss.
 
 ## Month-over-month comparison
 
-A week is flagged `partial` whenever the window or the clock cuts it short, and that means **both**
-edges, not just the week in progress: a lookback starting mid-week (which "last 30 days" almost
-always does) truncates its first week, and a bounded range ending mid-week truncates its last. A
-mid-week window over July showed 69 and 34 MRs in its edge weeks against ~120 for the full weeks
-between them — unflagged, that is a fabricated collapse at each end.
+A period is flagged `partial` whenever the window or the clock cuts it short, and that means **both**
+edges, not just the period in progress: a lookback starting mid-period (which "last 30 days" almost
+always does, and a monthly window almost always does) truncates its first row, and a bounded range
+truncates its last. A mid-week window over July showed 69 and 34 merge requests in its edge weeks
+against ~120 for the full weeks between them — unflagged, that is a fabricated collapse at each end.
 
 `requests_prev_month` is `None`, not `0`, whenever the window opens after the start of last month.
 `created_by_month` only counts issues inside the window, so a lookback beginning on the 1st leaves

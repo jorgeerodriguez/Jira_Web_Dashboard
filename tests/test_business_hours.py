@@ -138,3 +138,52 @@ def test_a_sunday_night_merge_belongs_to_the_week_that_is_ending():
     sunday_late = datetime(2026, 8, 24, 6, 30)          # Sun 2026-08-23 23:30 PDT
     assert sunday_late.weekday() == 0, "the raw UTC stamp really is a Monday"
     assert business_week(sunday_late) == date(2026, 8, 17), "must stay in the week that is ending"
+
+
+def test_grain_coarsens_as_the_window_grows():
+    """A table stops being readable past a dozen or so rows, so the grain adapts instead.
+
+    Every lookback preset must land on a grain producing a handful of rows: 90 days in weekly
+    buckets is 14 rows, which is a list to scroll rather than a trend to read.
+    """
+    from darkstar.metrics import choose_grain
+    now = datetime(2026, 8, 19, 12, 0)
+    cases = [
+        (datetime(2026, 8, 18), datetime(2026, 8, 19), "day"),      # yesterday
+        (datetime(2026, 8, 10), datetime(2026, 8, 17), "day"),      # last week
+        (datetime(2026, 8, 1), None, "week"),                       # month to date
+        (datetime(2026, 7, 1), datetime(2026, 8, 1), "week"),       # last month
+        (datetime(2026, 7, 20), None, "week"),                      # last 30 days
+        (datetime(2026, 6, 20), None, "month"),                     # last 60 days
+        (datetime(2026, 5, 21), None, "month"),                     # last 90 days
+    ]
+    for since, until, expected in cases:
+        assert choose_grain(since, until, now) == expected, f"{since.date()}..{until and until.date()}"
+
+
+def test_grain_is_measured_to_now_not_to_an_open_upper_bound():
+    """An unbounded window ends at the clock, so a future `until` cannot inflate the span."""
+    from darkstar.metrics import choose_grain
+    now = datetime(2026, 8, 19, 12, 0)
+    assert choose_grain(datetime(2026, 8, 10), datetime(2027, 1, 1), now) == "day"
+
+
+def test_period_start_and_end_bracket_each_grain():
+    """Period bounds decide which bucket a row lands in and whether it is flagged partial."""
+    from darkstar.metrics import period_end, period_start
+    wed = datetime(2026, 8, 19, 22, 0)                       # Wed 2026-08-19 15:00 PDT
+    assert period_start(wed, "day") == date(2026, 8, 19)
+    assert period_start(wed, "week") == date(2026, 8, 17)    # the Monday
+    assert period_start(wed, "month") == date(2026, 8, 1)
+    assert period_end(date(2026, 8, 19), "day") == date(2026, 8, 20)
+    assert period_end(date(2026, 8, 17), "week") == date(2026, 8, 24)
+    assert period_end(date(2026, 8, 1), "month") == date(2026, 9, 1)
+    # December has to roll the year, which day-arithmetic gets wrong if written naively.
+    assert period_end(date(2026, 12, 1), "month") == date(2027, 1, 1)
+
+
+def test_an_unknown_grain_is_rejected_rather_than_silently_bucketed():
+    from darkstar.metrics import period_start
+    import pytest
+    with pytest.raises(ValueError, match="grain must be one of"):
+        period_start(datetime(2026, 8, 19, 22, 0), "fortnight")
