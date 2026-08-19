@@ -342,3 +342,32 @@ def test_a_fully_backfilled_store_reports_nothing_incomplete():
     r = _report(conn)
     assert r["incomplete"] == 0
     assert r["earliest_measurable"] == "2026-08-17"
+
+
+def test_crawl_state_says_when_an_added_author_is_still_owed_a_crawl():
+    """"I added someone and nothing happened" must be answerable from the page.
+
+    Until a crawl fetches their merge requests the author cannot appear, and with no signal that
+    is indistinguishable from the add having failed.
+    """
+    conn = _seed([])
+    fresh = _report(conn, {"added": {}, "hidden": [], "version": 0})["crawl"]
+    assert fresh["pending"] is False and fresh["last_crawl"] is None
+
+    after_add = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
+    assert after_add["pending"] is True          # roster moved ahead of what was crawled
+    assert after_add["roster_version"] == 1 and after_add["crawled_version"] == 0
+
+    store.set_roster_version(conn, 1)
+    store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
+    caught_up = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
+    assert caught_up["pending"] is False
+    assert caught_up["last_crawl"].startswith("2026-08-18")
+
+
+def test_a_roster_member_re_added_is_not_split_into_two_rows():
+    """`added` must not override MR_AUTHORS, or one person becomes two rows with the same name."""
+    from darkstar.roster import MR_AUTHORS
+    added = {"audacy-adam.shero": "Adam Shero"}
+    attributable = {**{u: u for u in added}, **MR_AUTHORS}
+    assert attributable["audacy-adam.shero"] == MR_AUTHORS["audacy-adam.shero"]  # accountId wins

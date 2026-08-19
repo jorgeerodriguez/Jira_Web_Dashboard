@@ -245,8 +245,12 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
     # their GitLab username rather than a Jira accountId, so they cannot reach the roster-gated
     # views (velocity/capacity/SME look up ROSTER by accountId and simply miss).
+    # Added authors are keyed by their GitLab username, but MR_AUTHORS wins on a collision. If a
+    # roster member were re-added through the UI, letting `added` override would attribute their
+    # future MRs to the username while their history sits under their Jira accountId — splitting
+    # one person into two rows with the same name and a count that appears to reset.
     added = roster.get("added") or {}
-    attributable = {**MR_AUTHORS, **{username: username for username in added}}
+    attributable = {**{username: username for username in added}, **MR_AUTHORS}
 
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
     for scope in scopes:

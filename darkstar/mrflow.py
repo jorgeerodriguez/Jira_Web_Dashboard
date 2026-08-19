@@ -48,6 +48,7 @@ from darkstar.metrics import (
     ready_hours,
     window_start,
 )
+from darkstar import store
 from darkstar.roster import MR_AUTHOR_NAMES, TRACKED_MR_AUTHORS
 
 _WINDOW_MONTHS: int = 6
@@ -72,6 +73,24 @@ def default_window_start(now: datetime) -> datetime:
 def _matches(name: str, terms: list[str]) -> bool:
     """True if no filter is set, or any term is a substring of the name (case-insensitive)."""
     return not terms or any(term in name.lower() for term in terms)
+
+
+def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict) -> dict:
+    """Whether the store has caught up with the roster, and when it last did.
+
+    An added author cannot appear until a crawl has fetched their merge requests. Without this the
+    page has no way to distinguish "the crawl is still running" from "the add did nothing", which
+    is exactly how a working add gets reported as broken.
+    """
+    wanted = int(roster.get("version", 0))
+    crawled = store.get_roster_version(connection)
+    last = store.get_gitlab_watermark(connection)
+    return {
+        "roster_version": wanted,
+        "crawled_version": crawled,
+        "pending": wanted != crawled,
+        "last_crawl": last.isoformat(timespec="minutes") if last else None,
+    }
 
 
 def mr_turnaround_report(
@@ -168,6 +187,7 @@ def mr_turnaround_report(
         "hidden": sorted(hidden),
         "filter": name_filter,
         "environment": environment,
+        "crawl": crawl_state(connection, roster),
         "incomplete": int(incomplete or 0),
         "earliest_measurable": earliest_measurable.date().isoformat() if earliest_measurable else None,
         # Time to the first human review comment (bots and the author's own notes excluded at
