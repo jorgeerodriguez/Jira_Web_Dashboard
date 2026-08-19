@@ -219,6 +219,7 @@
     yet. Use <b>×</b> on a row to hide someone.</span>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
   <div id="hiddenChips" class="chips"></div>
 
@@ -409,6 +410,15 @@ async function reload(){
   renderDailyChart(mrData);
   renderHidden();
   document.getElementById("windowNote").textContent = mrData.window_start;
+  const crawl = mrData.crawl || {};
+  document.getElementById("crawlNote").innerHTML = crawl.pending
+    ? `<b>A GitLab crawl is still owed.</b> An author you added is not in the table yet because `+
+      `their merge requests have not been fetched. A full crawl reads two API calls per merge `+
+      `request, so it takes a while; reload when it finishes. `+
+      `Last completed crawl: ${crawl.last_crawl ? esc(crawl.last_crawl) : "never"}.`
+    : crawl.last_crawl
+      ? `Merge-request data current as of ${esc(crawl.last_crawl)}.`
+      : `No GitLab crawl has completed yet.`;
   const fr = mrData.first_review || {};
   document.getElementById("reviewNote").innerHTML = fr.reviewed
     ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
@@ -484,6 +494,11 @@ function renderDailyChart(d){
        <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
      </svg>
      <div class="chips" id="dailyLegend">${legend}</div>
+     ${d.incomplete ? `<p class="filter-hint" style="color:var(--neg)">`+
+        `${d.incomplete} merged MR${d.incomplete===1?"":"s"} in this window cannot be measured yet — `+
+        `they were crawled before the ready-clock existed and have no opened time. The chart therefore `+
+        `starts at ${esc(d.earliest_measurable || "the first measurable day")} rather than `+
+        `${esc(d.window_start)}. The next full GitLab crawl repairs them.</p>` : ""}
      <p class="filter-hint">${days.length} day${days.length===1?"":"s"} with at least one merged MR since ${esc(d.window_start)}`+
        `${(d.filter||[]).length ? `, filtered to \u201c${esc(d.filter.join(", "))}\u201d` : ""}. `+
        `Hover a line to isolate it, click to pin it; hover a point for exact figures.</p>`;

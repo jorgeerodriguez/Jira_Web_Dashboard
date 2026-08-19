@@ -312,3 +312,62 @@ def test_unreviewed_mrs_are_absent_from_the_first_review_stat():
     conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 23, 0))])
     fr = _report(conn)["first_review"]
     assert fr["reviewed"] == 0 and fr["hours_median"] is None
+
+
+def test_unmeasurable_rows_are_counted_not_silently_dropped():
+    """A store mid-backfill must not look like a team that did no work before a certain date.
+
+    Rows crawled before opened_at existed cannot be measured, and excluding them quietly made the
+    chart start late for no visible reason — reported as "no data older than 7/29".
+    """
+    # Built the way prod got here: rows written before opened_at existed, then migrated.
+    conn = duckdb.connect(":memory:")
+    conn.execute("""CREATE TABLE merge_requests (
+        id BIGINT PRIMARY KEY, project_path VARCHAR NOT NULL, iid BIGINT NOT NULL,
+        author_account_id VARCHAR NOT NULL, title VARCHAR NOT NULL, merged_at TIMESTAMP NOT NULL,
+        web_url VARCHAR NOT NULL, fetched_at TIMESTAMP NOT NULL)""")
+    conn.execute("INSERT INTO merge_requests VALUES (2, 'audacy-inc/devops/x', 2, ?, 'old', "
+                 "TIMESTAMP '2026-05-01 15:00:00', 'u', ?)", [_ADAM, _NOW])
+    store.initialize_schema(conn)
+    store.upsert_merge_requests(conn, [_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0),
+                                           datetime(2026, 8, 17, 16, 0))])
+    r = _report(conn)
+    assert r["incomplete"] == 1
+    assert r["earliest_measurable"] == "2026-08-17"
+    assert r["team"]["merged"] == 1          # still excluded from the figures, just not in silence
+
+
+def test_a_fully_backfilled_store_reports_nothing_incomplete():
+    conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0))])
+    r = _report(conn)
+    assert r["incomplete"] == 0
+    assert r["earliest_measurable"] == "2026-08-17"
+
+
+def test_crawl_state_says_when_an_added_author_is_still_owed_a_crawl():
+    """"I added someone and nothing happened" must be answerable from the page.
+
+    Until a crawl fetches their merge requests the author cannot appear, and with no signal that
+    is indistinguishable from the add having failed.
+    """
+    conn = _seed([])
+    fresh = _report(conn, {"added": {}, "hidden": [], "version": 0})["crawl"]
+    assert fresh["pending"] is False and fresh["last_crawl"] is None
+
+    after_add = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
+    assert after_add["pending"] is True          # roster moved ahead of what was crawled
+    assert after_add["roster_version"] == 1 and after_add["crawled_version"] == 0
+
+    store.set_roster_version(conn, 1)
+    store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
+    caught_up = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
+    assert caught_up["pending"] is False
+    assert caught_up["last_crawl"].startswith("2026-08-18")
+
+
+def test_a_roster_member_re_added_is_not_split_into_two_rows():
+    """`added` must not override MR_AUTHORS, or one person becomes two rows with the same name."""
+    from darkstar.roster import MR_AUTHORS
+    added = {"audacy-adam.shero": "Adam Shero"}
+    attributable = {**{u: u for u in added}, **MR_AUTHORS}
+    assert attributable["audacy-adam.shero"] == MR_AUTHORS["audacy-adam.shero"]  # accountId wins

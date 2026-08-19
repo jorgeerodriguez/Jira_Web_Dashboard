@@ -26,6 +26,11 @@ One filter, applied once, and every cut stays consistent with it.
 
 Only merged MRs reach the store (the ingest crawls state=merged), so this is time-to-merge for
 work that landed, not a queue depth: an MR still sitting open is invisible here until it merges.
+
+Rows crawled before `opened_at` existed cannot be measured and are excluded, but the count is
+REPORTED as `incomplete` rather than dropped in silence. Without that, a store mid-backfill looks
+exactly like a team that did no work before a certain date — the chart simply starts late and says
+nothing about why.
 """
 from __future__ import annotations
 
@@ -43,6 +48,7 @@ from darkstar.metrics import (
     ready_hours,
     window_start,
 )
+from darkstar import store
 from darkstar.roster import MR_AUTHOR_NAMES, TRACKED_MR_AUTHORS
 
 _WINDOW_MONTHS: int = 6
@@ -69,6 +75,24 @@ def _matches(name: str, terms: list[str]) -> bool:
     return not terms or any(term in name.lower() for term in terms)
 
 
+def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict) -> dict:
+    """Whether the store has caught up with the roster, and when it last did.
+
+    An added author cannot appear until a crawl has fetched their merge requests. Without this the
+    page has no way to distinguish "the crawl is still running" from "the add did nothing", which
+    is exactly how a working add gets reported as broken.
+    """
+    wanted = int(roster.get("version", 0))
+    crawled = store.get_roster_version(connection)
+    last = store.get_gitlab_watermark(connection)
+    return {
+        "roster_version": wanted,
+        "crawled_version": crawled,
+        "pending": wanted != crawled,
+        "last_crawl": last.isoformat(timespec="minutes") if last else None,
+    }
+
+
 def mr_turnaround_report(
     connection: duckdb.DuckDBPyConnection, since: datetime, roster: dict, name_filter: list[str],
     environment: str,
@@ -89,6 +113,14 @@ def mr_turnaround_report(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
     ).fetchall():
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
+
+    # In-window rows that predate the opened_at column and so cannot be measured yet. The next
+    # full crawl repairs them; until then the chart would otherwise just start late for no visible
+    # reason.
+    incomplete, earliest_measurable = connection.execute(
+        "SELECT count(*) FILTER (WHERE opened_at IS NULL), min(merged_at) FILTER (WHERE opened_at IS NOT NULL) "
+        "FROM merge_requests WHERE merged_at >= ?", [since],
+    ).fetchone()
 
     business_by_account: dict[str, list[float]] = {}
     by_day: dict[str, list[float]] = {}
@@ -155,6 +187,9 @@ def mr_turnaround_report(
         "hidden": sorted(hidden),
         "filter": name_filter,
         "environment": environment,
+        "crawl": crawl_state(connection, roster),
+        "incomplete": int(incomplete or 0),
+        "earliest_measurable": earliest_measurable.date().isoformat() if earliest_measurable else None,
         # Time to the first human review comment (bots and the author's own notes excluded at
         # ingest), on the same ready-clock. Separates "nobody looked" from "reviewed, then iterated".
         "first_review": {
