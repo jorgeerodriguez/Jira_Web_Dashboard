@@ -472,3 +472,82 @@ def test_each_slowest_row_carries_both_clocks_so_draft_time_is_visible():
     assert round(row["open_hours"] - row["ready_hours"], 1) == 19.0, "the rest was draft"
     for field in ("iid", "project", "title", "url", "author", "merged", "environment"):
         assert row[field] is not None, f"{field} is needed to identify the MR being inspected"
+
+
+def _pipes(conn, mr_id, events):
+    store.replace_mr_pipelines(conn, mr_id, [
+        store.MergeRequestPipelineRow(mr_id=mr_id, status=status, happened_at=when, seq=i)
+        for i, (status, when) in enumerate(events)])
+
+
+def test_a_failing_pipeline_stops_the_turnaround_clock():
+    """Adam's call, and the reason is that the metric claims to measure PE's responsiveness.
+
+    A red pipeline blocks the merge whoever reviews it, so the wait is on whoever pushes the fix.
+    Charging it to review time made the worst offenders unreadable: 32% of open hours on the slowest
+    PE-authored MRs were spent red.
+    """
+    opened = datetime(2026, 8, 3, 15, 0, 0)          # Mon 08:00 Pacific
+    merged = datetime(2026, 8, 4, 17, 0, 0)          # Tue 10:00 Pacific -> 11 business hours
+    conn = _seed([_mr(1, _BEN, opened, merged)])
+    assert _report(conn)["slowest"][0]["ready_hours"] == 11.0
+
+    # red from Mon 10:00 until Tue 09:00 = 8 business hours
+    _pipes(conn, 1, [("failed", datetime(2026, 8, 3, 17, 0, 0)),
+                     ("success", datetime(2026, 8, 4, 16, 0, 0))])
+    row = _report(conn)["slowest"][0]
+    assert row["ready_hours"] == 3.0, "11h ready less 8h red"
+    assert row["red_hours"] == 8.0, "and the excluded time is reported, not hidden"
+    assert row["open_hours"] == 11.0, "the whole span is unchanged"
+
+
+def test_red_time_is_reported_even_though_it_is_excluded():
+    """Excluding it silently would let a merge request parked broken for days look instant."""
+    opened = datetime(2026, 8, 3, 15, 0, 0)
+    merged = datetime(2026, 8, 5, 17, 0, 0)          # 20 business hours
+    conn = _seed([_mr(1, _BEN, opened, merged)])
+    _pipes(conn, 1, [("failed", datetime(2026, 8, 3, 16, 0, 0))])   # red to the merge
+    row = _report(conn)["slowest"][0]
+    assert row["ready_hours"] == 1.0
+    assert row["red_hours"] == 19.0, "the 19 hours it sat broken must still be visible"
+
+
+def test_a_green_pipeline_changes_nothing():
+    """The common case: one run, it passes, the clock is untouched."""
+    opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
+    conn = _seed([_mr(1, _BEN, opened, merged)])
+    _pipes(conn, 1, [("success", datetime(2026, 8, 3, 16, 0, 0))])
+    row = _report(conn)["slowest"][0]
+    assert row["ready_hours"] == 5.0 and row["red_hours"] == 0.0
+
+
+def test_an_mr_with_no_pipeline_history_keeps_its_full_clock():
+    """A fetch failure must never make a merge request look fast — err toward charging PE."""
+    opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
+    row = _report(_seed([_mr(1, _BEN, opened, merged)]))["slowest"][0]
+    assert row["ready_hours"] == 5.0 and row["red_hours"] == 0.0
+
+
+def test_red_time_inside_a_draft_spell_is_not_deducted_twice():
+    """Draft and red overlap, so the clock intersects intervals rather than subtracting totals.
+
+    Subtracting red hours from the ready total drives this MR to zero: the ready spells are 3h and the
+    red window is 7h, but every one of those red hours falls while the MR was in draft and already
+    uncounted. The MR really did wait 3 hours on review.
+    """
+    opened = datetime(2026, 8, 3, 15, 0, 0)          # Mon 08:00 Pacific, opens ready
+    merged = datetime(2026, 8, 4, 17, 0, 0)          # Tue 10:00 Pacific
+    conn = _seed([_mr(1, _BEN, opened, merged)])
+    store.replace_mr_events(conn, 1, [
+        store.MergeRequestEventRow(mr_id=1, kind="draft",
+                                   happened_at=datetime(2026, 8, 3, 16, 0, 0), seq=0),
+        store.MergeRequestEventRow(mr_id=1, kind="ready",
+                                   happened_at=datetime(2026, 8, 4, 15, 0, 0), seq=1),
+    ])
+    # red for the whole draft window: Mon 10:00 -> Tue 07:00, which is 7 business hours
+    _pipes(conn, 1, [("failed", datetime(2026, 8, 3, 17, 0, 0)),
+                     ("success", datetime(2026, 8, 4, 14, 0, 0))])
+
+    row = _report(conn)["slowest"][0]
+    assert row["ready_hours"] == 3.0, "1h Mon + 2h Tue; the red hours were all inside the draft"
+    assert row["red_hours"] == 7.0, "still reported in full, even though none of it was deducted"

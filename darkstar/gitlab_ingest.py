@@ -137,6 +137,31 @@ def _mr_notes(session: requests.Session, project_id: int, iid: int) -> list[dict
     return response.json()
 
 
+def _mr_pipelines(session: requests.Session, project_id: int, iid: int,
+                  mr_id: int) -> list[store.MergeRequestPipelineRow]:
+    """Pipeline results for one merge request, oldest first.
+
+    Costs one API call per merge request, which roughly doubles a full crawl. Worth it because red
+    time was skewing the turnaround badly: 32% of open hours on the slowest PE-authored MRs were spent
+    with a failing pipeline, and the clock now excludes it.
+    """
+    response = session.get(
+        f"{_API}/projects/{project_id}/merge_requests/{iid}/pipelines",
+        params={"per_page": 100}, timeout=_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    raw = response.json() or []
+    rows: list[store.MergeRequestPipelineRow] = []
+    for seq, pipeline in enumerate(sorted(raw, key=lambda p: p.get("updated_at") or "")):
+        when = pipeline.get("updated_at") or pipeline.get("created_at")
+        status = pipeline.get("status")
+        if not when or not status:
+            continue
+        rows.append(store.MergeRequestPipelineRow(
+            mr_id=mr_id, status=status, happened_at=_to_naive_utc(when), seq=seq))
+    return rows
+
+
 def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[store.MergeRequestEventRow]:
     """Draft/ready transitions and the first human review comment, from an MR's notes.
 
@@ -251,6 +276,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     mr_rows: list[store.MergeRequestRow] = []
     file_rows: list[tuple[int, str]] = []
     event_rows: list[store.MergeRequestEventRow] = []
+    pipeline_rows: list[store.MergeRequestPipelineRow] = []
     seen_ids: set[int] = set()
 
     # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
@@ -292,6 +318,14 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                                mr["project_id"], mr["iid"], exc)
                 notes = []
             event_rows.extend(_mr_events(mr_id, (mr.get("author") or {}).get("username", ""), notes))
+            try:
+                pipeline_rows.extend(_mr_pipelines(session, mr["project_id"], mr["iid"], mr_id))
+            except requests.RequestException as exc:
+                # No pipeline history means no red time is excluded, so the MR reports its full ready
+                # clock. That errs toward charging PE for time it may not owe, which is the safe way
+                # round: a fetch failure must not quietly make a merge request look fast.
+                logger.warning("MR %s!%s pipelines fetch failed, red time not excluded: %s",
+                               mr["project_id"], mr["iid"], exc)
             mr_rows.append(store.MergeRequestRow(
                 id=mr_id,
                 project_path=_project_path(mr),
@@ -317,6 +351,12 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
         by_mr.setdefault(event.mr_id, []).append(event)
     for mr_id, events in by_mr.items():
         store.replace_mr_events(connection, mr_id, events)
-    logger.info("gitlab sync: %d merge requests, %d file rows, %d draft/review events",
-                len(mr_rows), len(file_rows), len(event_rows))
+    pipes_by_mr: dict[int, list[store.MergeRequestPipelineRow]] = {row.id: [] for row in mr_rows}
+    for pipeline in pipeline_rows:
+        pipes_by_mr.setdefault(pipeline.mr_id, []).append(pipeline)
+    for mr_id, pipelines in pipes_by_mr.items():
+        store.replace_mr_pipelines(connection, mr_id, pipelines)
+    logger.info("gitlab sync: %d merge requests, %d file rows, %d draft/review events, "
+                "%d pipeline results", len(mr_rows), len(file_rows), len(event_rows),
+                len(pipeline_rows))
     return len(mr_rows), len(file_rows)

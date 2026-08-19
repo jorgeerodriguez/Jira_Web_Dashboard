@@ -351,6 +351,12 @@
   <section class="panel wide">
   <h2>MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
+  <p><b>Ready → merged</b> counts only time an MR was offered for review <i>and</i> mergeable. Two
+  spans are excluded: <b>draft</b>, where the author has not asked yet, and <b>red CI</b>, where a
+  failing pipeline blocks the merge whoever reviews it. Measured across the slowest merge requests,
+  32% of open hours on PE-authored ones and 4% on externally-authored ones were spent red, so leaving
+  it in badly skewed the figure. Both are shown as their own columns in the drill-down rather than
+  simply removed.</p>
   <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
   excluded — the author is still working, not waiting on review. Note that an engineer working EET can
@@ -847,7 +853,7 @@ function renderSlowest(d){
   const page = rows.slice(from, from + SLOWEST_PER_PAGE);
 
   const head = `<thead><tr><th>MR</th><th>Author</th><th>Ready&nbsp;&rarr;&nbsp;merged</th>`+
-               `<th>Open</th><th>Draft</th><th>To review</th><th>Merged</th></tr></thead>`;
+               `<th>Open</th><th>Draft</th><th>Red CI</th><th>To review</th><th>Merged</th></tr></thead>`;
   const body = page.map((r, i) => {
     const draft = Math.max(0, Math.round((r.open_hours - r.ready_hours) * 10) / 10);
     return `<tr>
@@ -859,16 +865,20 @@ function renderSlowest(d){
      <td class="num">${dur(r.ready_hours)}</td>
      <td class="num">${dur(r.open_hours)}</td>
      <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
+     <td class="num">${r.red_hours > 0
+        ? `<span class="neg">${durText(r.red_hours)}</span>` : '<span class="na">—</span>'}</td>
      <td class="num">${dur(r.first_review_hours)}</td>
      <td class="num">${esc(r.merged.slice(0, 10))}</td>
    </tr>`;
   }).join("");
   document.getElementById("slowestTbl").innerHTML = head +
-    `<tbody>${body || '<tr><td colspan="7" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
+    `<tbody>${body || '<tr><td colspan="8" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
     `<caption><b>Ready&nbsp;&rarr;&nbsp;merged</b> is the figure the table and chart above are built `+
-    `from; <b>Open</b> is the whole span and <b>Draft</b> the difference. A large draft column means `+
-    `the author was still working, so the wait was never on review. Same author and environment `+
-    `filters as the table above.</caption>`;
+    `from: the time an MR was offered for review <i>and</i> mergeable. <b>Open</b> is the whole span, `+
+    `<b>Draft</b> the time the author had not offered it yet, and <b>Red CI</b> the time a failing `+
+    `pipeline blocked the merge whoever reviewed it. Both are excluded from the clock and shown here `+
+    `instead — a large figure in either means the wait was never on review. Same author and `+
+    `environment filters as the table above.</caption>`;
 
   const shownFrom = rows.length ? from + 1 : 0;
   const shownTo = Math.min(from + SLOWEST_PER_PAGE, rows.length);

@@ -206,6 +206,16 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     source_branch     VARCHAR
 );
 
+-- Pipeline results over an MR's life. Stored as events rather than as a computed red total so the
+-- clock can be retuned without a re-crawl, the same reason MR descriptions are kept verbatim.
+CREATE TABLE IF NOT EXISTS mr_pipelines (
+    mr_id       BIGINT NOT NULL,
+    status      VARCHAR NOT NULL,
+    happened_at TIMESTAMP NOT NULL,
+    seq         INTEGER NOT NULL,
+    PRIMARY KEY (mr_id, seq)
+);
+
 CREATE TABLE IF NOT EXISTS mr_events (
     mr_id       BIGINT NOT NULL,
     kind        VARCHAR NOT NULL,
@@ -326,6 +336,27 @@ def upsert_merge_requests(connection: duckdb.DuckDBPyConnection, mrs: list[Merge
     sql = f"INSERT OR REPLACE INTO merge_requests ({', '.join(_MR_COLUMNS)}) VALUES ({placeholders})"
     connection.executemany(sql, [list(astuple(mr)) for mr in mrs])
     return len(mrs)
+
+
+@dataclass(frozen=True)
+class MergeRequestPipelineRow:
+    """One pipeline result on a merge request, in the order GitLab reported them."""
+
+    mr_id: int
+    status: str
+    happened_at: datetime
+    seq: int
+
+
+def replace_mr_pipelines(connection: duckdb.DuckDBPyConnection, mr_id: int,
+                         pipelines: list[MergeRequestPipelineRow]) -> None:
+    """Replace all stored pipeline results for one MR. Idempotent, so a re-crawl cannot duplicate."""
+    connection.execute("DELETE FROM mr_pipelines WHERE mr_id = ?", [mr_id])
+    if pipelines:
+        connection.executemany(
+            "INSERT INTO mr_pipelines (mr_id, status, happened_at, seq) VALUES (?, ?, ?, ?)",
+            [[p.mr_id, p.status, p.happened_at, p.seq] for p in pipelines],
+        )
 
 
 def replace_mr_events(connection: duckdb.DuckDBPyConnection, mr_id: int,
