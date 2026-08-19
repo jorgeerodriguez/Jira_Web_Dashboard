@@ -99,3 +99,31 @@ def test_authors_param_filters_the_daily_series(monkeypatch, tmp_path):
 def test_blank_authors_param_is_no_filter(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path, "g.duckdb")
     assert client.get("/api/mr-turnaround", params={"authors": " , "}).json()["filter"] == []
+
+
+def test_email_addresses_are_rejected_with_an_explanation(monkeypatch, tmp_path):
+    """The field silently accepted two emails and stored them; they matched no MRs at all.
+
+    Merge requests are attributed by GitLab username, so an email can never resolve. Failing
+    loudly is the difference between "nothing happened" and knowing why.
+    """
+    client, _ = _client(monkeypatch, tmp_path, "e.duckdb")
+    res = client.post("/api/mr-authors", json={"op": "add", "username": "jeremy.williams@audacy.com"})
+    assert res.status_code == 400
+    assert "email" in res.json()["detail"].lower()
+    assert client.get("/api/mr-authors").json()["added"] == {}
+
+
+def test_user_search_needs_two_characters(monkeypatch, tmp_path):
+    """Avoids hammering GitLab on the first keystroke."""
+    client, _ = _client(monkeypatch, tmp_path, "u.duckdb")
+    assert client.get("/api/gitlab-users", params={"q": "j"}).json()["users"] == []
+
+
+def test_user_search_says_so_when_it_cannot_reach_gitlab(monkeypatch, tmp_path):
+    """A 503 lets the page explain itself; an empty list would look like nobody matched."""
+    client, _ = _client(monkeypatch, tmp_path, "v.duckdb")
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    res = client.get("/api/gitlab-users", params={"q": "jeremy"})
+    assert res.status_code == 503
+    assert "GITLAB_TOKEN" in res.json()["detail"]

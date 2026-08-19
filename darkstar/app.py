@@ -12,6 +12,7 @@ import threading
 from datetime import datetime, timezone
 
 import duckdb
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -239,6 +240,24 @@ def api_mr_turnaround(since: str | None = None, authors: str | None = None,
         _db().cursor(), _since(since, mrflow.default_window_start(now)), roster, terms, environment))
 
 
+@app.get("/api/gitlab-users")
+def api_gitlab_users(q: str = "") -> JSONResponse:
+    """Search GitLab for users to add to the MR-turnaround table.
+
+    Returns 503 rather than an empty list when no token is configured, so the page can say the
+    picker is unavailable instead of looking like nobody matched.
+    """
+    query = q.strip()
+    if len(query) < 2:
+        return JSONResponse({"users": []})
+    try:
+        return JSONResponse({"users": gitlab_ingest.search_members(query, 20)})
+    except RuntimeError as exc:            # no GITLAB_TOKEN configured
+        raise HTTPException(status_code=503, detail=str(exc))
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"GitLab user search failed: {exc}")
+
+
 @app.get("/api/mr-authors")
 def api_mr_authors() -> JSONResponse:
     """The editable MR-author roster: usernames added by hand and names hidden from the table."""
@@ -256,6 +275,11 @@ def set_mr_authors(payload: dict) -> JSONResponse:
     username, display_name = payload.get("username", ""), payload.get("display_name", "")
     if op in ("add", "remove") and not username:
         raise HTTPException(status_code=400, detail="username is required for add/remove")
+    if op == "add" and "@" in username:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{username!r} looks like an email address. Merge requests are attributed by "
+                   f"GitLab username (e.g. audacy-jeremy.williams), so an email matches nothing.")
     if op in ("hide", "show") and not display_name:
         raise HTTPException(status_code=400, detail="display_name is required for hide/show")
     try:

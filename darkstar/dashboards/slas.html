@@ -194,7 +194,9 @@
              aria-describedby="mrFilterHint">
     </label>
     <label class="filter">Add author
-      <input id="addUser" type="text" placeholder="gitlab username" autocomplete="off">
+      <input id="addUser" type="text" placeholder="search GitLab users" autocomplete="off"
+             list="gitlabUsers" aria-describedby="authorHint">
+      <datalist id="gitlabUsers"></datalist>
     </label>
     <label class="filter">shown as
       <input id="addName" type="text" placeholder="Display Name" autocomplete="off">
@@ -210,7 +212,8 @@
     </label>
   </div>
   <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
-    name. Environment is read from the repo name — <code>*-prod</code> is production,
+    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
+    by username and an email address matches nothing. Environment is read from the repo name — <code>*-prod</code> is production,
     <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
     Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
     yet. Use <b>×</b> on a row to hide someone.</span>
@@ -366,6 +369,30 @@ async function editAuthors(body){
     ? "Added. A full GitLab re-crawl is queued — their MRs appear after the next sync."
     : "Saved.";
   await reload();
+}
+
+/* username -> display name for whatever the last search returned, so picking a result can fill
+   the "shown as" field without a second round trip. */
+const knownUsers = new Map();
+
+async function searchUsers(q){
+  const hint = document.getElementById("authorHint");
+  try{
+    const res = await fetch(`api/gitlab-users?q=${encodeURIComponent(q)}`);
+    if(!res.ok){
+      const detail = await res.json().then(b => b.detail).catch(() => "HTTP " + res.status);
+      document.getElementById("gitlabUsers").innerHTML = "";
+      hint.textContent = `User search unavailable: ${detail}. Type an exact GitLab username instead.`;
+      return;
+    }
+    const users = (await res.json()).users || [];
+    users.forEach(u => knownUsers.set(u.username, u.name));
+    document.getElementById("gitlabUsers").innerHTML =
+      users.map(u => `<option value="${esc(u.username)}">${esc(u.name)}</option>`).join("");
+    hint.textContent = users.length ? "" : `No GitLab user matches “${q}”.`;
+  }catch(e){
+    hint.textContent = "User search failed: " + e.message;
+  }
 }
 
 function showError(message){
@@ -536,9 +563,28 @@ async function init(){
   document.getElementById("addBtn").addEventListener("click", () => {
     const user = document.getElementById("addUser").value.trim();
     const name = document.getElementById("addName").value.trim();
-    if(!user){ document.getElementById("authorHint").textContent = "Enter a GitLab username."; return; }
+    const hint = document.getElementById("authorHint");
+    if(!user){ hint.textContent = "Search for a GitLab user."; return; }
+    if(user.includes("@")){
+      hint.textContent = `“${user}” is an email address. Merge requests are attributed by GitLab `+
+        `username — search for the person instead.`;
+      return;
+    }
     document.getElementById("addUser").value = ""; document.getElementById("addName").value = "";
-    editAuthors({op: "add", username: user, display_name: name || user});
+    editAuthors({op: "add", username: user, display_name: name || knownUsers.get(user) || user});
+  });
+
+  /* Live GitLab lookup. Debounced, minimum two characters, and it fills in the display name from
+     the picked account so the roster shows a person rather than a handle. */
+  let userTimer = null;
+  const addUser = document.getElementById("addUser");
+  addUser.addEventListener("input", () => {
+    const q = addUser.value.trim();
+    const known = knownUsers.get(q);
+    if(known) document.getElementById("addName").value = known;
+    clearTimeout(userTimer);
+    if(q.length < 2){ document.getElementById("gitlabUsers").innerHTML = ""; return; }
+    userTimer = setTimeout(() => searchUsers(q), 250);
   });
   // row × and chip + are re-rendered on every reload, so delegate rather than rebind
   document.getElementById("mrTbl").addEventListener("click", e => {
