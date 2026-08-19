@@ -362,3 +362,48 @@ def test_monthly_trend_groups_by_creation_month():
 
 def test_monthly_trend_is_empty_when_nothing_delivered():
     assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["monthly"] == []
+
+
+def test_monthly_trend_carries_the_non_self_service_baseline():
+    """A self-service figure alone says nothing about whether the skills help.
+
+    The same month's ordinary PE work is the only fair baseline: same clock, same population rules.
+    """
+    conn = _fresh()
+    # self-service: 2 business hours
+    store.upsert_issues(conn, [_issue("DEVOPS-80", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-80"], [store.TransitionRow(
+        key="DEVOPS-80", to_status="Done", changed_at=datetime(2026, 8, 5, 18, 0, 0), seq=0)])
+    # ordinary PE work the same month: 6 business hours
+    store.upsert_issues(conn, [_issue("DEVOPS-81", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-81"], [store.TransitionRow(
+        key="DEVOPS-81", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
+
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
+    assert row["delivered"] == 1 and row["p50_hours"] == 2.0
+    assert row["other_delivered"] == 1 and row["other_p50_hours"] == 6.0
+    assert row["faster_by"] == 3.0
+
+
+def test_no_ratio_is_manufactured_when_one_side_is_empty():
+    """A month with self-service work but no comparison group must not report a speedup."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-82", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-82"], [store.TransitionRow(
+        key="DEVOPS-82", to_status="Done", changed_at=datetime(2026, 8, 5, 18, 0, 0), seq=0)])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
+    assert row["other_delivered"] == 0 and row["other_p50_hours"] is None
+    assert row["faster_by"] is None
+
+
+def test_a_month_with_only_non_self_service_work_still_appears():
+    """Otherwise the trend silently omits months where the skills were not used at all."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-83", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-83"], [store.TransitionRow(
+        key="DEVOPS-83", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
+    assert row["delivered"] == 0 and row["p50_hours"] is None
+    assert row["other_delivered"] == 1 and row["faster_by"] is None

@@ -39,7 +39,12 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   the rest of PE delivery, and time to first review.
 - **MR turnaround by author** — ready→merged per author, slowest first, filterable by author and
   by environment.
-- **Delivery turnaround by month** — self-service requests grouped by creation month. A single
+- **Delivery turnaround by month** — self-service requests grouped by creation month, **against the
+  same month's non-self-service delivery**. A self-service figure alone says nothing about whether
+  the skills help; the rest of PE's delivered work that month is the only fair baseline, measured on
+  the same clock under the same population rules. `faster_by` is `None` whenever either side is
+  empty, so a month with one self-service request cannot manufacture a speedup, and a month with no
+  self-service work still appears rather than being silently omitted. A single
   blended figure over the window libels current performance while the team is improving fast: the
   p50 has run 406.7h (Apr), 99.2h (May), 13.8h (Jun), 10.0h (Jul), 2.9h (Aug). Reported as a table
   with a bar for the share closed inside one working day, because the p50 spans two orders of

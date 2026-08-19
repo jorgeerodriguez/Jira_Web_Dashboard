@@ -265,7 +265,7 @@
   <p class="filter-hint" id="reviewNote"></p>
 
   </section>
-  <section class="panel wide">
+  <section class="panel">
   <h2>Daily MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
   <p>The same merged MRs, cut by the business-timezone day they landed rather than by
@@ -508,20 +508,21 @@ async function reload(){
    of magnitude, so a linear axis buries exactly the recent months this panel exists to show. The
    bar carries the trend on a bounded scale — share closed inside one working day. */
 function renderMonthlyTable(rows){
-  const head=`<thead><tr><th>Month</th><th>Delivered</th><th>p50 (h)</th><th>p90 (h)</th>`+
-             `<th>Within a day</th></tr></thead>`;
+  const head=`<thead><tr><th>Month</th><th>n</th><th>Self-service</th><th>Rest of PE</th>`+
+             `<th>Faster by</th></tr></thead>`;
   const body=(rows||[]).map(r=>`<tr>
      <td>${esc(r.month)}</td>
      <td class="num">${r.delivered}</td>
-     <td class="num">${fmt(r.p50_hours)}</td>
-     <td class="num">${fmt(r.p90_hours)}</td>
-     <td class="barcell"><span class="bar" style="width:${Math.max(1, r.within_day_pct)}%"
-       title="${r.within_day_pct}% closed within one working day"></span>
-       <span class="na">&nbsp;${r.within_day_pct}%</span></td>
+     <td class="num">${fmt(r.p50_hours)}${r.p50_hours!=null?"h":""}</td>
+     <td class="num" title="${r.other_delivered} non-self-service tickets delivered">${fmt(r.other_p50_hours)}${r.other_p50_hours!=null?"h":""}</td>
+     <td class="num">${r.faster_by==null ? '<span class="na">—</span>'
+        : `<span class="${r.faster_by>=1?"pos":"neg"}">${r.faster_by}\u00d7</span>`}</td>
    </tr>`).join("");
   document.getElementById("monthlyTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="5" class="na">No delivered requests in the window.</td></tr>'}</tbody>` +
-    `<caption>By the month the request was created. Grouped on the same business clock as everything else.</caption>`;
+    `<caption>Median business hours, by the month the request was created. “Rest of PE” is every other `+
+    `delivered ticket that month, same clock. Hover it for its count — a ratio built on one request `+
+    `means nothing.</caption>`;
 }
 
 function niceCeil(v){
@@ -545,7 +546,7 @@ function renderDailyChart(d){
       `No merged MRs in the window${(d.filter||[]).length ? " for that author filter" : ""}.</p>`;
     return;
   }
-  const W = 900, H = 280, L = 52, R = 14, T = 14, B = 34;
+  const W = 560, H = 300, L = 44, R = 12, T = 14, B = 34;
   const top = niceCeil(Math.max(...series.flatMap(s => s.points.map(p => p.biz_hours_median || 0)), 1));
   const idx = Object.fromEntries(days.map((day, i) => [day, i]));
   const x = i => L + (days.length === 1 ? (W-L-R)/2 : i * (W-L-R) / (days.length-1));
@@ -554,7 +555,7 @@ function renderDailyChart(d){
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top*f));
   const grid = ticks.map(t => `<line class="grid-line" x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}"/>`+
     `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join("");
-  const step = Math.max(1, Math.ceil(days.length/8));
+  const step = Math.max(1, Math.ceil(days.length/5));
   const xlabels = days.map((day,i) => i % step ? "" :
     `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
 

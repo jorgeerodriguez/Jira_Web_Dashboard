@@ -273,6 +273,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     first_review_waits: list[float] = []
     self_service_reviewed = 0
     turnaround_by_month: dict[tuple[int, int], list[float]] = {}
+    other_turnaround_by_month: dict[tuple[int, int], list[float]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -291,6 +292,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             if is_self_service:
                 delivered_self_service += 1
                 turnaround_by_month.setdefault(business_month(created), []).append(hours)
+            else:
+                other_turnaround_by_month.setdefault(business_month(created), []).append(hours)
             if is_ai_generated:
                 delivered_ai_generated += 1
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
@@ -394,14 +397,28 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # libels current performance when the team is improving fast: on the pilot data the p50 ran
     # 114.0h (May), 6.3h (Jun), 7.5h (Jul), 2.7h (Aug). The share within a working day is carried
     # alongside because the p50 range is wide enough that a linear axis buries the recent months.
+    # Each month carries the non-self-service delivery median beside it. A self-service figure on
+    # its own says nothing about whether the skills are helping; the same month's ordinary PE work is
+    # the only fair baseline, measured on the same clock over the same population rules.
     monthly = []
-    for (year, month), hours in sorted(turnaround_by_month.items()):
+    for month in sorted(set(turnaround_by_month) | set(other_turnaround_by_month)):
+        hours = turnaround_by_month.get(month, [])
+        other = other_turnaround_by_month.get(month, [])
+        own_p50 = round(statistics.median(hours), 1) if hours else None
+        other_p50 = round(statistics.median(other), 1) if other else None
         monthly.append({
-            "month": f"{year:04d}-{month:02d}",
+            "month": f"{month[0]:04d}-{month[1]:02d}",
             "delivered": len(hours),
-            "p50_hours": round(statistics.median(hours), 1),
+            "p50_hours": own_p50,
             "p90_hours": pctile(hours, 0.9),
-            "within_day_pct": round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100),
+            "within_day_pct": (round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100)
+                               if hours else None),
+            "other_delivered": len(other),
+            "other_p50_hours": other_p50,
+            # How many times faster self-service was that month. None when either side is empty, so
+            # a month with one self-service request cannot manufacture a ratio out of nothing.
+            "faster_by": (round(other_p50 / own_p50, 1)
+                          if own_p50 and other_p50 and own_p50 > 0 else None),
         })
 
     agent_success = {
