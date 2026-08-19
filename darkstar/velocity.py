@@ -1,22 +1,22 @@
 """Velocity dashboard aggregation: monthly delivery completions per engineer.
 
 Completion = the earliest changelog transition to 'Done' (dedupes reopens). Scope is the
-delivery issue types; months are attributed in the America/Denver business timezone; only
-PE roster members are counted. All reads come from the store (no Jira call).
+delivery issue types; months are attributed in metrics.BUSINESS_TZ, the one business timezone
+shared with every other view; only PE roster members are counted. All reads come from the store
+(no Jira call).
 """
 from __future__ import annotations
 
 import calendar
 import statistics
 from datetime import date, datetime, timezone
-from zoneinfo import ZoneInfo
 
 import duckdb
 
+from darkstar.metrics import BUSINESS_TZ, business_month
 from darkstar.roster import ROSTER
 
 _DELIVERY_TYPES: tuple[str, ...] = ("Story", "Task", "Bug", "Hotfix", "Sub-task")
-_BUSINESS_TZ: ZoneInfo = ZoneInfo("America/Denver")
 _WINDOW_MONTHS: int = 6
 
 _COMPLETIONS_SQL: str = (
@@ -39,12 +39,6 @@ def _window_months(year: int, month: int, months: int) -> list[tuple[int, int]]:
             current_month = 12
         result.append((current_year, current_month))
     return list(reversed(result))
-
-
-def _denver_month(done_at: datetime) -> tuple[int, int]:
-    """(year, month) of a naive-UTC completion timestamp, in the business timezone."""
-    local = done_at.replace(tzinfo=timezone.utc).astimezone(_BUSINESS_TZ)
-    return (local.year, local.month)
 
 
 def _business_days(year: int, month: int, through_day: int) -> int:
@@ -95,7 +89,7 @@ def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
         _COMPLETIONS_SQL.format(placeholders=placeholders), list(_DELIVERY_TYPES)
     ).fetchall()
 
-    now_local = now.replace(tzinfo=timezone.utc).astimezone(_BUSINESS_TZ)
+    now_local = now.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ)
     window = _window_months(now_local.year, now_local.month, _WINDOW_MONTHS)
     month_index = {year_month: i for i, year_month in enumerate(window)}
     month_labels = [f"{year:04d}-{month:02d}" for (year, month) in window]
@@ -107,7 +101,7 @@ def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
         name = ROSTER.get(account_id)
         if name is None or done_at is None:
             continue
-        index = month_index.get(_denver_month(done_at))
+        index = month_index.get(business_month(done_at))
         if index is None:
             continue
         counts_by_name[name][index] += 1
@@ -136,7 +130,7 @@ def completions_this_month(connection: duckdb.DuckDBPyConnection, now: datetime)
     Same earliest-Done derivation as the forecast, but counts the partial current month, which
     the trailing-window forecast (`_window_months`) deliberately excludes.
     """
-    target = _denver_month(now)
+    target = business_month(now)
     placeholders = ", ".join(["?"] * len(_DELIVERY_TYPES))
     completions = connection.execute(
         _COMPLETIONS_SQL.format(placeholders=placeholders), list(_DELIVERY_TYPES)
@@ -146,6 +140,6 @@ def completions_this_month(connection: duckdb.DuckDBPyConnection, now: datetime)
         name = ROSTER.get(account_id)
         if name is None or done_at is None:
             continue
-        if _denver_month(done_at) == target:
+        if business_month(done_at) == target:
             counts[name] += 1
     return counts

@@ -10,7 +10,8 @@ def _row(**over):
                 merged_at=datetime(2026, 7, 22, 15, 0, 0),
                 labels=["pe:iac-request"],
                 web_url="https://gitlab.com/x/-/merge_requests/7",
-                fetched_at=datetime(2026, 7, 22, 16, 0, 0))
+                fetched_at=datetime(2026, 7, 22, 16, 0, 0), events_fetched_at=datetime(2026, 7, 22, 16, 0, 0),
+                description="")
     base.update(over)
     return store.MergeRequestRow(**base)
 

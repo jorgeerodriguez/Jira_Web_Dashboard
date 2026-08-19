@@ -68,8 +68,24 @@ class SyncMeta:
 
 
 @dataclass(frozen=True)
+class MergeRequestEventRow:
+    """One draft/ready/review moment on a merge request, from its notes.
+
+    Stored as events rather than as a derived duration so the business-hour rules can change
+    without a re-crawl, and so an MR that toggles draft->ready more than once is representable.
+    kind is "ready", "draft", or "review" (the first human, non-bot comment by someone other than
+    the author).
+    """
+
+    mr_id: int
+    kind: str
+    happened_at: datetime
+    seq: int
+
+
+@dataclass(frozen=True)
 class MergeRequestRow:
-    """A merged GitLab merge request attributed to a roster member."""
+    """A merged GitLab merge request attributed to a tracked author."""
 
     id: int
     project_path: str
@@ -81,6 +97,14 @@ class MergeRequestRow:
     labels: list[str]
     web_url: str
     fetched_at: datetime
+    # When the MR's notes were last read for draft/ready/review events. Distinct from having any
+    # events: an MR that was never a draft and drew no comments legitimately has none, so absence
+    # of events cannot mean "not yet crawled" or the backfill would never terminate.
+    events_fetched_at: datetime
+    # Stored verbatim so the agent-footer heuristics in slas.py can be retuned without a re-crawl;
+    # the whole corpus is ~1.3 MiB, and the "Generated with Claude Code via /<skill>" footer is a
+    # denser AI signal than the pe:* label (it predates the labels by two months).
+    description: str
 
 
 # Column order shared by the issues DDL and the upsert statement; keep in sync with IssueRow.
@@ -94,7 +118,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
     "id", "project_path", "iid", "author_account_id", "title",
-    "opened_at", "merged_at", "labels", "web_url", "fetched_at",
+    "opened_at", "merged_at", "labels", "web_url", "fetched_at", "events_fetched_at", "description",
 )
 
 _SCHEMA_SQL: str = """
@@ -148,7 +172,17 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     merged_at         TIMESTAMP NOT NULL,
     labels            VARCHAR[] NOT NULL,
     web_url           VARCHAR NOT NULL,
-    fetched_at        TIMESTAMP NOT NULL
+    fetched_at        TIMESTAMP NOT NULL,
+    events_fetched_at TIMESTAMP NOT NULL,
+    description       VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mr_events (
+    mr_id       BIGINT NOT NULL,
+    kind        VARCHAR NOT NULL,
+    happened_at TIMESTAMP NOT NULL,
+    seq         INTEGER NOT NULL,
+    PRIMARY KEY (mr_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS mr_files (
@@ -179,6 +213,8 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(_SCHEMA_SQL)
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS opened_at TIMESTAMP")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS labels VARCHAR[]")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS description VARCHAR")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS events_fetched_at TIMESTAMP")
     logger.debug("schema initialized")
 
 
@@ -256,6 +292,17 @@ def upsert_merge_requests(connection: duckdb.DuckDBPyConnection, mrs: list[Merge
     return len(mrs)
 
 
+def replace_mr_events(connection: duckdb.DuckDBPyConnection, mr_id: int,
+                      events: list[MergeRequestEventRow]) -> None:
+    """Replace all stored events for one MR. Idempotent, so a re-crawl cannot duplicate them."""
+    connection.execute("DELETE FROM mr_events WHERE mr_id = ?", [mr_id])
+    if events:
+        connection.executemany(
+            "INSERT INTO mr_events (mr_id, kind, happened_at, seq) VALUES (?, ?, ?, ?)",
+            [[e.mr_id, e.kind, e.happened_at, e.seq] for e in events],
+        )
+
+
 def replace_mr_files(
     connection: duckdb.DuckDBPyConnection,
     mr_ids: list[int],
@@ -275,6 +322,15 @@ def get_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> datetime | No
     """Return the last successful GitLab sync time, or None if never crawled (→ full window)."""
     row = connection.execute("SELECT last_sync FROM gitlab_sync_meta WHERE id = 1").fetchone()
     return row[0] if row else None
+
+
+def clear_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> None:
+    """Drop the GitLab sync watermark so the next crawl covers the full window again.
+
+    Used when a newly tracked author is added: an incremental crawl only returns MRs *updated*
+    since the watermark, so their existing merged MRs would never be fetched.
+    """
+    connection.execute("DELETE FROM gitlab_sync_meta")
 
 
 def set_gitlab_watermark(connection: duckdb.DuckDBPyConnection, last_sync: datetime) -> None:

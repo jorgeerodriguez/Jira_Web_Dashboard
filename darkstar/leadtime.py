@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import duckdb
 
-from darkstar.metrics import BUSINESS_TZ, DELIVERY_TYPES, denver_month, window_months
+from darkstar.metrics import BUSINESS_TZ, DELIVERY_TYPES, business_month, window_months
 
 _ACTIVE: frozenset[str] = frozenset(
     {"In Progress", "Blocked", "On Hold", "Validating", "Reviewing", "Staged CAR"}
@@ -67,7 +67,7 @@ def lead_time_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> di
     feature_names: dict[str, str] = {}
     for key, feature, summary, assignee, created, feature_summary in candidates:
         lead, cycle, done = _lead_and_cycle(created, transitions_by_key.get(key, []))
-        if denver_month(done) not in window:
+        if business_month(done) not in window:
             continue
         stories.append({
             "k": key, "feature": feature, "s": summary or "", "a": assignee,

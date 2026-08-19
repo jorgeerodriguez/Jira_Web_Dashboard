@@ -15,7 +15,10 @@ import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, slas, store, velocity
+from darkstar import (
+    config, delivery, gitlab_ingest, ingest, intake, leadtime, metrics, mr_authors, mrflow,
+    overrides, slas, store, velocity,
+)
 
 logger = logging.getLogger("darkstar.app")
 
@@ -130,6 +133,9 @@ async def velocity_dashboard() -> HTMLResponse:
     return _dashboard("velocity")
 
 
+# Unlinked from the nav on request — not currently useful — but deliberately still served, so an
+# existing bookmark keeps working and nothing has to be rebuilt to bring it back. Re-add the
+# `<a href="lead-time">` entry to the four dashboard navs to restore it.
 @app.get("/lead-time", response_class=HTMLResponse)
 async def lead_time_dashboard() -> HTMLResponse:
     """The lead/cycle-time dashboard (fetches /api/lead-time client-side)."""
@@ -191,7 +197,74 @@ def api_delivery_forecast() -> JSONResponse:
     return JSONResponse(delivery.delivery_report(_db().cursor(), _utcnow()))
 
 
+def _since(value: str | None, fallback: datetime) -> datetime:
+    """Parse the page's shared lookback date (YYYY-MM-DD, business tz) or fall back to the default.
+
+    One control drives every panel, so the parse is shared. A bad date is rejected rather than
+    silently ignored — a dashboard quietly showing a different window than the box says is worse
+    than an error.
+    """
+    if not value:
+        return fallback
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"since must be YYYY-MM-DD, got {value!r}")
+    return day.replace(tzinfo=metrics.BUSINESS_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @app.get("/api/slas")
-def api_slas() -> JSONResponse:
+def api_slas(since: str | None = None) -> JSONResponse:
     """Self-service SLA compliance, turnaround, and agent success rate (no Jira call)."""
-    return JSONResponse(slas.slas_report(_db().cursor(), _utcnow()))
+    now = _utcnow()
+    return JSONResponse(slas.slas_report(_db().cursor(), now, _since(since, slas.default_window_start(now))))
+
+
+@app.get("/api/mr-turnaround")
+def api_mr_turnaround(since: str | None = None, authors: str | None = None,
+                      env: str | None = None) -> JSONResponse:
+    """Merge-request ready->merged turnaround per author and per day, read from the store.
+
+    `authors` is a comma-separated list of name substrings, and `env` one of prod/nonprod/other/all.
+    Both are applied server-side because the daily medians cannot be re-derived from per-author
+    medians in the page.
+    """
+    now = _utcnow()
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    terms = [t.strip().lower() for t in (authors or "").split(",") if t.strip()]
+    environment = (env or "all").strip().lower()
+    if environment not in ("all", "prod", "nonprod", "other"):
+        raise HTTPException(status_code=400, detail=f"env must be all/prod/nonprod/other, got {env!r}")
+    return JSONResponse(mrflow.mr_turnaround_report(
+        _db().cursor(), _since(since, mrflow.default_window_start(now)), roster, terms, environment))
+
+
+@app.get("/api/mr-authors")
+def api_mr_authors() -> JSONResponse:
+    """The editable MR-author roster: usernames added by hand and names hidden from the table."""
+    return JSONResponse(mr_authors.read(mr_authors.authors_path(config.db_path())))
+
+
+@app.post("/api/mr-authors")
+def set_mr_authors(payload: dict) -> JSONResponse:
+    """Add/remove a tracked GitLab author, or hide/show one; returns the updated roster.
+
+    Adding forces the next GitLab crawl to be a full one: an incremental pull only returns MRs
+    updated since the watermark, so a newly tracked author's history would never arrive.
+    """
+    op = payload.get("op")
+    username, display_name = payload.get("username", ""), payload.get("display_name", "")
+    if op in ("add", "remove") and not username:
+        raise HTTPException(status_code=400, detail="username is required for add/remove")
+    if op in ("hide", "show") and not display_name:
+        raise HTTPException(status_code=400, detail="display_name is required for hide/show")
+    try:
+        roster, needs_recrawl = mr_authors.apply(
+            mr_authors.authors_path(config.db_path()), op, username, display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if needs_recrawl:
+        with _write_lock:
+            store.clear_gitlab_watermark(_db())
+        logger.info("mr-author %s added; GitLab watermark cleared to force a full re-crawl", username)
+    return JSONResponse({**roster, "recrawl_queued": needs_recrawl})

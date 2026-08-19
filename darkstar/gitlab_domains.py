@@ -54,3 +54,31 @@ def domains_for(project_path: str, paths: list[str]) -> set[str]:
     """The set of domains an MR touches, matched over its repo path and changed file paths."""
     haystack = project_path + "\n" + "\n".join(paths)
     return {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
+
+
+# -- Deployment environment, read from the repo name ------------------------------------------
+# Audacy names infrastructure repos by environment: tf-aardvark2-prod, tf-amperwave-nonprod. The
+# check must be ordered and token-based, not a substring test, because "nonprod" *contains*
+# "prod" -- a naive `"prod" in name` marks every nonprod repo as production. Splitting on the
+# separators the names actually use also keeps "reporting" or "product" from matching.
+PRODUCTION: str = "prod"
+NONPRODUCTION: str = "nonprod"
+OTHER_ENVIRONMENT: str = "other"
+
+_SEPARATORS = re.compile(r"[-_.]")
+
+
+def environment_of(project_path: str) -> str:
+    """"prod", "nonprod", or "other" for a repo path.
+
+    "other" is not a failure: it covers the dev/qa/shd repos and the env-less shared ones
+    (gitops-k8s-team-a2, tf-coreservices), which together are roughly a third of all MRs. Folding
+    them into either side would misreport both.
+    """
+    repo = project_path.rsplit("/", 1)[-1].lower()
+    tokens = set(_SEPARATORS.split(repo))
+    if NONPRODUCTION in tokens:
+        return NONPRODUCTION
+    if PRODUCTION in tokens:
+        return PRODUCTION
+    return OTHER_ENVIRONMENT
