@@ -179,6 +179,14 @@ seconds — the added author appears on the next page load after it finishes. Ad
 roster-gated views — velocity, capacity and the SME matrix all look up `ROSTER` by accountId and
 simply miss.
 
+## Month-over-month comparison
+
+`requests_prev_month` is `None`, not `0`, whenever the window opens after the start of last month.
+`created_by_month` only counts issues inside the window, so a lookback beginning on the 1st leaves
+last month empty *by construction* — and the card rendered that as "up from 0", in green, which
+reads as spectacular growth. It is a fact about the lookback, not the team. The card now says the
+comparison is unavailable instead.
+
 ## Population
 
 A request counts iff it is a `metrics.DELIVERY_TYPES` issue (Story/Task/Bug/Hotfix/Sub-task) — a

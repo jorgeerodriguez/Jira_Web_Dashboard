@@ -348,7 +348,17 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         year, mon = month
         return (year - 1, 12) if mon == 1 else (year, mon - 1)
 
+    def _month_start(month: tuple[int, int]) -> datetime:
+        """Naive-UTC first instant of a business-tz month."""
+        return (datetime(month[0], month[1], 1, tzinfo=BUSINESS_TZ)
+                .astimezone(timezone.utc).replace(tzinfo=None))
+
     this_month = business_month(now)
+    previous_month = _prev(this_month)
+    # Only compare against last month if the window actually covers the whole of it. Counting from
+    # a window that opens mid-comparison reports "up from 0" — a fact about the lookback, not the
+    # team, and one that renders as spectacular growth.
+    previous_comparable = since <= _month_start(previous_month)
     headline = {
         # Share of ALL delivered PE work in the window that came through self-service. Self-
         # normalising: filing more requests cannot flatter it, because the denominator grows too.
@@ -361,7 +371,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "ai_delivered": delivered_ai_generated,
         # Adoption. A share without its volume is unreadable -- 53% of 5 is not 53% of 172.
         "requests_this_month": created_by_month.get(this_month, 0),
-        "requests_prev_month": created_by_month.get(_prev(this_month), 0),
+        "requests_prev_month": created_by_month.get(previous_month, 0) if previous_comparable else None,
         # The value proposition, both sides measured on the same business clock.
         "self_service_median_hours": round(statistics.median(self_service_hours), 1) if self_service_hours else None,
         "other_median_hours": round(statistics.median(other_hours), 1) if other_hours else None,

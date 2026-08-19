@@ -264,7 +264,8 @@ const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
 function renderSuccess(h){
   const card=(k,v,sub,cls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>`+
     `<div class="s${cls?" "+cls:""}">${sub}</div></div>`;
-  const delta = h.requests_this_month - h.requests_prev_month;
+  const comparable = h.requests_prev_month != null;
+  const delta = comparable ? h.requests_this_month - h.requests_prev_month : null;
   const speed = (h.self_service_median_hours!=null && h.other_median_hours!=null)
     ? `${h.self_service_median_hours}h vs ${h.other_median_hours}h`
     : '—';
@@ -277,7 +278,9 @@ function renderSuccess(h){
          `${h.share_delivered} of ${h.share_total} delivered tickets came through a skill`+
          (h.ai_share_pct==null ? '' : ` · ${h.ai_share_pct}% were AI-written`)) +
     card("Requests this month", h.requests_this_month,
-         `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`, delta>=0?"pos":"neg") +
+         comparable ? `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`
+                    : "last month is outside the selected lookback, so there is nothing to compare",
+         comparable ? (delta>=0?"pos":"neg") : "") +
     card("Self-service speed", speed, factor) +
     card("Time to first review", review,
          h.first_review_reviewed
