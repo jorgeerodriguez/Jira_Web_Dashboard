@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import duckdb
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from darkstar import (
@@ -70,6 +70,20 @@ def _run_gitlab_cycle() -> None:
     """One GitLab MR crawl through the shared connection, serialized against the Jira poll."""
     with _write_lock:
         gitlab_ingest.run_gitlab_sync(_db().cursor(), _utcnow(), _GITLAB_WINDOW_DAYS)
+
+
+def _recrawl_now() -> None:
+    """Crawl immediately after a roster change, logging rather than raising.
+
+    Clearing the watermark only records that the next crawl should be a full one; on the default
+    24-hour poll interval that meant a newly added author's merge requests did not appear for up to
+    a day, which is indistinguishable from the add having failed. This runs the crawl there and
+    then. It is serialized against the poller by _write_lock in _run_gitlab_cycle.
+    """
+    try:
+        _run_gitlab_cycle()
+    except Exception:
+        logger.exception("post-add GitLab re-crawl failed; the next scheduled crawl will retry")
 
 
 async def _jira_poll_loop(cfg: config.Config) -> None:
@@ -265,11 +279,12 @@ def api_mr_authors() -> JSONResponse:
 
 
 @app.post("/api/mr-authors")
-def set_mr_authors(payload: dict) -> JSONResponse:
+def set_mr_authors(payload: dict, background: BackgroundTasks) -> JSONResponse:
     """Add/remove a tracked GitLab author, or hide/show one; returns the updated roster.
 
-    Adding forces the next GitLab crawl to be a full one: an incremental pull only returns MRs
-    updated since the watermark, so a newly tracked author's history would never arrive.
+    Adding forces a full GitLab crawl and starts it immediately: an incremental pull only returns
+    MRs updated since the watermark, so a newly tracked author's history would never arrive, and
+    waiting for the next scheduled poll meant up to 24 hours of the author simply not appearing.
     """
     op = payload.get("op")
     username, display_name = payload.get("username", ""), payload.get("display_name", "")
@@ -290,5 +305,6 @@ def set_mr_authors(payload: dict) -> JSONResponse:
     if needs_recrawl:
         with _write_lock:
             store.clear_gitlab_watermark(_db())
-        logger.info("mr-author %s added; GitLab watermark cleared to force a full re-crawl", username)
+        background.add_task(_recrawl_now)
+        logger.info("mr-author %s added; watermark cleared and a full re-crawl started", username)
     return JSONResponse({**roster, "recrawl_queued": needs_recrawl})

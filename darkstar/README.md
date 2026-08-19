@@ -155,8 +155,16 @@ Two controls on `/slas`, both server-backed rather than cosmetic:
 Adding an author is the one edit the store cannot serve on its own: the GitLab crawl is
 incremental, so an author it has never attributed has no rows and an incremental pull will not
 fetch their history. `POST /api/mr-authors` with `op: add` therefore clears the GitLab watermark
-(`store.clear_gitlab_watermark`) to force one full-window re-crawl, and returns
-`recrawl_queued: true` so the page can say so. Added authors are keyed in the store by their
+(`store.clear_gitlab_watermark`) to force a full-window crawl **and starts that crawl immediately**
+as a background task, returning `recrawl_queued: true` so the page can say so.
+
+Starting it matters. The poller's default interval is `DARKSTAR_GITLAB_INTERVAL_SECONDS = 86400`,
+so clearing the watermark alone meant a newly added author's merge requests might not appear for a
+day — from the dashboard that is indistinguishable from the add having failed. The crawl is
+serialized against the poller by the same `_write_lock`, and a failure is logged rather than
+raised: the roster edit is already persisted, and the next scheduled crawl retries. A full
+six-month crawl reads two GitLab API calls per merge request, so expect it to take minutes, not
+seconds — the added author appears on the next page load after it finishes. Added authors are keyed in the store by their
 **GitLab username** rather than a Jira accountId, precisely so they cannot leak into the
 roster-gated views — velocity, capacity and the SME matrix all look up `ROSTER` by accountId and
 simply miss.
