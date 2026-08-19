@@ -251,26 +251,24 @@
   <div class="tbl-wrap"><table id="weeklyTbl"></table></div>
   </section>
   <section class="panel">
-  <h2>Agent share of delivery</h2>
+  <h2>How requests arrive</h2>
   <details class="note"><summary>About this panel</summary>
-  <p>Every merge request merged that week, split by whether its description carries a
-  <b>Claude footer</b>. MRs naming no Jira issue are counted too — the question is what share of
-  PE's whole output the agent writes, not what share of the ticketed subset.</p>
-  <p>The unit is <b>merge requests, not tickets</b>, and the two are far apart: of 643 MRs merged in
-  July, 349 named a DEVOPS key and those resolved to just <b>117 distinct tickets</b> — about 3 MRs
-  per ticket, one of them spread across 19 — while 294 named no ticket at all. So these totals run
-  near 3× a ticket count by design, not by double counting.</p>
-  <p>This is the panel that carries the self-service argument. Measured head to head, agent-written
-  and hand-written MRs merge at the <b>same speed</b> — p50 0.3h against 0.1h across 424 and 1046
-  MRs, the same engineers in both groups — because merging is already minutes for everyone. What
-  changed is volume: a rising share at flat headcount is capacity bought, not latency traded.</p>
+  <p>Every request created that week, split by <b>how it was created</b>: filed by a self-service
+  skill, or filed by a person. The bar is the self-service share, and it is the capacity argument in
+  the only unit that means anything here — demand PE absorbed without a person writing the ticket.</p>
+  <p>The unit is <b>requests, not merge requests</b>. One request counts once however many MRs it
+  took, which is often several: July ran 643 merged MRs against just <b>117 distinct tickets</b>, one
+  of them spread across 19. Counting branches would answer a different question and inflate every
+  total roughly threefold.</p>
+  <p>A request counts as self-service if a skill's <b>Jira watermark</b> is on it, or if a merge
+  request it produced carries a <b>pe:*</b> label — some early skill-filed tickets never got the
+  watermark, and that label is the only remaining evidence. Reading a merge request for that signal
+  is not the same as counting it, so the bounded lookback deliberately does not cut it off.</p>
   <p>A week is marked <b>partial</b> whenever the window or the clock cuts it short — the first week
   of a lookback that began mid-week, the last week of a bounded range, and the week in progress. All
-  three hold a part-week of merges and would otherwise read as a real dip. A trailing <b>+n?</b>
-  counts MRs whose description the crawl has not read yet: authorship unknown, so they stay out of
-  the share rather than being scored as hand-written.</p>
+  three hold a part-week of requests and would otherwise read as a real dip.</p>
   </details>
-  <div class="tbl-wrap"><table id="capacityTbl"></table></div>
+  <div class="tbl-wrap"><table id="originTbl"></table></div>
   </section>
   <section class="panel wide">
   <h2>MR turnaround</h2>
@@ -576,7 +574,7 @@ async function reload(){
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
   renderWeeklyTable(slaData.weekly);
-  renderCapacityTable(slaData.capacity);
+  renderOriginTable(slaData.origin);
   renderMrTable(mrData);
   renderDailyChart(mrData);
   renderHidden();
@@ -633,37 +631,32 @@ function renderWeeklyTable(rows){
     `day, scaled to the best week shown.</caption>`;
 }
 
-/* Capacity, not latency. Per-MR merge speed is the same whoever wrote it, so the thing that moved
-   is how much of PE's total output is agent-authored. Counts every merged MR, including ones that
-   name no ticket.
+/* How requests arrive: skill-filed against human-filed, counted in REQUESTS.
 
-   The headers say "MRs" outright. The unit is roughly 3x a ticket count -- of 643 MRs merged in July
-   only 117 distinct tickets were named, one of them by 19 separate MRs -- so a reader comparing this
-   against a ticket total will otherwise reasonably assume it is double counting. */
-function renderCapacityTable(rows){
-  const head=`<thead><tr><th>Week of</th><th>Agent MRs</th><th>Hand MRs</th><th>All MRs</th>`+
-             `<th class="barcell">Agent share</th></tr></thead>`;
+   Not merge requests. One request routinely spawns several — July ran 643 MRs against 117 distinct
+   tickets — so an MR count answers a question about branches while looking like one about demand. */
+function renderOriginTable(rows){
+  const head=`<thead><tr><th>Week of</th><th>Self-service</th><th>Human-filed</th><th>All</th>`+
+             `<th class="barcell">Self-service share</th></tr></thead>`;
   const body=(rows||[]).map(r=>`<tr>
      <td>${esc(r.week)}${r.partial?' <span class="na" title="part-week: the window or the clock cuts it short">·&nbsp;partial</span>':''}</td>
      <td class="num">${r.agent}</td>
-     <td class="num">${r.hand}</td>
-     <td class="num">${r.total}${r.unmeasured
-        ? ` <span class="na" title="${r.unmeasured} merged MRs not yet backfilled, so authorship is`
-          + ` unknown — excluded from the share">+${r.unmeasured}?</span>` : ""}</td>
+     <td class="num">${r.human}</td>
+     <td class="num">${r.total}</td>
      <td class="barcell">${r.agent_share_pct==null ? '<span class="na">—</span>'
         : `<span class="bar" style="width:${r.agent_share_pct}%"></span>`+
           `<span class="mini">${r.agent_share_pct}%</span>`}</td>
    </tr>`).join("");
   const solid=(rows||[]).filter(r=>r.agent_share_pct!=null && !r.partial);
   const arc=(solid.length>1)
-    ? `Agent-authored work went from ${solid[0].agent_share_pct}% of merged MRs in the week of `+
+    ? `Self-service went from ${solid[0].agent_share_pct}% of requests in the week of `+
       `${solid[0].week} to ${solid[solid.length-1].agent_share_pct}% in the week of `+
-      `${solid[solid.length-1].week}, at flat headcount.`
+      `${solid[solid.length-1].week}.`
     : "Widen the lookback to see the trend.";
-  document.getElementById("capacityTbl").innerHTML = head +
-    `<tbody>${body || '<tr><td colspan="5" class="na">No merged MRs in the window.</td></tr>'}</tbody>` +
-    `<caption>${arc} Counted in <b>merge requests, not tickets</b> — July ran 643 MRs against 117 `+
-    `distinct tickets, so these totals are near 3× a ticket count by design.</caption>`;
+  document.getElementById("originTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="5" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>${arc} Counted in <b>requests</b>, by the week each was created — one request counts `+
+    `once however many merge requests it took.</caption>`;
 }
 
 function niceCeil(v){

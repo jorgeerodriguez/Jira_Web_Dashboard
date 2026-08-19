@@ -249,22 +249,11 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
     mr_by_key: dict[str, dict] = {}
-    capacity_by_week: dict[date, dict[str, int]] = {}
     for mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by in connection.execute(
         "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by "
         "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
-        if until is None or merged_at < until:
-            slot = capacity_by_week.setdefault(business_week(merged_at),
-                                               {"agent": 0, "hand": 0, "unknown": 0})
-            # A NULL description means the backfill has not read this MR yet, which is not the same
-            # as having no footer. Counting it as hand-written would credit the agent with less than
-            # it wrote, so it sits out of the ratio and is reported instead.
-            if description is None:
-                slot["unknown"] += 1
-            else:
-                slot["agent" if has_agent_footer(description) else "hand"] += 1
         match = _KEY_RE.search(title or "")
         if not match:
             continue
@@ -302,6 +291,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     self_service_reviewed = 0
     turnaround_by_week: dict[date, list[float]] = {}
     created_by_week: dict[date, int] = {}
+    origin_by_week: dict[date, dict[str, int]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -325,6 +315,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
             self_service_reviewed += 1
             first_review_waits.append(mr["first_review_hours"])
+        origin = origin_by_week.setdefault(business_week(created), {"agent": 0, "human": 0})
+        origin["agent" if is_self_service else "human"] += 1
         if is_self_service:
             month = business_month(created)
             created_by_month[month] = created_by_month.get(month, 0) + 1
@@ -432,7 +424,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # excluded from both arms, self-service ran 15.9h p50 against 37.9h and 174.8h p90 against
     # 144.0h -- better at the median, worse in the tail, Mann-Whitney z=+1.44, not significant at
     # n=26. A ratio printed per week would read as a finding when the data does not carry one. The
-    # capacity series below is what the self-service work actually demonstrates.
+    # origin series below is what the self-service work actually demonstrates.
     #
     # `created` sits beside `delivered` because these rows group by the week a request was CREATED.
     # A week whose cohort has not closed yet shows only the requests that finished quickly, which
@@ -451,29 +443,25 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             "partial": _is_partial_week(week, since, until, now),
         })
 
-    # Capacity: what share of everything PE merges the agent now writes. Counted over every merged
-    # MR in the window, including those naming no Jira issue, because the question is how much of
-    # total output is agent-authored -- not how much of the ticketed subset is. Per-MR merge speed is
-    # flat between the two (p50 0.3h agent vs 0.1h hand over 424/1046 MRs, the same engineers in
-    # both), so a rising share at flat headcount is throughput bought, not latency traded.
+    # Origin: what share of the requests PE takes on arrive through a skill rather than a person
+    # filing them. Counted in TICKETS, per week of creation, so it lines up with the turnaround panel
+    # beside it. Merge requests are deliberately not the unit -- one request routinely spawns several
+    # (July: 643 MRs against 117 distinct tickets), so an MR count answers a question about branches
+    # rather than about demand.
     #
-    # The unit is MERGE REQUESTS, not tickets, and the two differ by about 3x: of 643 MRs merged in
-    # July, 349 named a DEVOPS key and those resolved to just 117 distinct tickets (one produced 19),
-    # while 294 named none at all. The column headers say so, because a reader comparing this against
-    # a ticket count will otherwise assume it is double counting.
-    capacity = []
-    for week in sorted(capacity_by_week):
-        slot = capacity_by_week[week]
-        total = slot["agent"] + slot["hand"]
-        capacity.append({
+    # Classification is how the ticket was CREATED: the Jira watermark a skill stamps, or the pe:*
+    # label on a merge request it opened when the watermark is missing. Reading an MR for that signal
+    # is not the same as counting it.
+    origin = []
+    for week in sorted(origin_by_week):
+        slot = origin_by_week[week]
+        total = slot["agent"] + slot["human"]
+        origin.append({
             "week": week.isoformat(),
             "agent": slot["agent"],
-            "hand": slot["hand"],
+            "human": slot["human"],
             "total": total,
-            # Merged in the week but not yet backfilled, so its authorship is unknown. Outside
-            # `total` on purpose: the share is of MRs whose authorship was actually determined.
-            "unmeasured": slot["unknown"],
-            "agent_share_pct": round(slot["agent"] / total * 100) if total else None,
+            "agent_share_pct": round(slot["agent"] / total * 100),
             "partial": _is_partial_week(week, since, until, now),
         })
 
@@ -488,7 +476,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "buckets": out_buckets,
         "headline": headline,
         "weekly": weekly,
-        "capacity": capacity,
+        "origin": origin,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],
         "targets": SLA_TARGETS_HOURS,

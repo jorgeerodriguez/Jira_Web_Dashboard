@@ -394,123 +394,82 @@ def test_weekly_trend_no_longer_reports_a_rest_of_pe_ratio():
         assert gone not in row
 
 
-def test_capacity_counts_merge_requests_that_name_no_ticket():
-    """The capacity claim is about PE's whole output, not the ticketed slice of it.
+def test_origin_counts_one_request_once_however_many_merge_requests_it_took():
+    """The unit is the request, not the branch.
 
-    Most merged MRs carry no DEVOPS key in the title. Counting only linked ones would measure how
-    much of the *ticketed* work is agent-written and report it as the share of everything, which is
-    the number the panel is built to state.
+    One request routinely spawns several merge requests -- July ran 643 MRs against 117 distinct
+    tickets, one of them spread across 19. Counting MRs answers a question about branches while
+    looking like a question about demand, and it put a 645 on the page next to a ~200 ticket count.
     """
     conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-80", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
     store.upsert_merge_requests(conn, [
-        _mr(90, "DEVOPS-90", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
-            description="Generated with Claude Code"),
-        # no key in the title, so the turnaround half of the report skips it entirely
-        store.MergeRequestRow(
-            id=91, project_path="audacy-inc/devops/x", iid=91, author_account_id="a",
-            title="bump the chart version", opened_at=datetime(2026, 8, 6, 16, 0, 0),
-            merged_at=datetime(2026, 8, 6, 17, 0, 0), labels=[], web_url="u", merged_by="",
-            fetched_at=datetime(2026, 8, 7, 0, 0, 0), events_fetched_at=datetime(2026, 8, 7, 0, 0, 0),
-            description="Generated with Claude Code"),
-        store.MergeRequestRow(
-            id=92, project_path="audacy-inc/devops/x", iid=92, author_account_id="a",
-            title="hand-written tweak", opened_at=datetime(2026, 8, 6, 16, 0, 0),
-            merged_at=datetime(2026, 8, 6, 18, 0, 0), labels=[], web_url="u", merged_by="",
-            fetched_at=datetime(2026, 8, 7, 0, 0, 0), events_fetched_at=datetime(2026, 8, 7, 0, 0, 0),
-            description="just a bump"),
+        _mr(80, "DEVOPS-80", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0)),
+        _mr(81, "DEVOPS-80", [], datetime(2026, 8, 5, 17, 0, 0), datetime(2026, 8, 5, 18, 0, 0)),
+        _mr(82, "DEVOPS-80", [], datetime(2026, 8, 6, 16, 0, 0), datetime(2026, 8, 6, 17, 0, 0)),
     ])
-    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"][0]
-    assert row["agent"] == 2, "the untitled agent MR must still count toward capacity"
-    assert row["hand"] == 1
-    assert row["total"] == 3 and row["agent_share_pct"] == 67
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1 and row["total"] == 1, "three MRs, one request"
 
 
-def test_capacity_marks_the_week_in_progress_as_partial():
-    """An unlabelled part-week reads as a collapse in output, or as a settled share."""
+def test_origin_splits_by_how_the_request_was_created():
+    """Skill-filed against human-filed, which is the whole question the panel answers."""
     conn = _fresh()
-    store.upsert_merge_requests(conn, [
-        _mr(93, "DEVOPS-93", [], datetime(2026, 7, 6, 16, 0, 0), datetime(2026, 7, 6, 17, 0, 0),
-            description="Generated with Claude Code"),
-        _mr(94, "DEVOPS-94", [], datetime(2026, 8, 18, 16, 0, 0), datetime(2026, 8, 18, 17, 0, 0),
-            description="Generated with Claude Code"),
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-83", ["DevOps", "pe-iac-request"], datetime(2026, 8, 5, 16, 0, 0)),
+        _issue("DEVOPS-84", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0)),
+        _issue("DEVOPS-85", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0)),
     ])
-    # Now is Tue 2026-08-18 05:00 Pacific, so the week commencing 2026-08-17 is still running.
-    rows = {r["week"]: r for r in _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"]}
-    assert rows["2026-07-06"]["partial"] is False
-    assert rows["2026-08-17"]["partial"] is True
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert (row["agent"], row["human"], row["total"]) == (1, 2, 3)
+    assert row["agent_share_pct"] == 33
 
 
-def test_capacity_is_empty_rather_than_a_row_of_zeroes_with_no_merges():
-    """An empty window must yield no rows at all.
+def test_a_merge_request_label_still_identifies_a_skill_filed_request():
+    """Reading an MR for the signal is not the same as counting it.
 
-    A synthesised 0-of-0 row would render as a month in which the agent wrote none of the work,
-    which is a different claim from having nothing crawled yet.
-    """
-    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["capacity"] == []
-
-
-def test_capacity_does_not_score_an_unread_description_as_hand_written():
-    """A NULL description means the backfill has not reached that MR, not that it lacks a footer.
-
-    Scoring it as hand-written silently understates agent share, and the understatement grows with
-    crawl lag rather than with anything real. It belongs outside the ratio, reported separately.
+    Some skill-filed tickets never got the Jira watermark; the pe:* label on the merge request the
+    skill opened is the only evidence. Dropping merge requests from the COUNT must not drop them as
+    a classification source, or those requests silently move to the human column.
     """
     conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-86", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0))])
     store.upsert_merge_requests(conn, [
-        _mr(95, "DEVOPS-95", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
-            description="Generated with Claude Code"),
-        store.MergeRequestRow(
-            id=96, project_path="audacy-inc/devops/x", iid=96, author_account_id="a",
-            title="DEVOPS-96 not yet backfilled", opened_at=datetime(2026, 8, 6, 16, 0, 0),
-            merged_at=datetime(2026, 8, 6, 17, 0, 0), labels=[], web_url="u", merged_by="",
-            fetched_at=datetime(2026, 8, 7, 0, 0, 0),
-            events_fetched_at=datetime(2026, 8, 7, 0, 0, 0), description=None),
-    ])
-    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"][0]
-    assert row["hand"] == 0, "an unread description must not be counted as hand-written"
-    assert row["unmeasured"] == 1
-    assert row["total"] == 1 and row["agent_share_pct"] == 100
+        _mr(86, "DEVOPS-86", ["pe:iac-request"],
+            datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0))])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1 and row["human"] == 0
 
 
-def test_a_bounded_window_still_reads_merge_requests_that_merged_after_it():
-    """`until` must bound what is COUNTED, not what is READ, or classification silently degrades.
+def test_a_bounded_window_still_reads_merge_requests_that_landed_after_it():
+    """`until` must bound what is COUNTED, not what is READ, or classification degrades silently.
 
-    The MR query does double duty: it counts capacity and it carries the footer / skill-label /
-    first-review signals for each ticket. A request created inside a "last month" window whose MR
-    merged days after that window closed would lose those signals and be filed as non-AI — the
-    request would vanish from the very panel it belongs in.
+    A request created inside a "last month" window whose merge request landed after the window
+    closed would lose the pe:* signal and be counted as human-filed -- the panel would understate
+    self-service exactly for the most recent work.
     """
     conn = _fresh()
-    store.upsert_issues(conn, [_issue("DEVOPS-97", ["DevOps"], datetime(2026, 7, 28, 16, 0, 0))])
-    store.replace_transitions(conn, ["DEVOPS-97"], [store.TransitionRow(
-        key="DEVOPS-97", to_status="Done", changed_at=datetime(2026, 7, 29, 18, 0, 0), seq=0)])
-    # No Jira watermark: the MR's pe:* label is the only thing marking this self-service, and it
-    # merged on 3 August — after a window covering July only.
+    store.upsert_issues(conn, [_issue("DEVOPS-87", ["DevOps"], datetime(2026, 7, 28, 16, 0, 0))])
     store.upsert_merge_requests(conn, [
-        _mr(97, "DEVOPS-97", ["pe:iac-request"],
+        _mr(87, "DEVOPS-87", ["pe:iac-request"],
             datetime(2026, 8, 3, 16, 0, 0), datetime(2026, 8, 3, 17, 0, 0))])
-
     report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
                               datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
-    assert report["weekly"], "the July request must appear despite its MR merging in August"
-    assert sum(w["delivered"] for w in report["weekly"]) == 1
-    # ...and that out-of-window MR must not be counted as July capacity.
-    assert report["capacity"] == []
+    assert report["origin"][0]["agent"] == 1, "the August MR still classifies the July request"
 
 
-def test_capacity_excludes_a_merge_request_landing_exactly_on_the_upper_bound():
-    """`until` is exclusive, so a window is half-open and two adjacent ranges cannot double count."""
+def test_origin_excludes_a_request_created_on_the_upper_bound():
+    """`until` is exclusive, so two adjacent ranges cannot double count a request."""
     conn = _fresh()
-    store.upsert_merge_requests(conn, [
-        _mr(98, "DEVOPS-98", [], datetime(2026, 7, 30, 16, 0, 0), datetime(2026, 7, 31, 17, 0, 0),
-            description="Generated with Claude Code"),
-        # merged at exactly 2026-08-01 00:00 Pacific, the bound itself
-        _mr(99, "DEVOPS-99", [], datetime(2026, 8, 1, 6, 0, 0), datetime(2026, 8, 1, 7, 0, 0),
-            description="Generated with Claude Code"),
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-88", ["DevOps", "pe-iac-request"], datetime(2026, 7, 31, 16, 0, 0)),
+        # created exactly 2026-08-01 00:00 Pacific, the bound itself
+        _issue("DEVOPS-89", ["DevOps", "pe-iac-request"], datetime(2026, 8, 1, 7, 0, 0)),
     ])
     report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
-                             datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
-    assert sum(r["agent"] for r in report["capacity"]) == 1
+                              datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
+    assert sum(r["total"] for r in report["origin"]) == 1
 
 
 def test_both_edges_of_a_window_are_flagged_partial_not_just_the_current_week():
@@ -519,20 +478,22 @@ def test_both_edges_of_a_window_are_flagged_partial_not_just_the_current_week():
     "Last 30 days" almost never starts on a Monday, and a bounded window rarely ends on a Sunday.
     """
     conn = _fresh()
-    store.upsert_merge_requests(conn, [
+    store.upsert_issues(conn, [
         # week commencing Mon 2026-07-06, but the window opens Wed the 8th
-        _mr(101, "DEVOPS-101", [], datetime(2026, 7, 9, 16, 0, 0), datetime(2026, 7, 9, 17, 0, 0),
-            description="Generated with Claude Code"),
+        _issue("DEVOPS-90", ["DevOps", "pe-iac-request"], datetime(2026, 7, 9, 16, 0, 0)),
         # a whole week inside the window
-        _mr(102, "DEVOPS-102", [], datetime(2026, 7, 15, 16, 0, 0), datetime(2026, 7, 15, 17, 0, 0),
-            description="Generated with Claude Code"),
+        _issue("DEVOPS-91", ["DevOps", "pe-iac-request"], datetime(2026, 7, 15, 16, 0, 0)),
         # week commencing Mon 2026-07-20, but the window closes Wed the 22nd
-        _mr(103, "DEVOPS-103", [], datetime(2026, 7, 21, 16, 0, 0), datetime(2026, 7, 21, 17, 0, 0),
-            description="Generated with Claude Code"),
+        _issue("DEVOPS-92", ["DevOps", "pe-iac-request"], datetime(2026, 7, 21, 16, 0, 0)),
     ])
     rows = {r["week"]: r for r in slas.slas_report(
         conn, datetime(2026, 8, 19, 12, 0, 0),
-        datetime(2026, 7, 8, 7, 0, 0), datetime(2026, 7, 22, 7, 0, 0))["capacity"]}
+        datetime(2026, 7, 8, 7, 0, 0), datetime(2026, 7, 22, 7, 0, 0))["origin"]}
     assert rows["2026-07-06"]["partial"] is True, "window opened mid-week"
     assert rows["2026-07-13"]["partial"] is False, "a complete week inside the window"
     assert rows["2026-07-20"]["partial"] is True, "window closed mid-week"
+
+
+def test_origin_is_empty_rather_than_a_row_of_zeroes_with_no_requests():
+    """A synthesised 0-of-0 row reads as a week nobody filed anything, not as nothing crawled."""
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["origin"] == []

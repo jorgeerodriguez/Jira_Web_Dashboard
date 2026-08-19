@@ -57,20 +57,23 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   worse in the tail, Mann-Whitney z=+1.44 at n=26, which is not significant. A monthly multiple
   would read as a finding the sample cannot carry. What the work does demonstrate is capacity, which
   the next panel reports.
-- **Agent share of delivery** — every MR merged that week split by whether its description carries
-  the Claude footer, including MRs that name no Jira issue, because the claim is about PE's whole
-  output rather than the ticketed subset. This is the panel that carries the self-service argument:
-  agent-written and hand-written MRs merge at the *same* speed (p50 0.3h against 0.1h across 424 and
-  1046 MRs, the same engineers in both groups) because merging is already minutes for everyone, so a
-  rising share at flat headcount is throughput bought rather than latency traded. Ran 3% (Mar), 5%
-  (Apr), 21% (May), 16% (Jun), 33% (Jul), 44% (Aug, part-month). The month in progress is flagged
-  `partial`, and a trailing `+n?` counts MRs whose description the crawl has not read yet —
-  authorship unknown, held out of the share instead of being scored as hand-written.
+- **How requests arrive** — every request created that week split by **how it was created**: filed
+  by a self-service skill, or filed by a person. The bar is the self-service share. This is the
+  capacity argument in the unit that means something for it — demand PE absorbed without a person
+  writing the ticket.
 
-  **The unit is merge requests, not tickets**, and the gap is wide enough to look like a bug: of 643
-  MRs merged in July, 349 named a DEVOPS key and those resolved to just **117 distinct tickets** (one
-  spread across 19 MRs), while 294 named no ticket at all. So a weekly total runs near 3× what a
-  ticket count would, by design. The column headers say "MRs" for that reason.
+  **The unit is requests, not merge requests.** One request counts once however many MRs it took,
+  which is often several: July ran 643 merged MRs against just **117 distinct tickets** (349 named a
+  DEVOPS key, 294 named none, and one ticket was spread across 19 MRs). An earlier cut of this panel
+  counted MRs and put 645 on the page beside a ~200 ticket count, which reads as double counting; it
+  was neither double counting nor the right question, since a branch total says nothing about demand.
+
+  A request counts as self-service if a skill's **Jira watermark** is on it, or if a merge request it
+  produced carries a **pe:\*** label — some early skill-filed tickets never got the watermark and that
+  label is the only remaining evidence. Reading a merge request for that signal is not the same as
+  counting it, which is why the bounded lookback deliberately does not cut it off (see **Page
+  controls**).
+
 - **MR turnaround** — one panel, because the table and the daily chart are the same population under
   the same filters. Ready→merged per author, slowest first, then the same MRs cut by the day they
   landed as one coloured line per author. The table **is** the chart's legend: colours are assigned
