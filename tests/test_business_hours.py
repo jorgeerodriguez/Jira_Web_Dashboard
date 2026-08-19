@@ -118,3 +118,23 @@ def test_window_never_opens_before_the_self_service_epoch():
 def test_rolling_window_takes_over_once_it_starts_after_the_epoch():
     """The floor must not freeze the window open forever — six months on, rolling wins again."""
     assert window_start(datetime(2026, 11, 15, 12, 0), 6, SELF_SERVICE_EPOCH) == datetime(2026, 6, 1, 7, 0)
+
+
+def test_business_week_is_the_monday_in_the_business_timezone():
+    """Weeks are Monday-commencing in Pacific, so a week label is a date a person can look up."""
+    from darkstar.metrics import business_week
+    # Wed 2026-08-19 15:00 PDT -> Monday of that week
+    assert business_week(datetime(2026, 8, 19, 22, 0)) == date(2026, 8, 17)
+    assert business_week(datetime(2026, 8, 17, 15, 0)) == date(2026, 8, 17)     # the Monday itself
+
+
+def test_a_sunday_night_merge_belongs_to_the_week_that_is_ending():
+    """Grouping on the raw UTC stamp files the last merge of a week as the first of the next.
+
+    23:30 Pacific on Sunday is already Monday 06:30 UTC, so the naive timestamp's weekday is 0 and
+    the merge would open a new week containing just itself.
+    """
+    from darkstar.metrics import business_week
+    sunday_late = datetime(2026, 8, 24, 6, 30)          # Sun 2026-08-23 23:30 PDT
+    assert sunday_late.weekday() == 0, "the raw UTC stamp really is a Monday"
+    assert business_week(sunday_late) == date(2026, 8, 17), "must stay in the week that is ending"

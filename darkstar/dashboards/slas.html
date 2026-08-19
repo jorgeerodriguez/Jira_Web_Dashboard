@@ -143,8 +143,11 @@
   .linkish:hover{color:var(--ink)}
   /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
      and the daily chart — span both. */
-  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px; align-items:start}
-  .panel{min-width:0}
+  /* No align-items:start — grid's default stretch is what makes two panels in a row match height.
+     The panel is a flex column so its table takes the slack rather than leaving a gap. */
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px}
+  .panel{min-width:0; display:flex; flex-direction:column}
+  .panel > .tbl-wrap:last-child{flex:1}
   .panel.wide{grid-column:1 / -1}
   @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
   .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
@@ -196,8 +199,23 @@
   requests close, and how long merge requests take to land. All hours are business hours.</p>
 
   <div class="controls">
-    <label class="filter">Lookback from
+    <label class="filter">Lookback
+      <select id="preset">
+        <option value="">Panel defaults</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="last-week">Last week</option>
+        <option value="mtd">Month to date</option>
+        <option value="last-month">Last month</option>
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label class="filter" id="customRange" hidden>from
       <input id="since" type="date" min="2026-01-01">
+      <span>to</span>
+      <input id="until" type="date" min="2026-01-01">
     </label>
     <button class="btn" id="sinceReset" type="button">Reset to defaults</button>
     <span class="filter-hint" id="sinceHint"></span>
@@ -215,29 +233,39 @@
 
   </section>
   <section class="panel">
-  <h2>Delivery turnaround by month</h2>
+  <h2>Delivery turnaround by week</h2>
   <details class="note"><summary>About this panel</summary>
-  <p>Self-service requests grouped by the month they were <b>created</b>. A single
-  blended figure over the whole window libels current performance while the team is improving fast.
-  The bar is the share closed inside one working day — the p50 range is wide enough that plotting it
-  linearly would bury the recent months. Widen the lookback to see earlier months.</p>
+  <p>Self-service requests grouped by the week they were <b>created</b>, labelled by the Monday
+  commencing. Weekly rather than monthly because a month is too coarse to see a change land — four
+  weeks inside one month routinely diverge while the team is still improving.</p>
+  <p>Grouping by arrival means a recent week's cohort may not have closed. <b>In</b> is what arrived,
+  <b>Done</b> what has landed, and a <b>*</b> marks the gap: that week's p50 counts only the requests
+  that finished, so it reads faster than it will once the rest land. A week the window or the clock
+  cuts short is marked <b>partial</b>.</p>
+  <p>The bar is the share closed inside one working day, scaled to the best week shown — the p50
+  range is wide enough that plotting it linearly would bury the recent weeks.</p>
   </details>
-  <div class="tbl-wrap"><table id="monthlyTbl"></table></div>
+  <div class="tbl-wrap"><table id="weeklyTbl"></table></div>
   </section>
   <section class="panel">
   <h2>Agent share of delivery</h2>
   <details class="note"><summary>About this panel</summary>
-  <p>Every merge request merged that month, split by whether its description carries a
+  <p>Every merge request merged that week, split by whether its description carries a
   <b>Claude footer</b>. MRs naming no Jira issue are counted too — the question is what share of
   PE's whole output the agent writes, not what share of the ticketed subset.</p>
+  <p>The unit is <b>merge requests, not tickets</b>, and the two are far apart: of 643 MRs merged in
+  July, 349 named a DEVOPS key and those resolved to just <b>117 distinct tickets</b> — about 3 MRs
+  per ticket, one of them spread across 19 — while 294 named no ticket at all. So these totals run
+  near 3× a ticket count by design, not by double counting.</p>
   <p>This is the panel that carries the self-service argument. Measured head to head, agent-written
   and hand-written MRs merge at the <b>same speed</b> — p50 0.3h against 0.1h across 424 and 1046
   MRs, the same engineers in both groups — because merging is already minutes for everyone. What
   changed is volume: a rising share at flat headcount is capacity bought, not latency traded.</p>
-  <p>The month in progress is marked <b>partial</b>. Its counts are a part-month and its share is
-  not settled. A trailing <b>+n?</b> counts MRs merged that month whose description the crawl has
-  not read yet — authorship unknown, so they stay out of the share rather than being scored as
-  hand-written.</p>
+  <p>A week is marked <b>partial</b> whenever the window or the clock cuts it short — the first week
+  of a lookback that began mid-week, the last week of a bounded range, and the week in progress. All
+  three hold a part-week of merges and would otherwise read as a real dip. A trailing <b>+n?</b>
+  counts MRs whose description the crawl has not read yet: authorship unknown, so they stay out of
+  the share rather than being scored as hand-written.</p>
   </details>
   <div class="tbl-wrap"><table id="capacityTbl"></table></div>
   </section>
@@ -412,17 +440,57 @@ function renderMrTable(d){
     `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
 }
 
-/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to
-   both endpoints as ?since=; empty means "each panel uses its own default window". */
+/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to both
+   endpoints as ?since=/?until=; empty means "each panel uses its own default window".
+
+   Every preset resolves to dates in the BUSINESS timezone, not the browser's. A colleague in EET
+   picking "Yesterday" at 09:00 their time is still eight hours behind Pacific midnight, so a local
+   computation would ask for the wrong day and quietly show them different numbers than everyone
+   else. `until` is exclusive, matching the API. */
+const PRESET_KEY = "darkstar.slas.preset";
 const SINCE_KEY = "darkstar.slas.since";
+const UNTIL_KEY = "darkstar.slas.until";
+const BUSINESS_TZ = "America/Los_Angeles";
+
+function businessToday(){
+  // en-CA renders ISO-8601, so this is the current date *in Pacific* regardless of where we run.
+  const [y, m, d] = new Date().toLocaleDateString("en-CA", {timeZone: BUSINESS_TZ}).split("-");
+  return new Date(Date.UTC(+y, +m - 1, +d));
+}
+const iso = utc => utc.toISOString().slice(0, 10);
+const shift = (utc, days) => new Date(utc.getTime() + days * 86400000);
+
+/* Returns {since, until} as ISO dates, or null for "panel defaults". `until` is exclusive, so a
+   range ending "today" passes tomorrow and a single day passes the next day. */
+function presetRange(preset){
+  const today = businessToday();
+  const monday = ref => shift(ref, -((ref.getUTCDay() + 6) % 7));   // Sun=0 -> 6, so Monday is 0
+  switch(preset){
+    case "yesterday":  return {since: iso(shift(today, -1)), until: iso(today)};
+    case "last-week":  return {since: iso(shift(monday(today), -7)), until: iso(monday(today))};
+    case "mtd":        return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))),
+                               until: iso(shift(today, 1))};
+    case "last-month": return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1))),
+                               until: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)))};
+    case "30": case "60": case "90":
+      return {since: iso(shift(today, -Number(preset))), until: iso(shift(today, 1))};
+    case "custom": {
+      const since = document.getElementById("since").value;
+      const until = document.getElementById("until").value;
+      return since ? {since, until: until || ""} : null;
+    }
+    default: return null;
+  }
+}
 let mrData = null, slaData = null;
 
 /* Query string for a panel: the shared lookback, plus the author filter where the endpoint
    supports it. Built with URLSearchParams so an empty value simply never appears. */
 function query(withMrFilters){
   const p = new URLSearchParams();
-  const since = document.getElementById("since").value;
-  if(since) p.set("since", since);
+  const range = presetRange(document.getElementById("preset").value);
+  if(range && range.since) p.set("since", range.since);
+  if(range && range.until) p.set("until", range.until);
   if(withMrFilters){
     const terms = mrFilterTerms();
     if(terms.length) p.set("authors", terms.join(","));
@@ -504,7 +572,7 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
-  renderMonthlyTable(slaData.monthly);
+  renderWeeklyTable(slaData.weekly);
   renderCapacityTable(slaData.capacity);
   renderMrTable(mrData);
   renderDailyChart(mrData);
@@ -524,8 +592,9 @@ async function reload(){
     ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
       `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
     : `No human review comments on these MRs in the window.`;
-  document.getElementById("sinceHint").textContent = document.getElementById("since").value
-    ? "Applied to every panel on this page."
+  const range = presetRange(document.getElementById("preset").value);
+  document.getElementById("sinceHint").textContent = range
+    ? `${range.since} to ${range.until || "now"} (end exclusive), applied to every panel.`
     : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;
 }
 
@@ -534,33 +603,45 @@ async function reload(){
 /* Month-by-month turnaround. A table rather than a plotted line: the p50 range spans two orders
    of magnitude, so a linear axis buries exactly the recent months this panel exists to show. The
    bar carries the trend on a bounded scale — share closed inside one working day. */
-function renderMonthlyTable(rows){
-  const head=`<thead><tr><th>Month</th><th>n</th><th>p50</th><th>p90</th>`+
+/* Weekly, and labelled by the Monday commencing, because a week label has to be a date a person
+   can look up. `created` sits beside `delivered`: these rows group by the week a request came IN,
+   so a week whose cohort has not closed shows only what finished fast. */
+function renderWeeklyTable(rows){
+  const head=`<thead><tr><th>Week of</th><th>In</th><th>Done</th><th>p50</th><th>p90</th>`+
              `<th class="barcell">Inside a day</th></tr></thead>`;
-  const worst=Math.max(1,...(rows||[]).map(r=>r.within_day_pct||0));
+  const best=Math.max(1,...(rows||[]).map(r=>r.within_day_pct||0));
   const body=(rows||[]).map(r=>`<tr>
-     <td>${esc(r.month)}</td>
-     <td class="num">${r.delivered}</td>
+     <td>${esc(r.week)}${r.partial?' <span class="na" title="part-week: the window or the clock cuts it short">·&nbsp;partial</span>':''}</td>
+     <td class="num">${r.created}</td>
+     <td class="num">${r.delivered < r.created
+        ? `<span title="${r.created - r.delivered} still open, so this week is still settling">${r.delivered}*</span>`
+        : r.delivered}</td>
      <td class="num">${fmt(r.p50_hours)}${r.p50_hours!=null?"h":""}</td>
      <td class="num">${fmt(r.p90_hours)}${r.p90_hours!=null?"h":""}</td>
      <td class="barcell">${r.within_day_pct==null ? '<span class="na">—</span>'
-        : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/worst)}%"></span>`+
+        : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/best)}%"></span>`+
           `<span class="mini">${r.within_day_pct}%</span>`}</td>
    </tr>`).join("");
-  document.getElementById("monthlyTbl").innerHTML = head +
-    `<tbody>${body || '<tr><td colspan="5" class="na">No delivered requests in the window.</td></tr>'}</tbody>` +
-    `<caption>Business hours from created to done, by the month the request was created. The bar is `+
-    `the share closed inside one working day, scaled to the best month in view.</caption>`;
+  document.getElementById("weeklyTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="6" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>Business hours from created to done, by the week the request arrived. “In” is requests `+
+    `created that week and “Done” how many have landed — a <b>*</b> marks a cohort still settling, `+
+    `whose p50 counts only the ones that finished. The bar is the share closed inside one working `+
+    `day, scaled to the best week shown.</caption>`;
 }
 
 /* Capacity, not latency. Per-MR merge speed is the same whoever wrote it, so the thing that moved
    is how much of PE's total output is agent-authored. Counts every merged MR, including ones that
-   name no ticket. */
+   name no ticket.
+
+   The headers say "MRs" outright. The unit is roughly 3x a ticket count -- of 643 MRs merged in July
+   only 117 distinct tickets were named, one of them by 19 separate MRs -- so a reader comparing this
+   against a ticket total will otherwise reasonably assume it is double counting. */
 function renderCapacityTable(rows){
-  const head=`<thead><tr><th>Month</th><th>Agent</th><th>Hand</th><th>Total</th>`+
+  const head=`<thead><tr><th>Week of</th><th>Agent MRs</th><th>Hand MRs</th><th>All MRs</th>`+
              `<th class="barcell">Agent share</th></tr></thead>`;
   const body=(rows||[]).map(r=>`<tr>
-     <td>${esc(r.month)}${r.partial?' <span class="na" title="month still in progress">·&nbsp;partial</span>':''}</td>
+     <td>${esc(r.week)}${r.partial?' <span class="na" title="part-week: the window or the clock cuts it short">·&nbsp;partial</span>':''}</td>
      <td class="num">${r.agent}</td>
      <td class="num">${r.hand}</td>
      <td class="num">${r.total}${r.unmeasured
@@ -570,15 +651,16 @@ function renderCapacityTable(rows){
         : `<span class="bar" style="width:${r.agent_share_pct}%"></span>`+
           `<span class="mini">${r.agent_share_pct}%</span>`}</td>
    </tr>`).join("");
-  const first=(rows||[]).find(r=>r.agent_share_pct!=null);
-  const last=[...(rows||[])].reverse().find(r=>r.agent_share_pct!=null);
-  const arc=(first && last && first!==last)
-    ? `Agent-authored work went from ${first.agent_share_pct}% of merged MRs in ${first.month} to `+
-      `${last.agent_share_pct}%${last.partial?" so far":""} in ${last.month}, at flat headcount.`
+  const solid=(rows||[]).filter(r=>r.agent_share_pct!=null && !r.partial);
+  const arc=(solid.length>1)
+    ? `Agent-authored work went from ${solid[0].agent_share_pct}% of merged MRs in the week of `+
+      `${solid[0].week} to ${solid[solid.length-1].agent_share_pct}% in the week of `+
+      `${solid[solid.length-1].week}, at flat headcount.`
     : "Widen the lookback to see the trend.";
   document.getElementById("capacityTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="5" class="na">No merged MRs in the window.</td></tr>'}</tbody>` +
-    `<caption>${arc} Share is of every MR merged that month, ticketed or not.</caption>`;
+    `<caption>${arc} Counted in <b>merge requests, not tickets</b> — July ran 643 MRs against 117 `+
+    `distinct tickets, so these totals are near 3× a ticket count by design.</caption>`;
 }
 
 function niceCeil(v){
@@ -610,7 +692,7 @@ function renderDailyChart(d){
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top*f));
   const grid = ticks.map(t => `<line class="grid-line" x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}"/>`+
-    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join("");
+    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}h</text>`).join("");
   const step = Math.max(1, Math.ceil(days.length/5));
   const xlabels = days.map((day,i) => i % step ? "" :
     `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
@@ -701,9 +783,21 @@ function bindDailyHover(){
   base();
 }
 
+function syncCustomVisibility(){
+  const custom = document.getElementById("preset").value === "custom";
+  document.getElementById("customRange").hidden = !custom;
+}
+
 async function init(){
+  const preset = document.getElementById("preset");
   const since = document.getElementById("since");
+  const until = document.getElementById("until");
   since.value = localStorage.getItem(SINCE_KEY) || "";
+  until.value = localStorage.getItem(UNTIL_KEY) || "";
+  // A stored bare date predates the presets. Carry it over as a custom range rather than dropping
+  // it, so a refresh does not silently widen the window someone was reading.
+  preset.value = localStorage.getItem(PRESET_KEY) || (since.value ? "custom" : "");
+  syncCustomVisibility();
   try{
     await reload();
   }catch(e){
@@ -711,12 +805,20 @@ async function init(){
     return;
   }
 
-  since.addEventListener("change", async () => {
+  const applyRange = async () => {
+    localStorage.setItem(PRESET_KEY, preset.value);
     localStorage.setItem(SINCE_KEY, since.value);
+    localStorage.setItem(UNTIL_KEY, until.value);
+    syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
-  });
+  };
+  preset.addEventListener("change", applyRange);
+  since.addEventListener("change", applyRange);
+  until.addEventListener("change", applyRange);
   document.getElementById("sinceReset").addEventListener("click", async () => {
-    since.value = ""; localStorage.removeItem(SINCE_KEY);
+    preset.value = ""; since.value = ""; until.value = "";
+    [PRESET_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));
+    syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   });
   // Debounced refetch: the daily medians are computed server-side, so filtering must round-trip.

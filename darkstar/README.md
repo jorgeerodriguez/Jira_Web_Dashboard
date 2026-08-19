@@ -38,11 +38,18 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   code was AI-written beside it), requests this month vs last, self-service delivery speed against
   the rest of PE delivery, and time to first review. That speed card carries the same significance
   caveat as the dropped monthly column — see **Delivery turnaround by month** below.
-- **Delivery turnaround by month** — self-service requests grouped by creation month. A single
-  blended figure over the window libels current performance while the team is improving fast: the
-  p50 has run 406.7h (Apr), 99.2h (May), 13.8h (Jun), 10.0h (Jul), 2.9h (Aug). Reported as a table
-  with a bar for the share closed inside one working day, because the p50 spans two orders of
-  magnitude and a linear axis would bury exactly the recent months the panel exists to show.
+- **Delivery turnaround by week** — self-service requests grouped by the week they were created,
+  labelled by the Monday commencing. Weekly rather than monthly because a month is too coarse to see
+  a change land: over the last 30 days the weekly p50 ran 4.9h, 5.5h, 1.7h, 3.6h — movement a single
+  monthly figure flattens away. Reported as a table with a bar for the share closed inside one
+  working day, because the p50 spans two orders of magnitude and a linear axis would bury exactly the
+  recent weeks the panel exists to show.
+
+  Grouping by arrival means a recent cohort may not have closed, so the row carries **In** (requests
+  created that week) beside **Done** (how many have landed). A `*` marks the gap: that week's p50
+  counts only what finished, so it reads faster than it will once the rest land — the week of
+  2026-08-17 showed 10 in, 4 done. Without that column a half-settled week looks like the fastest
+  week on record.
 
   There is **no rest-of-PE comparison column**, and that is a measured decision rather than an
   omission. Head to head on live Jira for June, with abandoned statuses excluded from both arms,
@@ -50,7 +57,7 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   worse in the tail, Mann-Whitney z=+1.44 at n=26, which is not significant. A monthly multiple
   would read as a finding the sample cannot carry. What the work does demonstrate is capacity, which
   the next panel reports.
-- **Agent share of delivery** — every MR merged that month split by whether its description carries
+- **Agent share of delivery** — every MR merged that week split by whether its description carries
   the Claude footer, including MRs that name no Jira issue, because the claim is about PE's whole
   output rather than the ticketed subset. This is the panel that carries the self-service argument:
   agent-written and hand-written MRs merge at the *same* speed (p50 0.3h against 0.1h across 424 and
@@ -59,6 +66,11 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   (Apr), 21% (May), 16% (Jun), 33% (Jul), 44% (Aug, part-month). The month in progress is flagged
   `partial`, and a trailing `+n?` counts MRs whose description the crawl has not read yet —
   authorship unknown, held out of the share instead of being scored as hand-written.
+
+  **The unit is merge requests, not tickets**, and the gap is wide enough to look like a bug: of 643
+  MRs merged in July, 349 named a DEVOPS key and those resolved to just **117 distinct tickets** (one
+  spread across 19 MRs), while 294 named no ticket at all. So a weekly total runs near 3× what a
+  ticket count would, by design. The column headers say "MRs" for that reason.
 - **MR turnaround** — one panel, because the table and the daily chart are the same population under
   the same filters. Ready→merged per author, slowest first, then the same MRs cut by the day they
   landed as one coloured line per author. The table **is** the chart's legend: colours are assigned
@@ -244,10 +256,28 @@ failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-te
 
 Two controls on `/slas`, both server-backed rather than cosmetic:
 
-- **Lookback** — a date that overrides the window on *every* panel, sent as `?since=YYYY-MM-DD` to
-  both `/api/slas` and `/api/mr-turnaround`. Empty means each panel uses its own default (SLA 3
-  months, MR turnaround 6). Held in `localStorage` so it survives a refresh. A malformed date is a
-  400, never a silently different window than the box shows.
+- **Lookback** — a preset that overrides the window on *every* panel, sent as
+  `?since=YYYY-MM-DD&until=YYYY-MM-DD` to both `/api/slas` and `/api/mr-turnaround`. Presets are
+  yesterday, last week, month to date, last month, last 30/60/90 days, and a custom from/to pair;
+  "Panel defaults" means each panel keeps its own window (SLA 3 months, MR turnaround 6). Held in
+  `localStorage` so it survives a refresh, and a stored bare date from before the presets is carried
+  over as a custom range rather than dropped.
+
+  `until` is **exclusive**, so two adjacent ranges cannot double count and a single day is expressed
+  as `[day, day+1)`. Three rules keep the control honest rather than cosmetic:
+
+  - **Presets resolve in the business timezone, not the browser's.** A colleague in EET picking
+    "Yesterday" at 09:00 local is still hours behind Pacific midnight, so a browser-local computation
+    would fetch a different day than everyone else sees. Resolved via
+    `toLocaleDateString("en-CA", {timeZone: "America/Los_Angeles"})`.
+  - **An inverted or zero-width window is a 400**, not an empty page. Empty panels read as "the team
+    delivered nothing", which is a claim about the team rather than about the query.
+  - **`until` bounds what is counted, not what is read** — in `slas.py` the merge-request query stays
+    open-ended above, because it carries the footer, skill-label and first-review signals for each
+    ticket as well as the capacity counts. A request created inside a "last month" window whose MR
+    merged in August would otherwise lose those signals and be filed as non-AI, dropping it from the
+    very panel it belongs in. The bound is applied in-loop to the capacity accumulation instead.
+    `mrflow.py` bounds both ends in SQL, because there the population *is* MRs merged in the window.
 - **MR authors** — add a GitLab username to the table, or hide a row. Persisted to
   `darkstar_mr_authors.json` beside the store (`mr_authors.py`), so edits are team-wide and survive
   restarts, exactly like the SME overrides. Hidden names are dropped from the rows *and* the team
@@ -281,6 +311,12 @@ roster-gated views — velocity, capacity and the SME matrix all look up `ROSTER
 simply miss.
 
 ## Month-over-month comparison
+
+A week is flagged `partial` whenever the window or the clock cuts it short, and that means **both**
+edges, not just the week in progress: a lookback starting mid-week (which "last 30 days" almost
+always does) truncates its first week, and a bounded range ending mid-week truncates its last. A
+mid-week window over July showed 69 and 34 MRs in its edge weeks against ~120 for the full weeks
+between them — unflagged, that is a fabricated collapse at each end.
 
 `requests_prev_month` is `None`, not `0`, whenever the window opens after the start of last month.
 `created_by_month` only counts issues inside the window, so a lookback beginning on the 1st leaves

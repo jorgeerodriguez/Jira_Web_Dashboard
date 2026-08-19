@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 
@@ -50,7 +50,9 @@ from darkstar.metrics import (
     DELIVERY_TYPES,
     SELF_SERVICE_EPOCH,
     business_hours_between,
+    business_date,
     business_month,
+    business_week,
     pctile,
     ready_hours,
     window_start,
@@ -202,7 +204,22 @@ def default_window_start(now: datetime) -> datetime:
     return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
 
 
-def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime) -> dict:
+def _is_partial_week(week: date, since: datetime, until: datetime | None, now: datetime) -> bool:
+    """True when the window or the clock cuts this week short, so its counts are not a full week.
+
+    Three ways a week is truncated, and all three read as a real dip if unflagged:
+    the first week of a lookback that began mid-week ("last 30 days" almost always does), the last
+    week of a bounded window ending mid-week, and the week in progress right now.
+
+    Comparison is on business-tz calendar dates, because that is what the week label means.
+    """
+    week_end = week + timedelta(days=7)
+    ceiling = min(until, now) if until is not None else now
+    return week < business_date(since) or week_end > business_date(ceiling)
+
+
+def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime,
+                until: datetime | None = None) -> dict:
     """Volume, turnaround, SLA compliance (per audience x type) + agent success rate.
 
     `since` is the population floor (requests created on or after it), passed in rather than
@@ -213,8 +230,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     delivery = ", ".join(["?"] * len(DELIVERY_TYPES))
     issues = connection.execute(
         f"SELECT key, status, status_category, created, labels FROM issues "
-        f"WHERE created >= ? AND issuetype IN ({delivery})",
-        [since, *DELIVERY_TYPES],
+        f"WHERE created >= ? AND (? IS NULL OR created < ?) AND issuetype IN ({delivery})",
+        [since, until, until, *DELIVERY_TYPES],
     ).fetchall()
 
     transitions_by_key: dict[str, list[tuple[str, datetime]]] = {}
@@ -232,21 +249,22 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
     mr_by_key: dict[str, dict] = {}
-    capacity_by_month: dict[tuple[int, int], dict[str, int]] = {}
+    capacity_by_week: dict[date, dict[str, int]] = {}
     for mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by in connection.execute(
         "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by "
         "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
-        slot = capacity_by_month.setdefault(business_month(merged_at),
-                                            {"agent": 0, "hand": 0, "unknown": 0})
-        # A NULL description means the backfill has not read this MR yet, which is not the same as
-        # having no footer. Counting it as hand-written would credit the agent with less than it
-        # wrote, so it sits out of the ratio and is reported instead.
-        if description is None:
-            slot["unknown"] += 1
-        else:
-            slot["agent" if has_agent_footer(description) else "hand"] += 1
+        if until is None or merged_at < until:
+            slot = capacity_by_week.setdefault(business_week(merged_at),
+                                               {"agent": 0, "hand": 0, "unknown": 0})
+            # A NULL description means the backfill has not read this MR yet, which is not the same
+            # as having no footer. Counting it as hand-written would credit the agent with less than
+            # it wrote, so it sits out of the ratio and is reported instead.
+            if description is None:
+                slot["unknown"] += 1
+            else:
+                slot["agent" if has_agent_footer(description) else "hand"] += 1
         match = _KEY_RE.search(title or "")
         if not match:
             continue
@@ -282,7 +300,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     delivered_total = 0
     first_review_waits: list[float] = []
     self_service_reviewed = 0
-    turnaround_by_month: dict[tuple[int, int], list[float]] = {}
+    turnaround_by_week: dict[date, list[float]] = {}
+    created_by_week: dict[date, int] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -300,7 +319,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             (self_service_hours if is_self_service else other_hours).append(hours)
             if is_self_service:
                 delivered_self_service += 1
-                turnaround_by_month.setdefault(business_month(created), []).append(hours)
+                turnaround_by_week.setdefault(business_week(created), []).append(hours)
             if is_ai_generated:
                 delivered_ai_generated += 1
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
@@ -309,6 +328,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         if is_self_service:
             month = business_month(created)
             created_by_month[month] = created_by_month.get(month, 0) + 1
+            week = business_week(created)
+            created_by_week[week] = created_by_week.get(week, 0) + 1
 
         if not is_self_service:
             continue
@@ -404,21 +425,30 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # libels current performance when the team is improving fast: on the pilot data the p50 ran
     # 114.0h (May), 6.3h (Jun), 7.5h (Jul), 2.7h (Aug). The share within a working day is carried
     # alongside because the p50 range is wide enough that a linear axis buries the recent months.
+    # Weekly, not monthly: a month is too coarse to see a change land, and the team is changing
+    # fast enough that four weekly points inside one month diverge.
+    #
     # No rest-of-PE column. Measured head to head on live Jira for June, with abandoned statuses
     # excluded from both arms, self-service ran 15.9h p50 against 37.9h and 174.8h p90 against
     # 144.0h -- better at the median, worse in the tail, Mann-Whitney z=+1.44, not significant at
-    # n=26. A ratio printed monthly would read as a finding when the data does not carry one. The
+    # n=26. A ratio printed per week would read as a finding when the data does not carry one. The
     # capacity series below is what the self-service work actually demonstrates.
-    monthly = []
-    for month in sorted(turnaround_by_month):
-        hours = turnaround_by_month[month]
-        monthly.append({
-            "month": f"{month[0]:04d}-{month[1]:02d}",
+    #
+    # `created` sits beside `delivered` because these rows group by the week a request was CREATED.
+    # A week whose cohort has not closed yet shows only the requests that finished quickly, which
+    # reads as a fast week; delivered < created is how a reader sees that.
+    weekly = []
+    for week in sorted(set(turnaround_by_week) | set(created_by_week)):
+        hours = turnaround_by_week.get(week, [])
+        weekly.append({
+            "week": week.isoformat(),
+            "created": created_by_week.get(week, 0),
             "delivered": len(hours),
             "p50_hours": round(statistics.median(hours), 1) if hours else None,
             "p90_hours": pctile(hours, 0.9),
             "within_day_pct": (round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100)
                                if hours else None),
+            "partial": _is_partial_week(week, since, until, now),
         })
 
     # Capacity: what share of everything PE merges the agent now writes. Counted over every merged
@@ -426,23 +456,25 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # total output is agent-authored -- not how much of the ticketed subset is. Per-MR merge speed is
     # flat between the two (p50 0.3h agent vs 0.1h hand over 424/1046 MRs, the same engineers in
     # both), so a rising share at flat headcount is throughput bought, not latency traded.
+    #
+    # The unit is MERGE REQUESTS, not tickets, and the two differ by about 3x: of 643 MRs merged in
+    # July, 349 named a DEVOPS key and those resolved to just 117 distinct tickets (one produced 19),
+    # while 294 named none at all. The column headers say so, because a reader comparing this against
+    # a ticket count will otherwise assume it is double counting.
     capacity = []
-    current_month = business_month(now)
-    for month in sorted(capacity_by_month):
-        slot = capacity_by_month[month]
+    for week in sorted(capacity_by_week):
+        slot = capacity_by_week[week]
         total = slot["agent"] + slot["hand"]
         capacity.append({
-            "month": f"{month[0]:04d}-{month[1]:02d}",
+            "week": week.isoformat(),
             "agent": slot["agent"],
             "hand": slot["hand"],
             "total": total,
-            # Merged in the month but not yet backfilled, so its authorship is unknown. Outside
+            # Merged in the week but not yet backfilled, so its authorship is unknown. Outside
             # `total` on purpose: the share is of MRs whose authorship was actually determined.
             "unmeasured": slot["unknown"],
             "agent_share_pct": round(slot["agent"] / total * 100) if total else None,
-            # The month in progress is a part-month; labelling it stops a low count reading as a
-            # collapse in output and a high share reading as a settled figure.
-            "partial": month == current_month,
+            "partial": _is_partial_week(week, since, until, now),
         })
 
     agent_success = {
@@ -455,7 +487,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     return {
         "buckets": out_buckets,
         "headline": headline,
-        "monthly": monthly,
+        "weekly": weekly,
         "capacity": capacity,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],

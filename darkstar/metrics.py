@@ -59,6 +59,17 @@ def business_month(when: datetime) -> tuple[int, int]:
     return (local.year, local.month)
 
 
+def business_week(when: datetime) -> date:
+    """The Monday of the week containing a naive-UTC timestamp, in the business timezone.
+
+    The weekly counterpart to business_month, and it has to convert before taking the weekday for the
+    same reason: an MR merged 23:30 Pacific on a Sunday is already Monday in UTC, so grouping on the
+    raw timestamp would file the last merge of one week as the first of the next.
+    """
+    local = when.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ).date()
+    return local - timedelta(days=local.weekday())
+
+
 # The self-service workflows did not exist before this. Measured, not assumed: the first MR
 # carrying a "Generated with Claude Code" footer opened 2026-03-18, ramping 8 (Mar) / 22 (Apr) /
 # 74 (May) / 176 (Jun) / 215 (Jul). Reaching back past it pads every rate with dead months, so it

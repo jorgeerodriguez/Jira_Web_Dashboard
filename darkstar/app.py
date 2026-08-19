@@ -212,32 +212,52 @@ def api_delivery_forecast() -> JSONResponse:
     return JSONResponse(delivery.delivery_report(_db().cursor(), _utcnow()))
 
 
-def _since(value: str | None, fallback: datetime) -> datetime:
-    """Parse the page's shared lookback date (YYYY-MM-DD, business tz) or fall back to the default.
+def _day(value: str, field: str) -> datetime:
+    """Parse a YYYY-MM-DD lookback bound as midnight in the business timezone.
 
-    One control drives every panel, so the parse is shared. A bad date is rejected rather than
-    silently ignored — a dashboard quietly showing a different window than the box says is worse
-    than an error.
+    A bad date is rejected rather than silently ignored — a dashboard quietly showing a different
+    window than the control says is worse than an error.
     """
-    if not value:
-        return fallback
     try:
         day = datetime.strptime(value, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"since must be YYYY-MM-DD, got {value!r}")
+        raise HTTPException(status_code=400, detail=f"{field} must be YYYY-MM-DD, got {value!r}")
     return day.replace(tzinfo=metrics.BUSINESS_TZ).astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _since(value: str | None, fallback: datetime) -> datetime:
+    """The window's lower bound: the page's shared lookback, or this view's default."""
+    return fallback if not value else _day(value, "since")
+
+
+def _until(value: str | None, since: datetime) -> datetime | None:
+    """The window's exclusive upper bound. None means "up to now", which is the usual case.
+
+    Bounded ranges exist because the presets include them: yesterday, last week and last month all
+    end before today. An inverted window is rejected rather than served, because it produces empty
+    panels that read as "the team did nothing" instead of "you asked for nothing".
+    """
+    if not value:
+        return None
+    until = _day(value, "until")
+    if until <= since:
+        raise HTTPException(
+            status_code=400,
+            detail=f"until ({value}) must be after since ({since.date().isoformat()})")
+    return until
+
+
 @app.get("/api/slas")
-def api_slas(since: str | None = None) -> JSONResponse:
+def api_slas(since: str | None = None, until: str | None = None) -> JSONResponse:
     """Self-service SLA compliance, turnaround, and agent success rate (no Jira call)."""
     now = _utcnow()
-    return JSONResponse(slas.slas_report(_db().cursor(), now, _since(since, slas.default_window_start(now))))
+    start = _since(since, slas.default_window_start(now))
+    return JSONResponse(slas.slas_report(_db().cursor(), now, start, _until(until, start)))
 
 
 @app.get("/api/mr-turnaround")
-def api_mr_turnaround(since: str | None = None, authors: str | None = None,
-                      env: str | None = None) -> JSONResponse:
+def api_mr_turnaround(since: str | None = None, until: str | None = None,
+                      authors: str | None = None, env: str | None = None) -> JSONResponse:
     """Merge-request ready->merged turnaround per author and per day, read from the store.
 
     `authors` is a comma-separated list of name substrings, and `env` one of prod/nonprod/other/all.
@@ -250,8 +270,9 @@ def api_mr_turnaround(since: str | None = None, authors: str | None = None,
     environment = (env or "all").strip().lower()
     if environment not in ("all", "prod", "nonprod", "other"):
         raise HTTPException(status_code=400, detail=f"env must be all/prod/nonprod/other, got {env!r}")
+    start = _since(since, mrflow.default_window_start(now))
     return JSONResponse(mrflow.mr_turnaround_report(
-        _db().cursor(), _since(since, mrflow.default_window_start(now)), roster, terms, environment))
+        _db().cursor(), start, roster, terms, environment, _until(until, start)))
 
 
 @app.get("/api/gitlab-users")

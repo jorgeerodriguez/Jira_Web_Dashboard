@@ -164,3 +164,34 @@ def test_a_failing_recrawl_does_not_break_the_add(monkeypatch, tmp_path):
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person"})
     assert res.status_code == 200
     assert client.get("/api/mr-authors").json()["added"] == {"audacy-new.person": "audacy-new.person"}
+
+
+def test_an_inverted_window_is_rejected_rather_than_served_empty(monkeypatch, tmp_path):
+    """Empty panels read as "the team did nothing", not as "you asked for nothing"."""
+    client, _ = _client(monkeypatch, tmp_path, "inv.duckdb")
+    response = client.get("/api/slas", params={"since": "2026-08-01", "until": "2026-07-01"})
+    assert response.status_code == 400
+    assert "must be after" in response.json()["detail"]
+
+
+def test_a_zero_width_window_is_rejected(monkeypatch, tmp_path):
+    """until is exclusive, so since == until can only ever return nothing."""
+    client, _ = _client(monkeypatch, tmp_path, "zero.duckdb")
+    assert client.get("/api/slas",
+                      params={"since": "2026-08-01", "until": "2026-08-01"}).status_code == 400
+
+
+def test_a_malformed_until_is_rejected_and_names_the_field(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, "mal.duckdb")
+    response = client.get("/api/slas", params={"since": "2026-08-01", "until": "last-tuesday"})
+    assert response.status_code == 400
+    assert "until" in response.json()["detail"]
+
+
+def test_both_bounds_reach_the_mr_turnaround_route(monkeypatch, tmp_path):
+    """The same control drives both endpoints, so both must accept the pair."""
+    client, _ = _client(monkeypatch, tmp_path, "mrb.duckdb")
+    assert client.get("/api/mr-turnaround",
+                      params={"since": "2026-07-01", "until": "2026-08-01"}).status_code == 200
+    assert client.get("/api/mr-turnaround",
+                      params={"since": "2026-08-01", "until": "2026-07-01"}).status_code == 400

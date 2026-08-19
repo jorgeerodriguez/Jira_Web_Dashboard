@@ -338,8 +338,12 @@ def test_this_month_is_still_reported_either_way():
     assert head["requests_this_month"] == 1
 
 
-def test_monthly_trend_groups_by_creation_month():
-    """A blended figure over the window libels current performance while the team improves fast."""
+def test_weekly_trend_groups_by_creation_week():
+    """A blended figure over the window libels current performance while the team improves fast.
+
+    Weekly rather than monthly because a month is too coarse to see a change land: four weeks inside
+    one month routinely diverge while the team is still improving.
+    """
     conn = _fresh()
     # July: one slow request (created 09:00, done 16:00 next working day => 9h + 7h)
     store.upsert_issues(conn, [_issue("DEVOPS-70", ["DevOps", "pe-iac-request"],
@@ -353,18 +357,21 @@ def test_monthly_trend_groups_by_creation_month():
         store.replace_transitions(conn, [key], [store.TransitionRow(
             key=key, to_status="Done", changed_at=datetime(2026, 8, day, 18, 0, 0), seq=0)])
 
-    monthly = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"]
-    assert [m["month"] for m in monthly] == ["2026-07", "2026-08"]   # ascending
-    assert monthly[0]["delivered"] == 1 and monthly[0]["within_day_pct"] == 0
-    assert monthly[1]["delivered"] == 2 and monthly[1]["p50_hours"] == 2.0
-    assert monthly[1]["within_day_pct"] == 100        # both inside a 9h working day
+    weekly = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["weekly"]
+    # Mon 2026-07-20 and Mon 2026-08-03, labelled by the Monday commencing each week.
+    assert [w["week"] for w in weekly] == ["2026-07-20", "2026-08-03"]   # ascending
+    assert weekly[0]["delivered"] == 1 and weekly[0]["within_day_pct"] == 0
+    assert weekly[1]["delivered"] == 2 and weekly[1]["p50_hours"] == 2.0
+    assert weekly[1]["within_day_pct"] == 100        # both inside a 9h working day
+    # Both cohorts closed, so nothing is still settling.
+    assert [w["created"] for w in weekly] == [1, 2]
 
 
-def test_monthly_trend_is_empty_when_nothing_delivered():
-    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["monthly"] == []
+def test_weekly_trend_is_empty_when_nothing_delivered():
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["weekly"] == []
 
 
-def test_monthly_trend_no_longer_reports_a_rest_of_pe_ratio():
+def test_weekly_trend_no_longer_reports_a_rest_of_pe_ratio():
     """The comparison was removed because the data does not support it.
 
     Head to head on live June data, abandoned excluded from both arms, self-service ran 15.9h p50
@@ -381,7 +388,7 @@ def test_monthly_trend_no_longer_reports_a_rest_of_pe_ratio():
     store.replace_transitions(conn, ["DEVOPS-81"], [store.TransitionRow(
         key="DEVOPS-81", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
 
-    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["weekly"][0]
     assert row["delivered"] == 1 and row["p50_hours"] == 2.0
     for gone in ("other_delivered", "other_p50_hours", "faster_by"):
         assert gone not in row
@@ -418,22 +425,19 @@ def test_capacity_counts_merge_requests_that_name_no_ticket():
     assert row["total"] == 3 and row["agent_share_pct"] == 67
 
 
-def test_capacity_marks_the_month_in_progress_as_partial():
-    """An unlabelled part-month reads as a collapse in output, or as a settled share.
-
-    August through the 18th holds roughly two thirds of a month's merges. Without the flag the
-    panel presents that shortfall as a real decline.
-    """
+def test_capacity_marks_the_week_in_progress_as_partial():
+    """An unlabelled part-week reads as a collapse in output, or as a settled share."""
     conn = _fresh()
     store.upsert_merge_requests(conn, [
         _mr(93, "DEVOPS-93", [], datetime(2026, 7, 6, 16, 0, 0), datetime(2026, 7, 6, 17, 0, 0),
             description="Generated with Claude Code"),
-        _mr(94, "DEVOPS-94", [], datetime(2026, 8, 6, 16, 0, 0), datetime(2026, 8, 6, 17, 0, 0),
+        _mr(94, "DEVOPS-94", [], datetime(2026, 8, 18, 16, 0, 0), datetime(2026, 8, 18, 17, 0, 0),
             description="Generated with Claude Code"),
     ])
-    rows = {r["month"]: r for r in _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"]}
-    assert rows["2026-07"]["partial"] is False
-    assert rows["2026-08"]["partial"] is True
+    # Now is Tue 2026-08-18 05:00 Pacific, so the week commencing 2026-08-17 is still running.
+    rows = {r["week"]: r for r in _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"]}
+    assert rows["2026-07-06"]["partial"] is False
+    assert rows["2026-08-17"]["partial"] is True
 
 
 def test_capacity_is_empty_rather_than_a_row_of_zeroes_with_no_merges():
@@ -466,3 +470,69 @@ def test_capacity_does_not_score_an_unread_description_as_hand_written():
     assert row["hand"] == 0, "an unread description must not be counted as hand-written"
     assert row["unmeasured"] == 1
     assert row["total"] == 1 and row["agent_share_pct"] == 100
+
+
+def test_a_bounded_window_still_reads_merge_requests_that_merged_after_it():
+    """`until` must bound what is COUNTED, not what is READ, or classification silently degrades.
+
+    The MR query does double duty: it counts capacity and it carries the footer / skill-label /
+    first-review signals for each ticket. A request created inside a "last month" window whose MR
+    merged days after that window closed would lose those signals and be filed as non-AI — the
+    request would vanish from the very panel it belongs in.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-97", ["DevOps"], datetime(2026, 7, 28, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-97"], [store.TransitionRow(
+        key="DEVOPS-97", to_status="Done", changed_at=datetime(2026, 7, 29, 18, 0, 0), seq=0)])
+    # No Jira watermark: the MR's pe:* label is the only thing marking this self-service, and it
+    # merged on 3 August — after a window covering July only.
+    store.upsert_merge_requests(conn, [
+        _mr(97, "DEVOPS-97", ["pe:iac-request"],
+            datetime(2026, 8, 3, 16, 0, 0), datetime(2026, 8, 3, 17, 0, 0))])
+
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
+                              datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
+    assert report["weekly"], "the July request must appear despite its MR merging in August"
+    assert sum(w["delivered"] for w in report["weekly"]) == 1
+    # ...and that out-of-window MR must not be counted as July capacity.
+    assert report["capacity"] == []
+
+
+def test_capacity_excludes_a_merge_request_landing_exactly_on_the_upper_bound():
+    """`until` is exclusive, so a window is half-open and two adjacent ranges cannot double count."""
+    conn = _fresh()
+    store.upsert_merge_requests(conn, [
+        _mr(98, "DEVOPS-98", [], datetime(2026, 7, 30, 16, 0, 0), datetime(2026, 7, 31, 17, 0, 0),
+            description="Generated with Claude Code"),
+        # merged at exactly 2026-08-01 00:00 Pacific, the bound itself
+        _mr(99, "DEVOPS-99", [], datetime(2026, 8, 1, 6, 0, 0), datetime(2026, 8, 1, 7, 0, 0),
+            description="Generated with Claude Code"),
+    ])
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
+                             datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
+    assert sum(r["agent"] for r in report["capacity"]) == 1
+
+
+def test_both_edges_of_a_window_are_flagged_partial_not_just_the_current_week():
+    """A lookback starting mid-week holds a part-week at each end; unflagged, both read as dips.
+
+    "Last 30 days" almost never starts on a Monday, and a bounded window rarely ends on a Sunday.
+    """
+    conn = _fresh()
+    store.upsert_merge_requests(conn, [
+        # week commencing Mon 2026-07-06, but the window opens Wed the 8th
+        _mr(101, "DEVOPS-101", [], datetime(2026, 7, 9, 16, 0, 0), datetime(2026, 7, 9, 17, 0, 0),
+            description="Generated with Claude Code"),
+        # a whole week inside the window
+        _mr(102, "DEVOPS-102", [], datetime(2026, 7, 15, 16, 0, 0), datetime(2026, 7, 15, 17, 0, 0),
+            description="Generated with Claude Code"),
+        # week commencing Mon 2026-07-20, but the window closes Wed the 22nd
+        _mr(103, "DEVOPS-103", [], datetime(2026, 7, 21, 16, 0, 0), datetime(2026, 7, 21, 17, 0, 0),
+            description="Generated with Claude Code"),
+    ])
+    rows = {r["week"]: r for r in slas.slas_report(
+        conn, datetime(2026, 8, 19, 12, 0, 0),
+        datetime(2026, 7, 8, 7, 0, 0), datetime(2026, 7, 22, 7, 0, 0))["capacity"]}
+    assert rows["2026-07-06"]["partial"] is True, "window opened mid-week"
+    assert rows["2026-07-13"]["partial"] is False, "a complete week inside the window"
+    assert rows["2026-07-20"]["partial"] is True, "window closed mid-week"
