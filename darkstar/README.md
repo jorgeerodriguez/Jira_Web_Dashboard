@@ -132,9 +132,23 @@ none, so keying on that would make the backfill run forever.
 
 ## Production vs non-production
 
-`gitlab_domains.environment_of` reads the deployment environment from the repo name. The check is
-**ordered and token-based**, never a substring test, because `nonprod` contains `prod` — a naive
-`"prod" in name` files every non-production repo as production. On the current corpus: 45 prod
+`gitlab_domains.environment_of` reads the deployment environment from the repo name first, falling
+back to the MR's changed file paths when the name says nothing. The check is **ordered and
+token-based**, never a substring test, because `nonprod` contains `prod` — a naive `"prod" in name`
+files every non-production repo as production.
+
+The repo name wins outright: a repo called `tf-aardvark2-prod` deploys to production whatever
+directory a change sits in. Paths only decide the cases the name cannot, which matters because
+several repos hold both trees — `gitops-k8s-team-a2` keeps
+`clusters/prod-fluxv2/namespaces/app/prod/...` beside its nonprod tree. Three ST-975 cutover MRs
+there were filed as `other`, hiding a production coordination delay in an unclassified bucket. On
+the crawled corpus paths classify **192 of the 955** otherwise-unknown MRs (104 prod, 88 nonprod),
+roughly 8% of all merge requests.
+
+An MR touching **both** trees is `mixed`: excluded from the environment views, because folding a
+cross-environment change into either bucket misreports that bucket, and reported as a count so the
+exclusion is visible rather than silent. Paths are fetched only for MRs whose repo name is silent,
+not for every row. On the current corpus: 45 prod
 repos / 737 MRs, 48 nonprod / 856, and 84 / 884 in neither. That third bucket is `other`, not a
 failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-team-a2` and
 `tf-coreservices`, and folding it into either side would misreport both.

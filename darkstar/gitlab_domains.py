@@ -64,21 +64,48 @@ def domains_for(project_path: str, paths: list[str]) -> set[str]:
 PRODUCTION: str = "prod"
 NONPRODUCTION: str = "nonprod"
 OTHER_ENVIRONMENT: str = "other"
+MIXED_ENVIRONMENT: str = "mixed"
 
-_SEPARATORS = re.compile(r"[-_.]")
+_SEPARATORS = re.compile(r"[-_./]")
 
 
-def environment_of(project_path: str) -> str:
-    """"prod", "nonprod", or "other" for a repo path.
+def _tokens(text: str) -> set[str]:
+    return set(_SEPARATORS.split(text.lower()))
 
-    "other" is not a failure: it covers the dev/qa/shd repos and the env-less shared ones
-    (gitops-k8s-team-a2, tf-coreservices), which together are roughly a third of all MRs. Folding
-    them into either side would misreport both.
+
+def environment_of(project_path: str, changed_paths: list[str]) -> str:
+    """"prod", "nonprod", "mixed" or "other" for a merge request.
+
+    The repo name wins. A repo named tf-aardvark2-prod deploys to production whatever directory a
+    change happens to sit in, so the name is the stronger claim and paths are consulted only when
+    it says nothing.
+
+    Paths matter because several repos hold both environments — gitops-k8s-team-a2 keeps
+    clusters/prod-fluxv2/namespaces/app/prod/... alongside its nonprod tree, so the repo name is
+    silent while the change is unambiguously production. On the crawled corpus this classifies 192
+    of the 955 otherwise-unknown MRs.
+
+    An MR touching BOTH trees is "mixed", not one or the other: that is an unusual change spanning
+    environments, and folding it into either bucket would misreport that bucket. It is excluded
+    from the environment views and counted separately rather than dropped in silence.
+
+    The check is ordered and token-based, never a substring test, because "nonprod" contains
+    "prod" — a naive `"prod" in name` marks every non-production repo as production.
     """
-    repo = project_path.rsplit("/", 1)[-1].lower()
-    tokens = set(_SEPARATORS.split(repo))
-    if NONPRODUCTION in tokens:
+    repo = _tokens(project_path.rsplit("/", 1)[-1])
+    if NONPRODUCTION in repo:
         return NONPRODUCTION
-    if PRODUCTION in tokens:
+    if PRODUCTION in repo:
+        return PRODUCTION
+
+    touched: set[str] = set()
+    for path in changed_paths:
+        touched |= _tokens(path)
+    in_nonprod, in_prod = NONPRODUCTION in touched, PRODUCTION in touched
+    if in_nonprod and in_prod:
+        return MIXED_ENVIRONMENT
+    if in_nonprod:
+        return NONPRODUCTION
+    if in_prod:
         return PRODUCTION
     return OTHER_ENVIRONMENT

@@ -39,7 +39,7 @@ from datetime import datetime
 
 import duckdb
 
-from darkstar.gitlab_domains import environment_of
+from darkstar.gitlab_domains import MIXED_ENVIRONMENT, OTHER_ENVIRONMENT, environment_of
 from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
@@ -108,6 +108,23 @@ def mr_turnaround_report(
     hidden = set(roster.get("hidden") or [])
     # One pass, two cuts: keep (account, merged-day, hours) per MR so the per-author and per-day
     # views are guaranteed to describe exactly the same population.
+    # Changed paths are only needed where the repo name says nothing, so fetch them for that
+    # subset rather than loading every path row on every request.
+    unnamed = [
+        mr_id for mr_id, project_path in connection.execute(
+            "SELECT id, project_path FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
+            [since],
+        ).fetchall()
+        if environment_of(project_path, []) == OTHER_ENVIRONMENT
+    ]
+    paths_by_mr: dict[int, list[str]] = {}
+    if unnamed:
+        placeholders = ", ".join(["?"] * len(unnamed))
+        for mr_id, path in connection.execute(
+            f"SELECT mr_id, path FROM mr_files WHERE mr_id IN ({placeholders})", unnamed
+        ).fetchall():
+            paths_by_mr.setdefault(mr_id, []).append(path)
+
     events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
     for mr_id, kind, happened_at in connection.execute(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
@@ -127,6 +144,7 @@ def mr_turnaround_report(
     by_author_day: dict[str, dict[str, list[float]]] = {}
     review_waits: list[float] = []
     reviewed = 0
+    mixed = 0
     for mr_id, account_id, project_path, opened_at, merged_at in connection.execute(
         "SELECT id, author_account_id, project_path, opened_at, merged_at FROM merge_requests "
         "WHERE merged_at >= ? AND opened_at IS NOT NULL",
@@ -135,7 +153,13 @@ def mr_turnaround_report(
         name = names.get(account_id)
         if name is None or name in hidden or not _matches(name, name_filter):
             continue
-        if environment != _ALL_ENVIRONMENTS and environment_of(project_path) != environment:
+        env = environment_of(project_path, paths_by_mr.get(mr_id, []))
+        if env == MIXED_ENVIRONMENT:
+            # An MR spanning both trees belongs to neither bucket; counted, never folded in.
+            mixed += 1
+            if environment != _ALL_ENVIRONMENTS:
+                continue
+        elif environment != _ALL_ENVIRONMENTS and env != environment:
             continue
         events = events_by_mr.get(mr_id, [])
         hours = ready_hours(opened_at, merged_at, events)
@@ -188,6 +212,7 @@ def mr_turnaround_report(
         "filter": name_filter,
         "environment": environment,
         "crawl": crawl_state(connection, roster),
+        "mixed": mixed,
         "incomplete": int(incomplete or 0),
         "earliest_measurable": earliest_measurable.date().isoformat() if earliest_measurable else None,
         # Time to the first human review comment (bots and the author's own notes excluded at
