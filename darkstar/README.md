@@ -39,8 +39,17 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   the rest of PE delivery, and time to first review.
 - **MR turnaround by author** — ready→merged per author, slowest first, filterable by author and
   by environment.
+- **Delivery turnaround by month** — self-service requests grouped by creation month. A single
+  blended figure over the window libels current performance while the team is improving fast: the
+  p50 has run 406.7h (Apr), 99.2h (May), 13.8h (Jun), 10.0h (Jul), 2.9h (Aug). Reported as a table
+  with a bar for the share closed inside one working day, because the p50 spans two orders of
+  magnitude and a linear axis would bury exactly the recent months the panel exists to show.
 - **Daily MR turnaround** — the same population cut by the day each MR merged, one coloured line
   per author.
+
+The page is a two-column grid; the card row and the daily chart span both columns. Each panel's
+heading collapses its own section, and the derivation notes at the foot are a `<details>` collapsed
+by default — reference material that dominated the page when always open.
 
 ## How a number gets made
 

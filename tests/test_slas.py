@@ -336,3 +336,29 @@ def test_this_month_is_still_reported_either_way():
     now = datetime(2026, 8, 18, 12, 0, 0)
     head = slas.slas_report(conn, now, slas.window_start(now, 1, SELF_SERVICE_EPOCH))["headline"]
     assert head["requests_this_month"] == 1
+
+
+def test_monthly_trend_groups_by_creation_month():
+    """A blended figure over the window libels current performance while the team improves fast."""
+    conn = _fresh()
+    # July: one slow request (created 09:00, done 16:00 next working day => 9h + 7h)
+    store.upsert_issues(conn, [_issue("DEVOPS-70", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 7, 20, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-70"], [store.TransitionRow(
+        key="DEVOPS-70", to_status="Done", changed_at=datetime(2026, 7, 21, 23, 0, 0), seq=0)])
+    # August: two fast ones
+    for key, day in (("DEVOPS-71", 5), ("DEVOPS-72", 6)):
+        store.upsert_issues(conn, [_issue(key, ["DevOps", "pe-iac-request"],
+                                          datetime(2026, 8, day, 16, 0, 0))])
+        store.replace_transitions(conn, [key], [store.TransitionRow(
+            key=key, to_status="Done", changed_at=datetime(2026, 8, day, 18, 0, 0), seq=0)])
+
+    monthly = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"]
+    assert [m["month"] for m in monthly] == ["2026-07", "2026-08"]   # ascending
+    assert monthly[0]["delivered"] == 1 and monthly[0]["within_day_pct"] == 0
+    assert monthly[1]["delivered"] == 2 and monthly[1]["p50_hours"] == 2.0
+    assert monthly[1]["within_day_pct"] == 100        # both inside a 9h working day
+
+
+def test_monthly_trend_is_empty_when_nothing_delivered():
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["monthly"] == []

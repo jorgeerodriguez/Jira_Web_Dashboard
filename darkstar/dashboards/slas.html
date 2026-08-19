@@ -113,7 +113,12 @@
   .fc .rng{font-family:var(--mono); font-size:12px; color:var(--muted)}
   .fc.empty{color:var(--muted); font-size:13px; display:flex; align-items:center}
 
-  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:76ch}
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); max-width:76ch}
+  .foot > div{margin-top:7px}
+  .foot summary{cursor:pointer; font-family:var(--mono); font-size:12px; text-transform:uppercase;
+        letter-spacing:.1em; color:var(--muted); user-select:none}
+  .foot summary:hover{color:var(--ink2)}
+  .foot[open] summary{margin-bottom:4px}
   .foot b{color:var(--ink2); font-weight:600}
   .foot code{font-family:var(--mono); color:var(--ink2)}
   h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
@@ -122,6 +127,12 @@
   h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
   h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
   .sec-hidden{display:none !important}
+  /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
+     and the daily chart — span both. */
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px 34px; align-items:start}
+  .panel{min-width:0}
+  .panel.wide{grid-column:1 / -1}
+  @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
   .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
           text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
   .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
@@ -177,12 +188,24 @@
     <span class="filter-hint" id="sinceHint"></span>
   </div>
 
+  <div class="panels">
+  <section class="panel wide">
   <h2>Self-service impact</h2>
   <p class="h2sub">A <b>label</b> means the request came through a self-service skill; a
   <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
   overlap but are not the same, so the share card reports both.</p>
   <div class="cards" id="successStats"></div>
 
+  </section>
+  <section class="panel">
+  <h2>Delivery turnaround by month</h2>
+  <p class="h2sub">Self-service requests grouped by the month they were <b>created</b>. A single
+  blended figure over the whole window libels current performance while the team is improving fast.
+  The bar is the share closed inside one working day — the p50 range is wide enough that plotting it
+  linearly would bury the recent months. Widen the lookback to see earlier months.</p>
+  <div class="tbl-wrap"><table id="monthlyTbl"></table></div>
+  </section>
+  <section class="panel">
   <h2>MR turnaround by author</h2>
   <p class="h2sub">Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
@@ -225,6 +248,8 @@
   <p class="filter-hint" id="reviewNote"></p>
   <div id="hiddenChips" class="chips"></div>
 
+  </section>
+  <section class="panel wide">
   <h2>Daily MR turnaround</h2>
   <p class="h2sub">The same merged MRs, cut by the business-timezone day they landed rather than by
   author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
@@ -232,29 +257,50 @@
   Hover a point for the exact figures. Days with nothing merged are omitted.</p>
   <div class="tbl-wrap"><div id="dailyChart"></div></div>
 
-  <div class="foot">
-    <div><b>What's counted.</b> DEVOPS issues carrying an agent watermark (a <code>pe-*</code> Jira label).
-    The request type comes from the linked GitLab MR's <code>pe:&lt;skill&gt;</code> label
-    (<code>pe:iac-request</code> / <code>pe:k8s-request</code> / <code>pe:tf-module</code> / <code>pe:troubleshoot</code>),
-    matched to the issue by its <code>DEVOPS-</code> key; an issue with no linked MR falls back to its Jira
-    <code>pe-*</code> label. Delivery turnaround = created → first <code>Done</code> (changelog). Review
-    turnaround = MR <code>opened_at</code> → <code>merged_at</code>. v1 tracks AI requests; human-side is a follow-up.</div>
-    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
-    filed 15:00 and closed 08:00 next morning is 2h, not 17h. Targets are business hours too.</div>
-    <div><b>Review median vs. MR turnaround.</b> The per-type <b>review median</b> above keeps one MR per
-    Jira issue (the earliest, for deterministic bucketing), so an issue delivered across several MRs
-    contributes once. The <b>MR turnaround</b> table counts every merged MR. Only merged MRs are ingested,
-    so neither is a queue depth — an MR still open is invisible until it lands.</div>
-    <div><b>Windows.</b> The impact cards read the trailing 3 months of requests by creation date;
-    MR turnaround keeps its own 6-month window back to 2026-03, when the workflows began. Both are
-    overridden by the lookback control at the top.</div>
-    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task). A Feature or
-    Epic is a container for requests, not a request, and its lifetime distorts the median. Roughly
-    18% of a typical request's turnaround falls <i>after</i> its MR merged — shipped work waiting to
-    be closed out — so an auto-transition on merge would improve every figure here for free.</div>
-    <div><b>Agent success (v1).</b> Store-derived: terminal AI requests that reached Done vs
-    Won't Do/Cancelled. Invocation-level success from the CloudWatch GenAI dashboard (DEVOPS-9562) is deferred.</div>
+  </section>
   </div>
+
+  <details class="foot">
+    <summary>How these numbers are derived</summary>
+
+    <div><b>Self-service vs AI-generated.</b> A request is <b>self-service</b> when a skill-stamped
+    label is present — <code>pe-*</code>, <code>ai-generated</code> or <code>self-service</code> on the
+    Jira issue, or <code>pe:&lt;skill&gt;</code> on the linked MR. It is <b>AI-generated</b> when the MR
+    description carries a <code>Generated with Claude Code</code> footer, whoever filed the ticket. They
+    overlap but are not the same: the Jira labels only began 2026-05-27, two months after the first
+    agent-footered MR, and 96 issues since then are footer-only — ordinary human-filed tickets PE
+    delivered with the agent.</div>
+
+    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
+    filed 15:00 and closed 08:00 next morning is 2h, not 17h. A business day is 9h, a week 45h. Raw
+    calendar time is not reported anywhere.</div>
+
+    <div><b>Delivery turnaround</b> = created → first <code>Done</code> in the changelog
+    (<code>resolutiondate</code> is null on ~85% of issues). <b>MR turnaround</b> = <b>ready</b> →
+    merged: time in draft is excluded, because the author is still working rather than waiting on
+    review. Across the 20 slowest MRs, 67% of attributed hours had been draft time.</div>
+
+    <div><b>Time to first review</b> is the earliest of a non-author comment, a non-author approval, or
+    a merge by someone other than the author. PE engineers merge their own work once a colleague
+    approves, so a self-merge is not evidence nobody looked — the approval is the review. Requests from
+    outside PE cannot be merged by the requester, so there the merge is the review.</div>
+
+    <div><b>Environment</b> comes from the repo name, falling back to the changed file paths for repos
+    like <code>gitops-k8s-team-a2</code> that hold both trees. A change touching both is counted as
+    mixed and left out of the environment views.</div>
+
+    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task) — a Feature or
+    Epic is a container for requests, not a request. Only merged MRs are ingested, so nothing here is a
+    queue depth: an MR still open is invisible until it lands.</div>
+
+    <div><b>Windows.</b> Impact cards and the monthly trend read the trailing 3 months of requests by
+    creation date; MR turnaround keeps its own 6-month window back to 2026-03, when the workflows
+    began. Both are overridden by the lookback control at the top.</div>
+
+    <div><b>Worth fixing.</b> Roughly 18% of a typical request's turnaround falls <i>after</i> its MR
+    merged — shipped work waiting to be closed out. An auto-transition on merge would improve every
+    figure here for free (DEVOPS-10186).</div>
+  </details>
 </main>
 <script>
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -411,6 +457,7 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
+  renderMonthlyTable(slaData.monthly);
   renderMrTable(mrData);
   renderDailyChart(mrData);
   renderHidden();
@@ -436,6 +483,26 @@ async function reload(){
 
 /* Median per day, with an inline bar scaled to the worst day in view — enough to see a trend
    without an axis. Days with no merged MRs simply do not appear. */
+/* Month-by-month turnaround. A table rather than a plotted line: the p50 range spans two orders
+   of magnitude, so a linear axis buries exactly the recent months this panel exists to show. The
+   bar carries the trend on a bounded scale — share closed inside one working day. */
+function renderMonthlyTable(rows){
+  const head=`<thead><tr><th>Month</th><th>Delivered</th><th>p50 (h)</th><th>p90 (h)</th>`+
+             `<th>Within a day</th></tr></thead>`;
+  const body=(rows||[]).map(r=>`<tr>
+     <td>${esc(r.month)}</td>
+     <td class="num">${r.delivered}</td>
+     <td class="num">${fmt(r.p50_hours)}</td>
+     <td class="num">${fmt(r.p90_hours)}</td>
+     <td class="barcell"><span class="bar" style="width:${Math.max(1, r.within_day_pct)}%"
+       title="${r.within_day_pct}% closed within one working day"></span>
+       <span class="na">&nbsp;${r.within_day_pct}%</span></td>
+   </tr>`).join("");
+  document.getElementById("monthlyTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="5" class="na">No delivered requests in the window.</td></tr>'}</tbody>` +
+    `<caption>By the month the request was created. Grouped on the same business clock as everything else.</caption>`;
+}
+
 function niceCeil(v){
   if(v <= 0) return 1;
   const mag = Math.pow(10, Math.floor(Math.log10(v)));
@@ -622,20 +689,25 @@ async function init(){
 }
 init();
 
-/* ---------- collapsible sections: each <h2> toggles the elements beneath it (up to the next h2 / footer) ---------- */
+/* ---------- collapsible sections ----------
+   Each panel's <h2> toggles the rest of its own section, so the grid can nest them. The notes block
+   starts collapsed: it is reference material, and expanded it dominated the page. */
 (function(){
-  const card=document.querySelector("main.card");
-  const isStop=el=> el.tagName==="H2" || el.classList.contains("foot");
-  card.querySelectorAll(":scope > h2").forEach(h=>{
-    const body=[]; let n=h.nextElementSibling;
-    while(n && !isStop(n)){ body.push(n); n=n.nextElementSibling; }
-    h.classList.add("collapsible");
-    h.setAttribute("role","button");
-    h.setAttribute("tabindex","0");
-    h.setAttribute("aria-expanded","true");
-    const set=open=>{ h.setAttribute("aria-expanded",String(open)); body.forEach(el=>el.classList.toggle("sec-hidden",!open)); };
-    h.addEventListener("click",()=>set(h.getAttribute("aria-expanded")!=="true"));
-    h.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(h.getAttribute("aria-expanded")!=="true"); }});
+  const panels=[...document.querySelectorAll("section.panel")].map(sec=>({
+    head: sec.querySelector("h2"),
+    body: [...sec.children].filter(el=>el.tagName!=="H2"),
+    open: true,
+  }));
+  panels.forEach(({head, body, open})=>{
+    if(!head) return;
+    head.classList.add("collapsible");
+    head.setAttribute("role","button");
+    head.setAttribute("tabindex","0");
+    head.setAttribute("aria-expanded",String(open));
+    const set=o=>{ head.setAttribute("aria-expanded",String(o)); body.forEach(el=>el.classList.toggle("sec-hidden",!o)); };
+    set(open);
+    head.addEventListener("click",()=>set(head.getAttribute("aria-expanded")!=="true"));
+    head.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(head.getAttribute("aria-expanded")!=="true"); }});
   });
 })();
 </script>

@@ -45,6 +45,7 @@ import duckdb
 
 from darkstar.mrflow import first_review_at
 from darkstar.metrics import (
+    BUSINESS_HOURS_PER_DAY,
     BUSINESS_TZ,
     DELIVERY_TYPES,
     SELF_SERVICE_EPOCH,
@@ -271,6 +272,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     delivered_total = 0
     first_review_waits: list[float] = []
     self_service_reviewed = 0
+    turnaround_by_month: dict[tuple[int, int], list[float]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -288,6 +290,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             (self_service_hours if is_self_service else other_hours).append(hours)
             if is_self_service:
                 delivered_self_service += 1
+                turnaround_by_month.setdefault(business_month(created), []).append(hours)
             if is_ai_generated:
                 delivered_ai_generated += 1
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
@@ -387,6 +390,20 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "first_review_p90_hours": pctile(first_review_waits, 0.9),
     }
 
+    # Turnaround by the month the request was CREATED. A single blended figure over the window
+    # libels current performance when the team is improving fast: on the pilot data the p50 ran
+    # 114.0h (May), 6.3h (Jun), 7.5h (Jul), 2.7h (Aug). The share within a working day is carried
+    # alongside because the p50 range is wide enough that a linear axis buries the recent months.
+    monthly = []
+    for (year, month), hours in sorted(turnaround_by_month.items()):
+        monthly.append({
+            "month": f"{year:04d}-{month:02d}",
+            "delivered": len(hours),
+            "p50_hours": round(statistics.median(hours), 1),
+            "p90_hours": pctile(hours, 0.9),
+            "within_day_pct": round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100),
+        })
+
     agent_success = {
         "terminal": success_terminal,
         "succeeded": success_done,
@@ -397,6 +414,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     return {
         "buckets": out_buckets,
         "headline": headline,
+        "monthly": monthly,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],
         "targets": SLA_TARGETS_HOURS,
