@@ -8,7 +8,9 @@ what these tests pin.
 from datetime import datetime
 from types import SimpleNamespace
 
-from darkstar import ingest
+import duckdb
+
+from darkstar import ingest, store
 
 _NOW = datetime(2026, 8, 19, 12, 0, 0)
 
@@ -18,13 +20,15 @@ def test_the_issue_sync_requests_the_merge_request_field():
     assert "customfield_11534" in ingest._ISSUE_FIELDS, "the Merge Request field must be fetched"
 
 
-def _issue(**fields):
+def _issue(created=None, **fields):
     base = {
         "summary": "s", "status": {"name": "Done", "statusCategory": {"key": "done"}},
         "issuetype": {"name": "Task"}, "priority": {"name": "Low"}, "labels": [],
         "created": "2026-08-05T16:00:00.000-0600", "updated": "2026-08-05T17:00:00.000-0600",
         "project": {"key": "DEVOPS"},
     }
+    if created is not None:
+        base["created"] = created.strftime("%Y-%m-%dT%H:%M:%S.000-0000")
     base.update(fields)
     return SimpleNamespace(raw={"key": "DEVOPS-1", "id": "1", "fields": base})
 
@@ -75,3 +79,153 @@ def test_applying_flags_leaves_every_other_field_untouched():
     flagged = ingest.apply_dev_panel_flags([row], {"DEVOPS-1"}, {"DEVOPS-1"})[0]
     assert flagged.mr_field_url == url and flagged.key == row.key
     assert flagged.created == row.created and flagged.labels == row.labels
+
+
+def _stored_issue(conn, key, created, **overrides):
+    row = ingest._map_issue(_issue(created=created), _NOW)
+    from dataclasses import replace
+    store.upsert_issues(conn, [replace(row, key=key, id=int(key.split("-")[1]), **overrides)])
+
+
+def test_issues_predating_a_column_are_detected_because_incremental_never_revisits_them():
+    """The gap this closes: a watermark-driven sync only fetches issues that CHANGED.
+
+    After the deploy that added these columns, all 9,811 stored issues kept NULL in them and nothing
+    would ever have refilled them — GitLab's side self-heals through _needs_backfill, Jira's had no
+    equivalent.
+    """
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-1", datetime(2026, 6, 1, 12, 0))
+    assert ingest.issues_missing_link_fields(conn, datetime(2026, 3, 1)) == 1
+
+    conn.execute("UPDATE issues SET dev_has_pr = FALSE")
+    assert ingest.issues_missing_link_fields(conn, datetime(2026, 3, 1)) == 0, \
+        "and it must stop once filled, or every cycle re-runs the backfill"
+
+
+def test_an_empty_merge_request_field_does_not_look_like_a_missing_backfill():
+    """Keying on mr_field_url would re-fetch the same issues forever.
+
+    Most issues legitimately have no Merge Request field set, so NULL there is a value, not an
+    absence. dev_has_pr is written False for every issue queried, which makes NULL unambiguous.
+    """
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-2", datetime(2026, 6, 1, 12, 0))
+    conn.execute("UPDATE issues SET dev_has_pr = FALSE, dev_has_commits = FALSE, mr_field_url = NULL")
+    assert ingest.issues_missing_link_fields(conn, datetime(2026, 3, 1)) == 0
+
+
+def test_the_backfill_is_scoped_to_the_window_the_panels_display():
+    """8,525 of the store's 9,811 issues predate anything on screen; re-reading them is waste."""
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-3", datetime(2025, 11, 1, 12, 0))   # long before the epoch
+    _stored_issue(conn, "DEVOPS-4", datetime(2026, 6, 1, 12, 0))
+    assert ingest.issues_missing_link_fields(conn, datetime(2026, 3, 1)) == 1
+
+
+def test_the_backfill_reads_fields_and_never_changelogs(monkeypatch):
+    """Changelogs are one request per issue — the whole reason this is not just a full re-sync.
+
+    A full sync of the deployed store is ~9,800 requests; this is ~15. The transitions already stored
+    must be left exactly as they are.
+    """
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-5", datetime(2026, 6, 1, 12, 0))
+    store.replace_transitions(conn, ["DEVOPS-5"], [store.TransitionRow(
+        key="DEVOPS-5", to_status="Done", changed_at=datetime(2026, 6, 2, 12, 0), seq=0)])
+
+    fetched = ingest._map_issue(_issue(customfield_11534="https://gitlab.com/g/p/-/merge_requests/1"),
+                                _NOW)
+    from dataclasses import replace
+    monkeypatch.setattr(ingest, "fetch_issues",
+                        lambda jira, jql: [replace(fetched, key="DEVOPS-5", id=5)])
+    monkeypatch.setattr(ingest, "fetch_dev_panel_keys",
+                        lambda jira, jql, predicate: {"DEVOPS-5"})
+    def _explode(*a, **k):
+        raise AssertionError("the backfill must not fetch changelogs")
+    monkeypatch.setattr(ingest, "fetch_transitions", _explode)
+
+    assert ingest.backfill_link_fields(object(), conn, datetime(2026, 3, 1)) == 1
+    row = conn.execute(
+        "SELECT mr_field_url, dev_has_pr FROM issues WHERE key = 'DEVOPS-5'").fetchone()
+    assert row[0] == "https://gitlab.com/g/p/-/merge_requests/1" and row[1] is True
+    assert conn.execute("SELECT count(*) FROM transitions").fetchone()[0] == 1, \
+        "existing transitions must survive untouched"
+
+
+def test_a_sync_cycle_self_heals_issues_the_incremental_slice_never_touches(monkeypatch):
+    """The backfill has to be wired into the cycle, not merely exist.
+
+    This is the whole point: an ordinary incremental sync fetches only what changed, and the stored
+    issue below did not. Without the call in run_sync it keeps NULL forever and no panel ever knows.
+    """
+    from zoneinfo import ZoneInfo
+    from dataclasses import replace
+
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-9", datetime(2026, 6, 1, 12, 0))     # untouched since the column landed
+    assert conn.execute("SELECT dev_has_pr FROM issues WHERE key='DEVOPS-9'").fetchone()[0] is None
+
+    changed = ingest._map_issue(_issue(created=datetime(2026, 8, 1, 12, 0)), _NOW)
+    stale = ingest._map_issue(_issue(created=datetime(2026, 6, 1, 12, 0)), _NOW)
+
+    def _fetch(jira, jql):
+        # the incremental slice returns only the changed issue; the backfill re-reads the window
+        return ([replace(changed, key="DEVOPS-10", id=10)] if "updated >=" in jql
+                else [replace(stale, key="DEVOPS-9", id=9)])
+
+    monkeypatch.setattr(ingest, "fetch_issues", _fetch)
+    monkeypatch.setattr(ingest, "fetch_dev_panel_keys", lambda jira, jql, predicate: {"DEVOPS-9"})
+    monkeypatch.setattr(ingest, "fetch_transitions", lambda jira, keys: [])
+
+    plan = ingest.SyncPlan(watermark=datetime(2026, 8, 19, 0, 0), last_full_sync=_NOW)
+    ingest.run_sync(conn, object(), plan, _NOW, ZoneInfo("America/Denver"))
+
+    healed = conn.execute("SELECT dev_has_pr FROM issues WHERE key='DEVOPS-9'").fetchone()[0]
+    assert healed is True, "the untouched issue must be refilled by the backfill"
+    assert ingest.issues_missing_link_fields(conn, datetime(2026, 3, 1)) == 0
+
+
+def test_the_backfill_is_skipped_once_the_window_is_filled(monkeypatch):
+    """Otherwise every cycle pays 13 extra pages forever."""
+    from zoneinfo import ZoneInfo
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    _stored_issue(conn, "DEVOPS-11", datetime(2026, 6, 1, 12, 0))
+    conn.execute("UPDATE issues SET dev_has_pr = FALSE, dev_has_commits = FALSE")
+
+    calls: list[str] = []
+    monkeypatch.setattr(ingest, "fetch_issues", lambda jira, jql: (calls.append(jql) or []))
+    monkeypatch.setattr(ingest, "fetch_dev_panel_keys", lambda jira, jql, predicate: set())
+    monkeypatch.setattr(ingest, "fetch_transitions", lambda jira, keys: [])
+
+    plan = ingest.SyncPlan(watermark=datetime(2026, 8, 19, 0, 0), last_full_sync=_NOW)
+    ingest.run_sync(conn, object(), plan, _NOW, ZoneInfo("America/Denver"))
+    assert len(calls) == 1, "only the incremental slice; no backfill pass"
+
+
+def test_the_incremental_jql_builds_at_all():
+    """A regression guard for a NameError that reached production.
+
+    Commit 1cb4914 deleted a block of module constants along with the dev-summary parser it was
+    meant to remove, taking `_WATERMARK_MARGIN` with it. `build_incremental_jql` still referenced it,
+    so every incremental Jira sync on the deployed pod raised NameError — and nothing in the suite
+    called this function, so it merged green.
+    """
+    from zoneinfo import ZoneInfo
+    jql = ingest.build_incremental_jql(datetime(2026, 8, 19, 21, 21), ZoneInfo("America/Denver"))
+    assert 'updated >= "2026-08-19 15:19"' in jql, "watermark, converted to the account tz, less the margin"
+    assert jql.startswith("project = DEVOPS")
+
+
+def test_the_watermark_margin_overlaps_rather_than_butting_up():
+    """Jira's `updated` has minute resolution, so an exact floor drops same-minute updates."""
+    from zoneinfo import ZoneInfo
+    exact = datetime(2026, 8, 19, 21, 21)
+    jql = ingest.build_incremental_jql(exact, ZoneInfo("UTC"))
+    assert '"2026-08-19 21:19"' in jql, "two minutes of overlap"
