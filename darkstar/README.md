@@ -279,6 +279,13 @@ Two controls on `/slas`, both server-backed rather than cosmetic:
     away — and a date typed there resolved against a select still reading "Panel defaults", which
     returns null, so the dates were silently dropped and the whole control looked inert. Editing
     either date now also switches the select to Custom, so typing a date can never be a no-op.
+  - **`init()` wires every listener before its first load, and never returns early.** One missing
+    element in one render used to throw out of `reload()`, which `init()` caught and returned from —
+    so every listener after that point was never attached and the whole page went inert at once:
+    lookback, author filter, environment filter, add and hide. The panels showed stale data with no
+    error on them, so it read as "the picker does not work" rather than "a render crashed". A broken
+    panel must cost that panel, not the page, and `test_app_slas_route.py` pins both the ordering and
+    the render targets, since nothing else connects a `getElementById` to the markup carrying it.
   - **An inverted or zero-width window is a 400**, not an empty page. Empty panels read as "the team
     delivered nothing", which is a claim about the team rather than about the query.
   - **`until` bounds what is counted, not what is read** — in `slas.py` the merge-request query stays

@@ -316,6 +316,7 @@
   </div>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <p class="filter-hint" id="hiddenNote"></p>
   <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
   <h3>By day merged</h3>
@@ -784,6 +785,11 @@ function syncCustomVisibility(){
   document.getElementById("customRange").hidden = !custom;
 }
 
+/* Wiring comes BEFORE the first load, and nothing here may return early.
+
+   A missing element in one render used to throw out of reload(), and init() caught it and returned
+   — so every listener after that point was never attached and the whole page went inert: lookback,
+   author filter, environment, add and hide. A broken panel has to cost that panel, not the page. */
 async function init(){
   const preset = document.getElementById("preset");
   const since = document.getElementById("since");
@@ -794,12 +800,6 @@ async function init(){
   // it, so a refresh does not silently widen the window someone was reading.
   preset.value = localStorage.getItem(PRESET_KEY) || (since.value ? "custom" : "");
   syncCustomVisibility();
-  try{
-    await reload();
-  }catch(e){
-    showError("Failed to load: " + e.message);
-    return;
-  }
 
   const applyRange = async () => {
     localStorage.setItem(PRESET_KEY, preset.value);
@@ -866,6 +866,13 @@ async function init(){
     const name = e.target.getAttribute && e.target.getAttribute("data-show");
     if(name) editAuthors({op: "show", display_name: name});
   });
+
+  // Last, so a failure here leaves every control above still working.
+  try{
+    await reload();
+  }catch(e){
+    showError("Failed to load: " + e.message);
+  }
 }
 init();
 

@@ -238,3 +238,37 @@ def test_every_lookback_preset_the_page_offers_is_handled_by_the_resolver(monkey
     resolver = page[page.index("function presetRange("):page.index("function query(")]
     for preset in offered:
         assert f'case "{preset}"' in resolver, f'preset {preset!r} has no case in presetRange()'
+
+
+def test_every_element_the_page_script_looks_up_exists_in_the_markup(monkeypatch, tmp_path):
+    """A getElementById that returns null throws, and one throw took out the whole page.
+
+    Merging two panels dropped `<p id="hiddenNote">` while renderHidden() still targeted it. That
+    threw out of reload(), init() caught it and returned, and every listener after that point was
+    never attached — the lookback picker, author filter, environment filter, add and hide all went
+    dead at once, with no error visible on the panels themselves. Nothing but this test connects a
+    render target to the markup that has to carry it.
+    """
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "ids.duckdb")
+    wanted = set(re.findall(r'getElementById\("([^"]+)"\)', page))
+    # Ignore interpolated ids — those are built at render time, not declared in the template.
+    present = set(re.findall(r'id="([^"${]+)"', page))
+    assert wanted, "the page should look elements up at all"
+    assert not (wanted - present), f"script targets missing from markup: {sorted(wanted - present)}"
+
+
+def test_the_first_load_runs_after_every_listener_is_wired(monkeypatch, tmp_path):
+    """Ordering is the reason a broken panel cost the whole page rather than just that panel.
+
+    If the initial `await reload()` sits before the addEventListener calls, any render failure skips
+    the wiring. It has to be the last thing init() does.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "order.duckdb")
+    init = page[page.index("async function init(){"):page.index("\ninit();")]
+    assert init.index("addEventListener") < init.rindex("await reload()"), \
+        "init() must wire its listeners before the first reload"
+    # Nested callbacks legitimately return; what must not happen is init's own body bailing out
+    # between the load and the wiring. With the load last, there is no "between" left.
+    assert init.rindex("await reload()") > init.rindex('addEventListener("click"'), \
+        "the first reload must come after the last listener init() attaches"
