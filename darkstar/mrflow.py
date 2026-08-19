@@ -54,8 +54,9 @@ from darkstar.roster import MR_AUTHOR_NAMES, TRACKED_MR_AUTHORS
 _WINDOW_MONTHS: int = 6
 # The drill-down list is for inspecting outliers, not for browsing the whole window: a 6-month
 # lookback is well over a thousand merge requests. Capped, and the count left out is reported rather
-# than the list quietly ending.
-_SLOWEST_LIMIT: int = 25
+# than the list quietly ending. The page flips through it ten at a time, which is why the cap can be
+# this generous -- at 25 the tail was unreachable rather than merely unlisted.
+_SLOWEST_LIMIT: int = 100
 _ALL_ENVIRONMENTS: str = "all"
 _TRACKED_ACCOUNTS: frozenset[str] = frozenset(TRACKED_MR_AUTHORS.values())
 

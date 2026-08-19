@@ -131,8 +131,15 @@ links are dim enough to be worth revisiting.
 ## Inspecting an outlier
 
 **Slowest merge requests** under the MR turnaround chart is the drill-down behind the aggregates —
-the same population, same filters, slowest first, capped at 25 with the number left out reported
-rather than the list quietly ending.
+the same population, same filters, slowest first, **ten to a page** with the rank carried on each row
+so a page of ten does not lose its place in the ordering.
+
+Paged rather than scrolled, deliberately. A fixed box with an inner scrollbar hides how deep the tail
+goes and is easy to miss inside a page that already scrolls; a pager states the population outright
+(`11–20 of 100 slowest · 30 faster of 130 measured not listed`), which is the thing a drill-down has
+to be honest about. It is also what let the server cap rise from 25 to 100 — at 25 the rest were
+unreachable rather than merely unlisted. New data resets to page one, so a narrower filter cannot
+leave you on a page that no longer exists.
 
 Each row carries **two** clocks, and the pair is the point. `Ready → merged` is the figure the table
 and chart are built from; `Open` is the whole span; `Draft` is the difference. An MR open five days
