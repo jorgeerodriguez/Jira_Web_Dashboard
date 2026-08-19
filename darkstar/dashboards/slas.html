@@ -223,7 +223,7 @@
   </details>
   <div class="tbl-wrap"><table id="monthlyTbl"></table></div>
   </section>
-    <section class="panel">
+  <section class="panel wide">
   <h2>MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
   <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
@@ -554,7 +554,7 @@ function renderDailyChart(d){
       `No merged MRs in the window${(d.filter||[]).length ? " for that author filter" : ""}.</p>`;
     return;
   }
-  const W = 560, H = 300, L = 44, R = 12, T = 14, B = 34;
+  const W = 900, H = 280, L = 44, R = 12, T = 14, B = 34;
   const top = niceCeil(Math.max(...series.flatMap(s => s.points.map(p => p.biz_hours_median || 0)), 1));
   const idx = Object.fromEntries(days.map((day, i) => [day, i]));
   const x = i => L + (days.length === 1 ? (W-L-R)/2 : i * (W-L-R) / (days.length-1));
