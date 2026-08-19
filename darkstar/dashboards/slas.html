@@ -171,6 +171,28 @@
   .note summary::before{content:"\24D8"; margin-right:6px}
   .note summary:hover{color:var(--ink2)}
   .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
+  /* No link may fall back to the browser default. Measured against this panel, #0000EE is 1.72:1
+     and the visited #551A8B is 1.47:1, where AA body text needs 4.5:1 — effectively unreadable. The
+     accent is 5.94:1 on --panel and 6.35:1 on --well. The nav sits outside main.card and keeps its
+     own quieter treatment, so this cannot reach it. */
+  .card a{color:var(--accent)}
+  .card a:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+  /* Merge-request refs are identifiers, so they read better in mono, and an underline that is not
+     full-strength keeps a column of them from turning into a wall of rules. */
+  tbody a{font-family:var(--mono); text-decoration:none; padding-bottom:1px;
+        border-bottom:1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+        transition:color .12s, background .12s, border-color .12s}
+  tbody a:hover{color:#fff; border-bottom-color:#fff; background:var(--accent-soft)}
+  caption a,.note a,.foot a{text-decoration:underline; text-underline-offset:2px}
+  .pager{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+        margin-top:12px; font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .pager .pg-btns{display:inline-flex; align-items:center; gap:8px}
+  .pager .pg-at{min-width:52px; text-align:center; color:var(--ink2)}
+  .pager .btn[disabled]{opacity:.4; cursor:default}
+  .pager .btn[disabled]:hover{color:var(--muted); border-color:var(--line2)}
+  /* The rank is the row's position in the slowest ordering, which a page of ten would otherwise lose. */
+  .rank{display:inline-block; min-width:22px; font-family:var(--mono); font-size:11px;
+        color:var(--muted); text-align:right; margin-right:9px}
   .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
         text-decoration:underline dotted; cursor:pointer}
   .linkish:hover{color:var(--ink)}
@@ -369,6 +391,10 @@
   <h3>By day merged</h3>
 
   <div class="tbl-wrap"><div id="dailyChart"></div></div>
+
+  <h3>Slowest merge requests</h3>
+  <div class="tbl-wrap"><table id="slowestTbl"></table></div>
+  <div class="pager" id="slowestPager"></div>
   </section>
   </div>
 
@@ -417,6 +443,33 @@
 <script>
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 const fmt = v => v==null ? '<span class="na">—</span>' : v;
+
+/* Every duration on this page is business hours, and printing them as decimal hours made the reader
+   do the arithmetic: time to first review read "0.1h" for what is six minutes, and the MR medians
+   read "0.3h" and "0.1h" for eighteen and six.
+
+   Three tiers, because the values span four orders of magnitude: minutes under an hour, hours and
+   minutes under a working day, and working days beyond that. A day here is NINE hours, not
+   twenty-four — that is what the clock counts, so 45h is a working week and printing "1d 21h" for it
+   would be a different lie. The raw figure stays in the title attribute for anyone who wants it. */
+const HOURS_PER_DAY = 9;
+
+function durText(hours){
+  const mins = Math.round(hours * 60);
+  if(mins === 0) return hours > 0 ? "<1m" : "0m";
+  if(mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if(h < HOURS_PER_DAY) return m ? `${h}h ${m}m` : `${h}h`;
+  const d = Math.floor(h / HOURS_PER_DAY), rh = h % HOURS_PER_DAY;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
+
+/* Renders a duration with the decimal-hour figure kept on hover, so nothing is lost. */
+function dur(hours){
+  if(hours == null) return '<span class="na">—</span>';
+  return `<span title="${hours} business hours · a working day is ${HOURS_PER_DAY}h">`+
+         `${durText(hours)}</span>`;
+}
 const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
 
 /* Three questions a human actually asks: is it used, does it carry real load, is it faster.
@@ -427,12 +480,12 @@ function renderSuccess(h){
   const comparable = h.requests_prev_month != null;
   const delta = comparable ? h.requests_this_month - h.requests_prev_month : null;
   const speed = (h.self_service_median_hours!=null && h.other_median_hours!=null)
-    ? `${h.self_service_median_hours}h vs ${h.other_median_hours}h`
+    ? `${durText(h.self_service_median_hours)} vs ${durText(h.other_median_hours)}`
     : '—';
   const factor = (h.self_service_median_hours>0 && h.other_median_hours!=null)
     ? `${(h.other_median_hours/h.self_service_median_hours).toFixed(1)}× faster than the rest of PE delivery`
     : 'no comparison population in this window';
-  const review = h.first_review_median_hours==null ? '—' : h.first_review_median_hours+'h';
+  const review = h.first_review_median_hours==null ? '—' : durText(h.first_review_median_hours);
   document.getElementById("successStats").innerHTML =
     card("Self-service share", h.share_pct==null?'—':h.share_pct+'%',
          `${h.share_delivered} of ${h.share_total} delivered tickets came through a skill`+
@@ -444,7 +497,7 @@ function renderSuccess(h){
     card("Self-service speed", speed, factor) +
     card("Time to first review", review,
          h.first_review_reviewed
-           ? `${h.first_review_reviewed} drew a human comment · p90 ${fmt(h.first_review_p90_hours)}h`
+           ? `${h.first_review_reviewed} drew a human comment · p90 ${h.first_review_p90_hours==null ? "—" : durText(h.first_review_p90_hours)}`
            : "no human review comments in this window");
 }
 
@@ -467,15 +520,15 @@ function renderMrTable(d){
   const shown = terms.length
     ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
     : d.authors;
-  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median (h)</th>`+
-             `<th>p90 (h)</th><th></th></tr></thead>`;
+  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median</th>`+
+             `<th>p90</th><th></th></tr></thead>`;
   const seriesKey = new Map((d.series || []).map((sr, i) => [sr.name, String(i)]));
   const row=(a,cls)=>`<tr class="${cls}" data-k="${seriesKey.has(a.name) ? seriesKey.get(a.name) : ""}">
      <td>${colour.get(a.name) ? `<span class="swatch" style="background:${colour.get(a.name)}"></span>` : ""}`+
         `${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
      <td class="num">${a.merged}</td>
-     <td class="num">${fmt(a.biz_hours_median)}</td>
-     <td class="num">${fmt(a.biz_hours_p90)}</td>
+     <td class="num">${dur(a.biz_hours_median)}</td>
+     <td class="num">${dur(a.biz_hours_p90)}</td>
      <td class="num">${cls==="sum" ? "" :
        `<button class="rowx" type="button" data-hide="${esc(a.name)}" title="Hide ${esc(a.name)}">×</button>`}</td>
    </tr>`;
@@ -628,6 +681,8 @@ async function reload(){
   renderOriginTable(slaData.origin, slaData.grain);
   renderMrTable(mrData);
   renderDailyChart(mrData);
+  slowestPage = 0;
+  renderSlowest(mrData);
   renderHidden();
   document.getElementById("windowNote").textContent = mrData.window_start;
   const crawl = mrData.crawl || {};
@@ -641,8 +696,8 @@ async function reload(){
       : `No GitLab crawl has completed yet.`;
   const fr = mrData.first_review || {};
   document.getElementById("reviewNote").innerHTML = fr.reviewed
-    ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
-      `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
+    ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${durText(fr.hours_median)}</b> `+
+      `to first review, p90 ${durText(fr.hours_p90)}. The rest merged with no comment at all.`
     : `No human review comments on these MRs in the window.`;
   const range = presetRange(document.getElementById("preset").value);
   const rows = `Rows grouped by ${GRAIN_NOUN[slaData.grain] || slaData.grain}`+
@@ -684,8 +739,8 @@ function renderTurnaroundTable(rows, grain){
      <td class="num">${r.delivered < r.created
         ? `<span title="${r.created - r.delivered} still open, so this ${noun} is still settling">${r.delivered}*</span>`
         : r.delivered}</td>
-     <td class="num">${fmt(r.p50_hours)}${r.p50_hours!=null?"h":""}</td>
-     <td class="num">${fmt(r.p90_hours)}${r.p90_hours!=null?"h":""}</td>
+     <td class="num">${dur(r.p50_hours)}</td>
+     <td class="num">${dur(r.p90_hours)}</td>
      <td class="barcell">${r.within_day_pct==null ? '<span class="na">—</span>'
         : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/best)}%"></span>`+
           `<span class="mini">${r.within_day_pct}%</span>`}</td>
@@ -725,6 +780,67 @@ function renderOriginTable(rows, grain){
     `<tbody>${body || '<tr><td colspan="5" class="na">No requests created in the window.</td></tr>'}</tbody>` +
     `<caption>${arc} Counted in <b>requests</b>, by the ${noun} each was created — one request counts `+
     `once however many merge requests it took.</caption>`;
+}
+
+/* The drill-down behind the numbers above: which merge requests actually took days.
+
+   Two clocks per row on purpose. `open_hours` is the whole span in business hours and `ready_hours`
+   only the spells it was marked ready, so the gap between them is draft time. That distinction is
+   usually the answer: an MR open five days with two ready hours was the author still working, while
+   one with five ready days was waiting on review. A single "age" column cannot tell those apart.
+
+   Paged rather than scrolled. A fixed box with an inner scrollbar hides how deep the tail goes and
+   is easy to miss inside a page that already scrolls; a pager states the population outright, which
+   is the thing a drill-down has to be honest about. It also let the server cap go from 25 to 100 --
+   at 25 the rest were unreachable, not merely unlisted. */
+const SLOWEST_PER_PAGE = 10;
+let slowestPage = 0;
+
+function renderSlowest(d){
+  const rows = d.slowest || [];
+  const pages = Math.max(1, Math.ceil(rows.length / SLOWEST_PER_PAGE));
+  if(slowestPage > pages - 1) slowestPage = pages - 1;   // a narrower filter can shorten the list
+  const from = slowestPage * SLOWEST_PER_PAGE;
+  const page = rows.slice(from, from + SLOWEST_PER_PAGE);
+
+  const head = `<thead><tr><th>MR</th><th>Author</th><th>Ready&nbsp;&rarr;&nbsp;merged</th>`+
+               `<th>Open</th><th>Draft</th><th>To review</th><th>Merged</th></tr></thead>`;
+  const body = page.map((r, i) => {
+    const draft = Math.max(0, Math.round((r.open_hours - r.ready_hours) * 10) / 10);
+    return `<tr>
+     <td><span class="rank">${from + i + 1}</span>`+
+       `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="${esc(r.title)}">`+
+       `${esc(r.project.split("/").pop())}!${r.iid}</a>`+
+       `${r.environment && r.environment !== "other" ? ` <span class="na">·&nbsp;${esc(r.environment)}</span>` : ""}</td>
+     <td>${esc(r.author)}</td>
+     <td class="num">${dur(r.ready_hours)}</td>
+     <td class="num">${dur(r.open_hours)}</td>
+     <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
+     <td class="num">${dur(r.first_review_hours)}</td>
+     <td class="num">${esc(r.merged.slice(0, 10))}</td>
+   </tr>`;
+  }).join("");
+  document.getElementById("slowestTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="7" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
+    `<caption><b>Ready&nbsp;&rarr;&nbsp;merged</b> is the figure the table and chart above are built `+
+    `from; <b>Open</b> is the whole span and <b>Draft</b> the difference. A large draft column means `+
+    `the author was still working, so the wait was never on review. Same author and environment `+
+    `filters as the table above.</caption>`;
+
+  const shownFrom = rows.length ? from + 1 : 0;
+  const shownTo = Math.min(from + SLOWEST_PER_PAGE, rows.length);
+  const tail = d.slowest_omitted
+    ? ` · ${d.slowest_omitted} faster of ${d.measured} measured not listed`
+    : (d.measured ? ` · all ${d.measured} measured` : "");
+  document.getElementById("slowestPager").innerHTML = rows.length
+    ? `<span class="pg-count">${shownFrom}\u2013${shownTo} of ${rows.length} slowest${tail}</span>`+
+      `<span class="pg-btns">`+
+      `<button class="btn" type="button" data-pg="prev" ${slowestPage === 0 ? "disabled" : ""} `+
+      `aria-label="Previous page">&lsaquo; Prev</button>`+
+      `<span class="pg-at">${slowestPage + 1} / ${pages}</span>`+
+      `<button class="btn" type="button" data-pg="next" ${slowestPage >= pages - 1 ? "disabled" : ""} `+
+      `aria-label="Next page">Next &rsaquo;</button></span>`
+    : "";
 }
 
 function niceCeil(v){
@@ -770,7 +886,7 @@ function renderDailyChart(d){
     const dots = pts.map(p =>
       `<circle cx="${x(idx[p.day]).toFixed(1)}" cy="${y(p.biz_hours_median).toFixed(1)}" r="3" fill="${col}">`+
       `<title>${esc(s.name)} — ${esc(p.day)}, ${p.merged} MR${p.merged===1?"":"s"}, `+
-      `median ${fmt(p.biz_hours_median)}h, p90 ${fmt(p.biz_hours_p90)}h</title></circle>`).join("");
+      `median ${durText(p.biz_hours_median)}, p90 ${durText(p.biz_hours_p90)}</title></circle>`).join("");
     // Wrapped in a group with a fat transparent hit path, exactly as the velocity chart does, so a
     // line is easy to hit and the whole series can be emphasised as one thing.
     return `<g class="series" data-k="${si}">`+
@@ -932,6 +1048,12 @@ async function init(){
   document.getElementById("mrTbl").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-hide");
     if(name) editAuthors({op: "hide", display_name: name});
+  });
+  document.getElementById("slowestPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-pg");
+    if(!dir) return;
+    slowestPage += dir === "next" ? 1 : -1;
+    renderSlowest(mrData);
   });
   document.getElementById("hiddenNote").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-show");

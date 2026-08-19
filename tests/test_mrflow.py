@@ -4,7 +4,7 @@ The point of this view is to answer "how quickly does an author's work land", in
 contributors who are not on the PE roster — the previous ingest discarded their MRs entirely,
 so they could not be measured at all.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import duckdb
 
@@ -422,3 +422,51 @@ def test_an_mr_with_no_environment_signal_stays_other():
     _mr_with_paths(conn, 1, _ADAM, "audacy-inc/devops/pe-morning-report",
                    datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0), ["darkstar/app.py"])
     assert _report(conn, environment="other")["team"]["merged"] == 1
+
+
+def test_the_slowest_list_is_ordered_slowest_first_and_reports_what_it_left_out():
+    """A drill-down that ends without saying so reads as "that is all of them".
+
+    The list is capped because a six-month window is well over a thousand merge requests, so the cap
+    has to come with the count it dropped — otherwise the tail is invisible rather than merely
+    unlisted, which is the same absence-as-value trap as a silently truncated table.
+    """
+    rows = []
+    for n in range(1, 121):
+        # n hours of ready time each, all inside one business day so the clock is linear in n
+        opened = datetime(2026, 8, 3, 15, 0, 0)
+        rows.append(_mr(n, _BEN, opened, opened + timedelta(hours=n)))
+    report = _report(_seed(rows))
+
+    assert report["measured"] == 120
+    assert len(report["slowest"]) == 100, "the list is capped"
+    assert report["slowest_omitted"] == 20, "and says how many it dropped"
+
+    hours = [row["ready_hours"] for row in report["slowest"]]
+    assert hours == sorted(hours, reverse=True), "slowest first — the question is always an outlier"
+    assert hours[0] == max(hours), "the very slowest must be on the first page"
+
+
+def test_each_slowest_row_carries_both_clocks_so_draft_time_is_visible():
+    """One "age" column cannot separate "still being written" from "waiting on review".
+
+    An MR open for days with almost no ready time was never waiting on anyone, and that is the usual
+    explanation. The row has to carry the whole span and the ready-only span so the gap is legible.
+    """
+    opened = datetime(2026, 8, 3, 15, 0, 0)          # Mon 08:00 Pacific
+    merged = datetime(2026, 8, 5, 17, 0, 0)          # Wed 10:00 Pacific
+    conn = _seed([_mr(1, _BEN, opened, merged)])
+    # Marked ready only for the final hour: two days open, one hour actually awaiting review.
+    store.replace_mr_events(conn, 1, [
+        store.MergeRequestEventRow(mr_id=1, kind="draft", happened_at=opened, seq=0),
+        store.MergeRequestEventRow(
+            mr_id=1, kind="ready", happened_at=datetime(2026, 8, 5, 16, 0, 0), seq=1),
+    ])
+    row = _report(conn)["slowest"][0]
+
+    # Mon 08:00 -> Wed 10:00 is 9h + 9h + 2h = 20 business hours, of which one was ready.
+    assert row["ready_hours"] == 1.0, "only the ready spell counts toward turnaround"
+    assert row["open_hours"] == 20.0, "the whole span is carried alongside it"
+    assert round(row["open_hours"] - row["ready_hours"], 1) == 19.0, "the rest was draft"
+    for field in ("iid", "project", "title", "url", "author", "merged", "environment"):
+        assert row[field] is not None, f"{field} is needed to identify the MR being inspected"

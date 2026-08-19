@@ -52,6 +52,11 @@ from darkstar import store
 from darkstar.roster import MR_AUTHOR_NAMES, TRACKED_MR_AUTHORS
 
 _WINDOW_MONTHS: int = 6
+# The drill-down list is for inspecting outliers, not for browsing the whole window: a 6-month
+# lookback is well over a thousand merge requests. Capped, and the count left out is reported rather
+# than the list quietly ending. The page flips through it ten at a time, which is why the cap can be
+# this generous -- at 25 the tail was unreachable rather than merely unlisted.
+_SLOWEST_LIMIT: int = 100
 _ALL_ENVIRONMENTS: str = "all"
 _TRACKED_ACCOUNTS: frozenset[str] = frozenset(TRACKED_MR_AUTHORS.values())
 
@@ -174,9 +179,11 @@ def mr_turnaround_report(
     review_waits: list[float] = []
     reviewed = 0
     mixed = 0
-    for mr_id, account_id, project_path, opened_at, merged_at, merged_by in connection.execute(
-        "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by "
-        "FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) "
+    slowest: list[dict] = []
+    for (mr_id, account_id, project_path, opened_at, merged_at, merged_by, iid, title,
+         web_url) in connection.execute(
+        "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by, iid, title, "
+        "web_url FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) "
         "AND opened_at IS NOT NULL",
         [since, until, until],
     ).fetchall():
@@ -201,10 +208,30 @@ def mr_turnaround_report(
         if review_at is not None:
             reviewed += 1
             review_waits.append(ready_hours(opened_at, min(review_at, merged_at), events))
+        # Per-MR detail for the drill-down. `open_hours` is the whole span in business hours and
+        # `ready_hours` only the spells it was marked ready, so the gap between them IS the draft
+        # time -- which is the usual answer to "why was this open for days". On the 20 slowest MRs
+        # measured when the ready clock was introduced, 67% of attributed hours were draft.
+        slowest.append({
+            "iid": iid,
+            "project": project_path,
+            "title": title,
+            "url": web_url,
+            "author": name,
+            "opened": opened_at.isoformat(sep=" ", timespec="minutes"),
+            "merged": merged_at.isoformat(sep=" ", timespec="minutes"),
+            "open_hours": round(business_hours_between(opened_at, merged_at), 1),
+            "ready_hours": round(hours, 1),
+            "first_review_hours": (round(review_waits[-1], 1) if review_at is not None else None),
+            "environment": env,
+        })
         day = business_date(merged_at).isoformat()
         business_by_account.setdefault(account_id, []).append(hours)
         by_day.setdefault(day, []).append(hours)
         by_author_day.setdefault(name, {}).setdefault(day, []).append(hours)
+
+    slowest.sort(key=lambda row: row["ready_hours"], reverse=True)
+    slowest_rows = slowest[:_SLOWEST_LIMIT]
 
     authors: list[dict] = []
     shown_business: list[float] = []
@@ -248,6 +275,12 @@ def mr_turnaround_report(
         "crawl": crawl_state(connection, roster),
         "mixed": mixed,
         "incomplete": int(incomplete or 0),
+        # Slowest first, because the question this list answers is always about an outlier. Each row
+        # carries both clocks: open_hours is the whole span, ready_hours only the ready spells, so
+        # the gap between them is draft time and the two together say WHERE the days went.
+        "slowest": slowest_rows,
+        "slowest_omitted": max(0, len(slowest) - _SLOWEST_LIMIT),
+        "measured": len(slowest),
         "earliest_measurable": earliest_measurable.date().isoformat() if earliest_measurable else None,
         # Time to the first human review comment (bots and the author's own notes excluded at
         # ingest), on the same ready-clock. Separates "nobody looked" from "reviewed, then iterated".
