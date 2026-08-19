@@ -449,6 +449,81 @@ Agent success counts terminal requests that are not abandoned. Note DEVOPS spell
 **`Will Not Do`**, not `Won't Do`; `_ABANDONED` holds both spellings plus Cancelled/Rejected, since
 matching only the latter scored every abandoned request as a success and pinned the rate at 100%.
 
+## Linking a request to its code
+
+A request is tied to merge requests so the panels can read the MR's `pe:*` label, its agent footer and
+its review timing. Four routes exist, and they are **not** equally believable, so they are tried
+most-trusted-first and never unioned — and every link records which route found it.
+
+| rank | route | source | why it ranks there |
+|---|---|---|---|
+| 1 | **Merge Request field** | Jira `customfield_11534` | a full GitLab MR URL somebody entered on purpose. Sampled clean: 18 of 18 were a single canonical `https://gitlab.com/<group>/<project>/-/merge_requests/<iid>` |
+| 2 | **Branch name** | GitLab `source_branch` | generated from a convention, not typed as prose |
+| 3 | **MR title** | GitLab | prose typed for another purpose; can be wrong |
+| — | **MR description** | not read | `Supersedes DEVOPS-9001` is not a claim to have implemented it |
+
+Coverage on the 221 requests created in August 2026: the Merge Request field is populated on **71**
+(32%), Jira's development panel reports code on **105** (48%), and regex over titles and branches
+reaches about 90 keys. The field catches **10** the development panel misses, so it is additive rather
+than redundant. Neither Jira nor the regex is a superset of the other: on the same population Jira's
+panel found **18** links the regex missed, and the regex found **9** Jira's panel did not.
+
+**The description was dropped deliberately.** It was worth about two points of coverage and carried the
+risk of marking an unrelated request self-service. A false positive corrupts a metric; a missing link
+only leaves a request unclassified — and unclassified is now counted and shown, so the cheaper error is
+the visible one.
+
+The key pattern used for routes 2 and 3 is case-insensitive with a loose separator, because GitLab
+humanises a branch into an MR title and mangles the key doing it: `Devops 9426`,
+`Feature/devops 9257 prod cognito userpools`, `devops_10073`. A strict `DEVOPS-\d+` misses 48 of 5,878
+merged MRs on those variants alone. It does **not** rescue a bare `feat(10117)` — nothing can, short of
+matching every integer — which is why the branch is read at all.
+
+### Reported, not hidden
+
+The **Linked to code** strip under the impact cards breaks the count down by route, because a share
+resting on a typed title deserves less weight than one resting on a URL somebody entered, and a reader
+can only discount it if the split is visible. On a store whose syncs have not yet refilled the new
+columns it reads *198 · MR title* and nothing else — which is the point.
+
+Beside it, **in Jira, not matched here** counts requests whose development panel shows commits or a
+pull request while none of our routes could name a merge request *this crawl has*. It is named for
+whose gap it is, because there are three causes and they are not equally common:
+
+| cause | reality | frequency |
+|---|---|---|
+| the merge request is not in this crawl | darkstar ingests only **merged** MRs from tracked authors and scopes, so an open MR, an outside author or an un-crawled project is invisible here | most of it |
+| Jira linked it by commit message | a route not read here | some |
+| there genuinely is no merge request | commits pushed to a branch, no MR ever opened | **6 of 221** August requests |
+
+An earlier label read "code exists, not linked", which sounds like the last row and is mostly the
+first. A hole in our own crawl is not a fact about the team.
+
+**The Development field itself is not read.** `customfield_10400` serves a *cache*, and on DEVOPS-10117
+it reported build count 5 where the panel showed 2, omitted the issue's merged pull request entirely,
+and carried `"isStale": true`. A gap counter built on it reported "no pull request" for an issue that
+had a merged one. JQL's `development[pullrequests]` index agreed with the panel, so the flags come from
+**two extra JQL queries per sync** — one per predicate, since Jira rejects both `development[]` clauses
+in a single query — scoped by the same JQL as the batch. `False` means Jira was asked and said no;
+`None` means nobody asked, and only the first is evidence.
+
+Note the panel labels these **Pull Request** even for GitLab, which is Jira's generic term; the JQL key
+is `development[pullrequests]`.
+
+### Migration
+
+`source_branch` on `merge_requests` and `mr_field_url` / `dev_has_pr` / `dev_has_commits` on
+`issues` are all nullable and ALTER-added. `_needs_backfill` forces one full GitLab re-crawl for the
+branch; the Jira fields refill on the next issue sync. Until both run, the linkage strip will
+correctly show every link coming from titles.
+
+### Not attempted
+
+A **page-wide prod/nonprod filter**. Even with every route, ~68% of requests cannot be classified by
+environment, because about half link to no merged MR at all. The filter stays on the MR turnaround
+panel, where environment is intrinsic to the merge request and nothing is lost. If a request-level
+split is ever needed the answer is an environment field on the issue, not inference.
+
 ## Detecting a self-service request
 
 Three independent signals, unioned — any one is enough, because each alone misses a slice:

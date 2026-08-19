@@ -43,6 +43,21 @@ class IssueRow:
     planned_start: date | None
     target_end: date | None
     labels: list[str]
+    # The "Merge Request" field (customfield_11534), a free-text field holding a full GitLab MR URL.
+    # The most authoritative link a request has: someone stated it deliberately, rather than it being
+    # inferred from text a human typed for another purpose. Sampled clean -- 18 of 18 were a single
+    # canonical https://gitlab.com/<group>/<project>/-/merge_requests/<iid>.
+    mr_field_url: str | None
+    # Whether Jira's development panel shows a pull request / commits for this request. Booleans, and
+    # they come from a JQL predicate rather than from the Development summary field: that field
+    # (customfield_10400) serves a CACHE, and on DEVOPS-10117 it reported five builds where the panel
+    # showed two, omitted the merged pull request entirely, and carried "isStale":true. JQL's
+    # development[pullrequests] index agreed with the panel. These identify no particular merge
+    # request, so they cannot link anything -- but a request Jira says has code, with no link found
+    # here, is a hole in our own crawl rather than a request without code.
+    # None means the flag has not been queried yet, which is not the same as False.
+    dev_has_pr: bool | None
+    dev_has_commits: bool | None
     fetched_at: datetime
 
 
@@ -108,6 +123,11 @@ class MergeRequestRow:
     # the whole corpus is ~1.3 MiB, and the "Generated with Claude Code via /<skill>" footer is a
     # denser AI signal than the pe:* label (it predates the labels by two months).
     description: str
+    # The source branch, kept because it is often the ONLY place a DEVOPS key appears: a title like
+    # "feat(10117): add flux-reader iam role" carries the number without the project prefix, so the
+    # branch DEVOPS-10117 is the only reliable link. Measured across 5,878 merged MRs, adding the
+    # branch as a linking signal lifted the share of requests reachable from an MR by ~16% relative.
+    source_branch: str
 
 
 # Column order shared by the issues DDL and the upsert statement; keep in sync with IssueRow.
@@ -115,14 +135,14 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "fetched_at",
+    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
     "id", "project_path", "iid", "author_account_id", "title",
     "opened_at", "merged_at", "labels", "web_url", "merged_by", "fetched_at", "events_fetched_at",
-    "description",
+    "description", "source_branch",
 )
 
 _SCHEMA_SQL: str = """
@@ -146,6 +166,9 @@ CREATE TABLE IF NOT EXISTS issues (
     planned_start       DATE,
     target_end          DATE,
     labels              VARCHAR[] NOT NULL,
+    mr_field_url        VARCHAR,
+    dev_has_pr          BOOLEAN,
+    dev_has_commits     BOOLEAN,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -179,7 +202,8 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     merged_by         VARCHAR,
     fetched_at        TIMESTAMP NOT NULL,
     events_fetched_at TIMESTAMP,
-    description       VARCHAR
+    description       VARCHAR,
+    source_branch     VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS mr_events (
@@ -223,6 +247,10 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS events_fetched_at TIMESTAMP")
     connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
     logger.debug("schema initialized")
 
 
