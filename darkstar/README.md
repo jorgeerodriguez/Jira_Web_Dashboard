@@ -36,11 +36,87 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
 
 - **Impact cards** — share of all delivered PE work that came through a skill (with the share whose
   code was AI-written beside it), requests this month vs last, self-service delivery speed against
-  the rest of PE delivery, and time to first review.
-- **MR turnaround by author** — ready→merged per author, slowest first, filterable by author and
-  by environment.
-- **Daily MR turnaround** — the same population cut by the day each MR merged, one coloured line
-  per author.
+  the rest of PE delivery, and time to first review. That speed card carries the same significance
+  caveat as the dropped monthly column — see **Delivery turnaround by month** below.
+- **Delivery turnaround** — self-service requests grouped by the period they were created. **The
+  grain follows the lookback** rather than being fixed: ≤14 days is daily, ≤31 days weekly, longer
+  monthly. A fixed weekly grain broke at both ends — a 90-day window was 14 rows to scroll, and a
+  7-day window was one row that said nothing about the week. Every preset now lands on one to five
+  rows, and `?grain=day|week|month` (the **Rows** control) forces one when the default is not what you
+  want. Medians cannot be re-aggregated from coarser medians, so the folding happens server-side from
+  raw hours, not by collapsing rows in the browser.
+
+  The grain matters because both readings are true at different zooms: monthly, the p50 runs 99.2h →
+  13.8h → 10.0h → 2.9h across May to August, which is the improvement arc; weekly inside the last 30
+  days it runs 4.9h, 5.5h, 1.7h, 3.6h, which is the noise floor the arc is made of. Reported as a
+  table with a bar for the share closed inside one working day, because the p50 spans two orders of
+  magnitude and a linear axis would bury exactly the recent periods the panel exists to show.
+
+  Grouping by arrival means a recent cohort may not have closed, so the row carries **In** (requests
+  created that week) beside **Done** (how many have landed). A `*` marks the gap: that week's p50
+  counts only what finished, so it reads faster than it will once the rest land — the week of
+  2026-08-17 showed 10 in, 4 done. Without that column a half-settled week looks like the fastest
+  week on record.
+
+  There is **no rest-of-PE comparison column**, and that is a measured decision rather than an
+  omission. Head to head on live Jira for June, with abandoned statuses excluded from both arms,
+  self-service ran 15.9h p50 against 37.9h but 174.8h p90 against 144.0h — better at the median,
+  worse in the tail, Mann-Whitney z=+1.44 at n=26, which is not significant. A monthly multiple
+  would read as a finding the sample cannot carry. What the work does demonstrate is capacity, which
+  the next panel reports.
+- **How requests arrive** — every request created that period split by **how it was created**: filed
+  by a self-service skill, or filed by a person. The bar is the self-service share. This is the
+  capacity argument in the unit that means something for it — demand PE absorbed without a person
+  writing the ticket.
+
+  **The unit is requests, not merge requests.** One request counts once however many MRs it took,
+  which is often several: July ran 643 merged MRs against just **117 distinct tickets** (349 named a
+  DEVOPS key, 294 named none, and one ticket was spread across 19 MRs). An earlier cut of this panel
+  counted MRs and put 645 on the page beside a ~200 ticket count, which reads as double counting; it
+  was neither double counting nor the right question, since a branch total says nothing about demand.
+
+  A request counts as self-service if a skill's **Jira watermark** is on it, or if a merge request it
+  produced carries a **pe:\*** label — some early skill-filed tickets never got the watermark and that
+  label is the only remaining evidence. Reading a merge request for that signal is not the same as
+  counting it, which is why the bounded lookback deliberately does not cut it off (see **Page
+  controls**).
+
+- **MR turnaround** — one panel, because the table and the daily chart are the same population under
+  the same filters. Ready→merged per author, slowest first, then the same MRs cut by the day they
+  landed as one coloured line per author. The table **is** the chart's legend: colours are assigned
+  per author from the series order and shared by both, and hovering a table row isolates that
+  author's line (click to pin). There is no separate legend, because it would only repeat the table.
+
+The page is a two-column grid of bordered panels; the card row and MR turnaround span both
+columns, collapsing to one column below 980px. Each panel's heading collapses its own section, and
+each carries **one** collapsed "About this panel" explainer rather than standing prose — the page
+was mostly text otherwise. Dynamic status stays visible: a crawl still owed, rows that cannot be
+measured, mixed-environment exclusions, the result of adding an author. The derivation notes at the
+foot are a `<details>` collapsed by default.
+
+## Visual hierarchy
+
+The page reported as reading flat, and the cause was measurable rather than a matter of taste:
+
+- `h2` and `h3` were 13px and 12px, both `--muted` at weight 600 — one pixel apart and identical in
+  every other respect. A panel title was painted the *dimmest* ink on the page, the same colour as
+  captions, hints and explainer prose. `h2` is now 14px in `--ink` at weight 700; `h3` is 11px and
+  stays `--muted`, so the tiers separate on size, weight and brightness at once.
+- `.stat`, `.fc` and `.panel` all used `var(--panel)`, so a score card sitting inside a panel had a
+  1px border and nothing else dividing it from its own container. There are now three surfaces:
+  `--panel`, `--head` (raised — a panel's title bar) and `--well` (recessed — anything holding a
+  number).
+- Panel titles are now bars rather than floating text: `.panel > h2` reaches back out through the
+  panel's padding with negative margins and carries `--head` plus a bottom hairline.
+- One accent (`--accent`, the `#5b9dff` already in the chart palette and already named `--blue` on
+  two pages) marks only where the eye should land first: panel disclosure triangles, the eyebrow,
+  focus rings, and the share bars in tables.
+
+All five dashboards duplicate their own `<style>` and `:root`, so each of these had to be applied
+five times, and two pages' token blocks had already diverged. `test_app_slas_route.py` pins the type
+scale, the card surfaces, and that **no page references a token it does not declare** — a CSS
+variable with no value fails silently, so nothing else would surface it. Extracting one shared
+stylesheet is the real fix and is not done here.
 
 ## How a number gets made
 
@@ -214,10 +290,41 @@ failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-te
 
 Two controls on `/slas`, both server-backed rather than cosmetic:
 
-- **Lookback** — a date that overrides the window on *every* panel, sent as `?since=YYYY-MM-DD` to
-  both `/api/slas` and `/api/mr-turnaround`. Empty means each panel uses its own default (SLA 3
-  months, MR turnaround 6). Held in `localStorage` so it survives a refresh. A malformed date is a
-  400, never a silently different window than the box shows.
+- **Lookback** — a preset that overrides the window on *every* panel, sent as
+  `?since=YYYY-MM-DD&until=YYYY-MM-DD` to both `/api/slas` and `/api/mr-turnaround`. Presets are
+  yesterday, last week, month to date, last month, last 30/60/90 days, and a custom from/to pair;
+  "Panel defaults" means each panel keeps its own window (SLA 3 months, MR turnaround 6). Held in
+  `localStorage` so it survives a refresh, and a stored bare date from before the presets is carried
+  over as a custom range rather than dropped.
+
+  `until` is **exclusive**, so two adjacent ranges cannot double count and a single day is expressed
+  as `[day, day+1)`. Three rules keep the control honest rather than cosmetic:
+
+  - **Presets resolve in the business timezone, not the browser's.** A colleague in EET picking
+    "Yesterday" at 09:00 local is still hours behind Pacific midnight, so a browser-local computation
+    would fetch a different day than everyone else sees. Resolved via
+    `toLocaleDateString("en-CA", {timeZone: "America/Los_Angeles"})`.
+  - **The custom from/to pair is hidden behind `.controls [hidden]{display:none}`**, which has to
+    outrank `.filter{display:inline-flex}`. An author `display` rule beats the UA stylesheet's
+    `[hidden]`, so on first cut the inputs stayed on screen while the code believed it had put them
+    away — and a date typed there resolved against a select still reading "Panel defaults", which
+    returns null, so the dates were silently dropped and the whole control looked inert. Editing
+    either date now also switches the select to Custom, so typing a date can never be a no-op.
+  - **`init()` wires every listener before its first load, and never returns early.** One missing
+    element in one render used to throw out of `reload()`, which `init()` caught and returned from —
+    so every listener after that point was never attached and the whole page went inert at once:
+    lookback, author filter, environment filter, add and hide. The panels showed stale data with no
+    error on them, so it read as "the picker does not work" rather than "a render crashed". A broken
+    panel must cost that panel, not the page, and `test_app_slas_route.py` pins both the ordering and
+    the render targets, since nothing else connects a `getElementById` to the markup carrying it.
+  - **An inverted or zero-width window is a 400**, not an empty page. Empty panels read as "the team
+    delivered nothing", which is a claim about the team rather than about the query.
+  - **`until` bounds what is counted, not what is read** — in `slas.py` the merge-request query stays
+    open-ended above, because it carries the footer, skill-label and first-review signals for each
+    ticket as well as the capacity counts. A request created inside a "last month" window whose MR
+    merged in August would otherwise lose those signals and be filed as non-AI, dropping it from the
+    very panel it belongs in. The bound is applied in-loop to the capacity accumulation instead.
+    `mrflow.py` bounds both ends in SQL, because there the population *is* MRs merged in the window.
 - **MR authors** — add a GitLab username to the table, or hide a row. Persisted to
   `darkstar_mr_authors.json` beside the store (`mr_authors.py`), so edits are team-wide and survive
   restarts, exactly like the SME overrides. Hidden names are dropped from the rows *and* the team
@@ -252,11 +359,31 @@ simply miss.
 
 ## Month-over-month comparison
 
+A period is flagged `partial` whenever the window or the clock cuts it short, and that means **both**
+edges, not just the period in progress: a lookback starting mid-period (which "last 30 days" almost
+always does, and a monthly window almost always does) truncates its first row, and a bounded range
+truncates its last. A mid-week window over July showed 69 and 34 merge requests in its edge weeks
+against ~120 for the full weeks between them — unflagged, that is a fabricated collapse at each end.
+
 `requests_prev_month` is `None`, not `0`, whenever the window opens after the start of last month.
 `created_by_month` only counts issues inside the window, so a lookback beginning on the 1st leaves
 last month empty *by construction* — and the card rendered that as "up from 0", in green, which
 reads as spectacular growth. It is a fact about the lookback, not the team. The card now says the
 comparison is unavailable instead.
+
+The same rule governs two other places, because the failure mode is always the same — an absence
+rendered as a measurement:
+
+- **Unread MR descriptions.** `description IS NULL` means the backfill has not read that MR yet, not
+  that it lacks an agent footer. Counting those as hand-written would understate agent share by an
+  amount that grows with crawl lag rather than with anything real, so they are counted into
+  `unmeasured`, held out of the share denominator, and shown as a trailing `+n?`.
+- **Schema nullability.** The ALTER-added `merge_requests` columns (`opened_at`, `labels`,
+  `description`, `events_fetched_at`, `merged_by`) are nullable *on purpose*: NULL is the marker
+  `_needs_backfill` selects on. `CREATE TABLE` had them `NOT NULL`, so a fresh store and a migrated
+  one had different schemas — the deployed store held 117 NULL descriptions that a fresh store could
+  not represent, which made the state untestable. The two paths are now aligned and
+  `test_store_migration.py` pins them together, since nothing else enforces it.
 
 ## Population
 

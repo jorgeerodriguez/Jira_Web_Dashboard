@@ -118,9 +118,13 @@ def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict) -> dict:
 
 def mr_turnaround_report(
     connection: duckdb.DuckDBPyConnection, since: datetime, roster: dict, name_filter: list[str],
-    environment: str,
+    environment: str, until: datetime | None = None,
 ) -> dict:
-    """Per-author, per-day and team-wide opened->merged turnaround for MRs merged since `since`.
+    """Per-author, per-day and team-wide opened->merged turnaround for MRs merged in the window.
+
+    Unlike the slas report, both ends bound the SQL here: this population *is* the merge requests
+    merged in the window, so an MR outside it contributes nothing and reading it would only widen
+    the day axis past the range the page asked for.
 
     `roster` is the persisted editable roster (mr_authors.read): its "added" map names authors the
     static roster does not know, and its "hidden" list drops names from the rows *and* the totals,
@@ -135,8 +139,9 @@ def mr_turnaround_report(
     # subset rather than loading every path row on every request.
     unnamed = [
         mr_id for mr_id, project_path in connection.execute(
-            "SELECT id, project_path FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
-            [since],
+            "SELECT id, project_path FROM merge_requests "
+            "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
+            [since, until, until],
         ).fetchall()
         if environment_of(project_path, []) == OTHER_ENVIRONMENT
     ]
@@ -159,7 +164,8 @@ def mr_turnaround_report(
     # reason.
     incomplete, earliest_measurable = connection.execute(
         "SELECT count(*) FILTER (WHERE opened_at IS NULL), min(merged_at) FILTER (WHERE opened_at IS NOT NULL) "
-        "FROM merge_requests WHERE merged_at >= ?", [since],
+        "FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?)",
+        [since, until, until],
     ).fetchone()
 
     business_by_account: dict[str, list[float]] = {}
@@ -170,8 +176,9 @@ def mr_turnaround_report(
     mixed = 0
     for mr_id, account_id, project_path, opened_at, merged_at, merged_by in connection.execute(
         "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by "
-        "FROM merge_requests WHERE merged_at >= ? AND opened_at IS NOT NULL",
-        [since],
+        "FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) "
+        "AND opened_at IS NOT NULL",
+        [since, until, until],
     ).fetchall():
         name = names.get(account_id)
         if name is None or name in hidden or not _matches(name, name_filter):

@@ -4,9 +4,13 @@ from darkstar import store, slas
 from darkstar.metrics import SELF_SERVICE_EPOCH
 
 
-def _report(conn, now):
-    """slas_report with the view's own default window — the page can override it, tests need not."""
-    return slas.slas_report(conn, now, slas.default_window_start(now))
+def _report(conn, now, grain="week"):
+    """slas_report with the view's own default window — the page can override it, tests need not.
+
+    Grain is pinned to weekly here so a test's assertions do not move when the default window's width
+    changes; the grain-selection rules are covered in test_business_hours.py.
+    """
+    return slas.slas_report(conn, now, slas.default_window_start(now), None, grain)
 
 
 def _issue(key, labels, created, status="Done", issuetype="Story"):
@@ -336,3 +340,219 @@ def test_this_month_is_still_reported_either_way():
     now = datetime(2026, 8, 18, 12, 0, 0)
     head = slas.slas_report(conn, now, slas.window_start(now, 1, SELF_SERVICE_EPOCH))["headline"]
     assert head["requests_this_month"] == 1
+
+
+def test_turnaround_groups_by_the_period_a_request_arrived():
+    """A blended figure over the window libels current performance while the team improves fast.
+
+    Weekly rather than monthly because a month is too coarse to see a change land: four weeks inside
+    one month routinely diverge while the team is still improving.
+    """
+    conn = _fresh()
+    # July: one slow request (created 09:00, done 16:00 next working day => 9h + 7h)
+    store.upsert_issues(conn, [_issue("DEVOPS-70", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 7, 20, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-70"], [store.TransitionRow(
+        key="DEVOPS-70", to_status="Done", changed_at=datetime(2026, 7, 21, 23, 0, 0), seq=0)])
+    # August: two fast ones
+    for key, day in (("DEVOPS-71", 5), ("DEVOPS-72", 6)):
+        store.upsert_issues(conn, [_issue(key, ["DevOps", "pe-iac-request"],
+                                          datetime(2026, 8, day, 16, 0, 0))])
+        store.replace_transitions(conn, [key], [store.TransitionRow(
+            key=key, to_status="Done", changed_at=datetime(2026, 8, day, 18, 0, 0), seq=0)])
+
+    rows = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["turnaround"]
+    # Mon 2026-07-20 and Mon 2026-08-03, labelled by the Monday commencing each week.
+    assert [r["period"] for r in rows] == ["2026-07-20", "2026-08-03"]   # ascending
+    assert rows[0]["delivered"] == 1 and rows[0]["within_day_pct"] == 0
+    assert rows[1]["delivered"] == 2 and rows[1]["p50_hours"] == 2.0
+    assert rows[1]["within_day_pct"] == 100        # both inside a 9h working day
+    # Both cohorts closed, so nothing is still settling.
+    assert [r["created"] for r in rows] == [1, 2]
+
+
+def test_turnaround_is_empty_when_nothing_delivered():
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["turnaround"] == []
+
+
+def test_turnaround_no_longer_reports_a_rest_of_pe_ratio():
+    """The comparison was removed because the data does not support it.
+
+    Head to head on live June data, abandoned excluded from both arms, self-service ran 15.9h p50
+    against 37.9h but 174.8h p90 against 144.0h -- better at the median, worse in the tail, and
+    Mann-Whitney z=+1.44 at n=26, which is not significant. Printing a monthly multiple would read
+    as a finding the sample cannot carry, so these keys must stay gone.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-80", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-80"], [store.TransitionRow(
+        key="DEVOPS-80", to_status="Done", changed_at=datetime(2026, 8, 5, 18, 0, 0), seq=0)])
+    store.upsert_issues(conn, [_issue("DEVOPS-81", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0))])
+    store.replace_transitions(conn, ["DEVOPS-81"], [store.TransitionRow(
+        key="DEVOPS-81", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
+
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["turnaround"][0]
+    assert row["delivered"] == 1 and row["p50_hours"] == 2.0
+    for gone in ("other_delivered", "other_p50_hours", "faster_by"):
+        assert gone not in row
+
+
+def test_origin_counts_one_request_once_however_many_merge_requests_it_took():
+    """The unit is the request, not the branch.
+
+    One request routinely spawns several merge requests -- July ran 643 MRs against 117 distinct
+    tickets, one of them spread across 19. Counting MRs answers a question about branches while
+    looking like a question about demand, and it put a 645 on the page next to a ~200 ticket count.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-80", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 8, 5, 16, 0, 0))])
+    store.upsert_merge_requests(conn, [
+        _mr(80, "DEVOPS-80", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0)),
+        _mr(81, "DEVOPS-80", [], datetime(2026, 8, 5, 17, 0, 0), datetime(2026, 8, 5, 18, 0, 0)),
+        _mr(82, "DEVOPS-80", [], datetime(2026, 8, 6, 16, 0, 0), datetime(2026, 8, 6, 17, 0, 0)),
+    ])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1 and row["total"] == 1, "three MRs, one request"
+
+
+def test_origin_splits_by_how_the_request_was_created():
+    """Skill-filed against human-filed, which is the whole question the panel answers."""
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-83", ["DevOps", "pe-iac-request"], datetime(2026, 8, 5, 16, 0, 0)),
+        _issue("DEVOPS-84", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0)),
+        _issue("DEVOPS-85", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0)),
+    ])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert (row["agent"], row["human"], row["total"]) == (1, 2, 3)
+    assert row["agent_share_pct"] == 33
+
+
+def test_a_merge_request_label_still_identifies_a_skill_filed_request():
+    """Reading an MR for the signal is not the same as counting it.
+
+    Some skill-filed tickets never got the Jira watermark; the pe:* label on the merge request the
+    skill opened is the only evidence. Dropping merge requests from the COUNT must not drop them as
+    a classification source, or those requests silently move to the human column.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-86", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0))])
+    store.upsert_merge_requests(conn, [
+        _mr(86, "DEVOPS-86", ["pe:iac-request"],
+            datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0))])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1 and row["human"] == 0
+
+
+def test_a_bounded_window_still_reads_merge_requests_that_landed_after_it():
+    """`until` must bound what is COUNTED, not what is READ, or classification degrades silently.
+
+    A request created inside a "last month" window whose merge request landed after the window
+    closed would lose the pe:* signal and be counted as human-filed -- the panel would understate
+    self-service exactly for the most recent work.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-87", ["DevOps"], datetime(2026, 7, 28, 16, 0, 0))])
+    store.upsert_merge_requests(conn, [
+        _mr(87, "DEVOPS-87", ["pe:iac-request"],
+            datetime(2026, 8, 3, 16, 0, 0), datetime(2026, 8, 3, 17, 0, 0))])
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
+                              datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
+    assert report["origin"][0]["agent"] == 1, "the August MR still classifies the July request"
+
+
+def test_origin_excludes_a_request_created_on_the_upper_bound():
+    """`until` is exclusive, so two adjacent ranges cannot double count a request."""
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-88", ["DevOps", "pe-iac-request"], datetime(2026, 7, 31, 16, 0, 0)),
+        # created exactly 2026-08-01 00:00 Pacific, the bound itself
+        _issue("DEVOPS-89", ["DevOps", "pe-iac-request"], datetime(2026, 8, 1, 7, 0, 0)),
+    ])
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
+                              datetime(2026, 7, 1, 7, 0, 0), datetime(2026, 8, 1, 7, 0, 0))
+    assert sum(r["total"] for r in report["origin"]) == 1
+
+
+def test_both_edges_of_a_window_are_flagged_partial_not_just_the_current_week():
+    """A lookback starting mid-week holds a part-week at each end; unflagged, both read as dips.
+
+    "Last 30 days" almost never starts on a Monday, and a bounded window rarely ends on a Sunday.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        # week commencing Mon 2026-07-06, but the window opens Wed the 8th
+        _issue("DEVOPS-90", ["DevOps", "pe-iac-request"], datetime(2026, 7, 9, 16, 0, 0)),
+        # a whole week inside the window
+        _issue("DEVOPS-91", ["DevOps", "pe-iac-request"], datetime(2026, 7, 15, 16, 0, 0)),
+        # week commencing Mon 2026-07-20, but the window closes Wed the 22nd
+        _issue("DEVOPS-92", ["DevOps", "pe-iac-request"], datetime(2026, 7, 21, 16, 0, 0)),
+    ])
+    rows = {r["period"]: r for r in slas.slas_report(
+        conn, datetime(2026, 8, 19, 12, 0, 0),
+        datetime(2026, 7, 8, 7, 0, 0), datetime(2026, 7, 22, 7, 0, 0), "week")["origin"]}
+    assert rows["2026-07-06"]["partial"] is True, "window opened mid-week"
+    assert rows["2026-07-13"]["partial"] is False, "a complete week inside the window"
+    assert rows["2026-07-20"]["partial"] is True, "window closed mid-week"
+
+
+def test_origin_is_empty_rather_than_a_row_of_zeroes_with_no_requests():
+    """A synthesised 0-of-0 row reads as a week nobody filed anything, not as nothing crawled."""
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["origin"] == []
+
+
+def test_a_long_window_groups_by_month_instead_of_growing_the_table():
+    """A 90-day lookback in weekly buckets is 14 rows — a list to scroll, not a trend to read."""
+    conn = _fresh()
+    for day in (10, 20, 30):                      # June, spread across three weeks
+        store.upsert_issues(conn, [_issue(f"DEVOPS-6{day}", ["DevOps", "pe-iac-request"],
+                                          datetime(2026, 6, day, 16, 0, 0))])
+    for day in (5, 15):                           # July, two more weeks
+        store.upsert_issues(conn, [_issue(f"DEVOPS-7{day}", ["DevOps", "pe-iac-request"],
+                                          datetime(2026, 7, day, 16, 0, 0))])
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0), datetime(2026, 5, 21, 7, 0, 0))
+    assert report["grain"] == "month"
+    assert [r["period"] for r in report["origin"]] == ["2026-06-01", "2026-07-01"]
+    assert [r["total"] for r in report["origin"]] == [3, 2], "five weeks fold into two months"
+
+
+def test_a_short_window_groups_by_day_instead_of_one_meaningless_row():
+    """A week-long lookback in weekly buckets is a single row that says nothing about the week."""
+    conn = _fresh()
+    for day in (11, 12):
+        store.upsert_issues(conn, [_issue(f"DEVOPS-8{day}", ["DevOps", "pe-iac-request"],
+                                          datetime(2026, 8, day, 16, 0, 0))])
+    report = slas.slas_report(conn, datetime(2026, 8, 19, 12, 0, 0),
+                              datetime(2026, 8, 10, 7, 0, 0), datetime(2026, 8, 17, 7, 0, 0))
+    assert report["grain"] == "day"
+    assert [r["period"] for r in report["origin"]] == ["2026-08-11", "2026-08-12"]
+
+
+def test_an_explicit_grain_overrides_what_the_window_would_have_chosen():
+    """Auto is a default, not a cage — a 90-day window still has to be readable week by week."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-95", ["DevOps", "pe-iac-request"],
+                                      datetime(2026, 6, 10, 16, 0, 0))])
+    args = (conn, datetime(2026, 8, 19, 12, 0, 0), datetime(2026, 5, 21, 7, 0, 0), None)
+    assert slas.slas_report(*args)["grain"] == "month"
+    assert slas.slas_report(*args, "week")["origin"][0]["period"] == "2026-06-08"
+    assert slas.slas_report(*args, "day")["origin"][0]["period"] == "2026-06-10"
+
+
+def test_a_monthly_row_is_partial_when_the_window_starts_mid_month():
+    """Monthly windows almost never start on the 1st, so the first month is a part-month.
+
+    Unflagged it reads as a real drop in demand, which is the same trap the weekly edges had.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-96", ["DevOps", "pe-iac-request"], datetime(2026, 5, 25, 16, 0, 0)),
+        _issue("DEVOPS-97", ["DevOps", "pe-iac-request"], datetime(2026, 6, 15, 16, 0, 0)),
+    ])
+    rows = {r["period"]: r for r in slas.slas_report(
+        conn, datetime(2026, 8, 19, 12, 0, 0), datetime(2026, 5, 21, 7, 0, 0),
+        datetime(2026, 7, 1, 7, 0, 0))["origin"]}
+    assert rows["2026-05-01"]["partial"] is True, "window opened on the 21st"
+    assert rows["2026-06-01"]["partial"] is False, "a whole month inside the window"

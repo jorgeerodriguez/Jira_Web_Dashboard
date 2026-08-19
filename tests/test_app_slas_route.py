@@ -164,3 +164,160 @@ def test_a_failing_recrawl_does_not_break_the_add(monkeypatch, tmp_path):
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person"})
     assert res.status_code == 200
     assert client.get("/api/mr-authors").json()["added"] == {"audacy-new.person": "audacy-new.person"}
+
+
+def test_an_inverted_window_is_rejected_rather_than_served_empty(monkeypatch, tmp_path):
+    """Empty panels read as "the team did nothing", not as "you asked for nothing"."""
+    client, _ = _client(monkeypatch, tmp_path, "inv.duckdb")
+    response = client.get("/api/slas", params={"since": "2026-08-01", "until": "2026-07-01"})
+    assert response.status_code == 400
+    assert "must be after" in response.json()["detail"]
+
+
+def test_a_zero_width_window_is_rejected(monkeypatch, tmp_path):
+    """until is exclusive, so since == until can only ever return nothing."""
+    client, _ = _client(monkeypatch, tmp_path, "zero.duckdb")
+    assert client.get("/api/slas",
+                      params={"since": "2026-08-01", "until": "2026-08-01"}).status_code == 400
+
+
+def test_a_malformed_until_is_rejected_and_names_the_field(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, "mal.duckdb")
+    response = client.get("/api/slas", params={"since": "2026-08-01", "until": "last-tuesday"})
+    assert response.status_code == 400
+    assert "until" in response.json()["detail"]
+
+
+def test_both_bounds_reach_the_mr_turnaround_route(monkeypatch, tmp_path):
+    """The same control drives both endpoints, so both must accept the pair."""
+    client, _ = _client(monkeypatch, tmp_path, "mrb.duckdb")
+    assert client.get("/api/mr-turnaround",
+                      params={"since": "2026-07-01", "until": "2026-08-01"}).status_code == 200
+    assert client.get("/api/mr-turnaround",
+                      params={"since": "2026-08-01", "until": "2026-07-01"}).status_code == 400
+
+
+def _slas_page(monkeypatch, tmp_path, name):
+    client, _ = _client(monkeypatch, tmp_path, name)
+    response = client.get("/slas")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_the_hidden_custom_range_is_hidden_against_the_filter_display_rule(monkeypatch, tmp_path):
+    """`hidden` alone loses to an author `display` rule, which is how it broke.
+
+    `.filter{display:inline-flex}` outranks the UA stylesheet's `[hidden]{display:none}`, so the
+    custom from/to inputs stayed on screen while the code believed it had put them away. Anyone
+    reaching them while a preset was selected then found their dates ignored. The override has to be
+    at least as specific as `.filter`, so a bare `[hidden]` rule is not enough.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "hid.duckdb")
+    assert ".controls [hidden]{display:none}" in page, "hidden must outrank .filter's display"
+    assert 'id="customRange"' in page and "hidden" in page
+
+
+def test_editing_a_custom_date_selects_the_custom_preset(monkeypatch, tmp_path):
+    """Typing a date must never be a no-op.
+
+    presetRange() resolves from the SELECT, so a date typed while the select still read "Panel
+    defaults" resolved to null and was silently dropped — the lookback appeared not to work at all.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "cust.duckdb")
+    assert 'preset.value = "custom"' in page, "a date edit must switch the select to custom"
+    assert 'since.addEventListener("change", applyCustom)' in page
+    assert 'until.addEventListener("change", applyCustom)' in page
+
+
+def test_every_lookback_preset_the_page_offers_is_handled_by_the_resolver(monkeypatch, tmp_path):
+    """An option with no case in presetRange() falls to `default: return null` — a silent no-op."""
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "pre.duckdb")
+    control = page[page.index('<select id="preset">'):page.index("</select>")]
+    offered = {v for v in re.findall(r'<option value="([^"]*)"', control) if v}
+    resolver = page[page.index("function presetRange("):page.index("function query(")]
+    for preset in offered:
+        assert f'case "{preset}"' in resolver, f'preset {preset!r} has no case in presetRange()'
+
+
+def test_every_element_the_page_script_looks_up_exists_in_the_markup(monkeypatch, tmp_path):
+    """A getElementById that returns null throws, and one throw took out the whole page.
+
+    Merging two panels dropped `<p id="hiddenNote">` while renderHidden() still targeted it. That
+    threw out of reload(), init() caught it and returned, and every listener after that point was
+    never attached — the lookback picker, author filter, environment filter, add and hide all went
+    dead at once, with no error visible on the panels themselves. Nothing but this test connects a
+    render target to the markup that has to carry it.
+    """
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "ids.duckdb")
+    wanted = set(re.findall(r'getElementById\("([^"]+)"\)', page))
+    # Ignore interpolated ids — those are built at render time, not declared in the template.
+    present = set(re.findall(r'id="([^"${]+)"', page))
+    assert wanted, "the page should look elements up at all"
+    assert not (wanted - present), f"script targets missing from markup: {sorted(wanted - present)}"
+
+
+def test_the_first_load_runs_after_every_listener_is_wired(monkeypatch, tmp_path):
+    """Ordering is the reason a broken panel cost the whole page rather than just that panel.
+
+    If the initial `await reload()` sits before the addEventListener calls, any render failure skips
+    the wiring. It has to be the last thing init() does.
+    """
+    page = _slas_page(monkeypatch, tmp_path, "order.duckdb")
+    init = page[page.index("async function init(){"):page.index("\ninit();")]
+    assert init.index("addEventListener") < init.rindex("await reload()"), \
+        "init() must wire its listeners before the first reload"
+    # Nested callbacks legitimately return; what must not happen is init's own body bailing out
+    # between the load and the wiring. With the load last, there is no "between" left.
+    assert init.rindex("await reload()") > init.rindex('addEventListener("click"'), \
+        "the first reload must come after the last listener init() attaches"
+
+
+def test_no_dashboard_uses_a_css_token_it_never_declares(monkeypatch, tmp_path):
+    """Each page carries its own copy of :root, so a token added to one is missing from the others.
+
+    Propagating the surface tokens hit exactly this: two pages' :root blocks had diverged, so they
+    referenced var(--well) and var(--accent) without declaring them. A CSS variable with no value
+    fails silently — the colour just does not apply — so nothing surfaces it but a check like this.
+    """
+    import pathlib
+    import re
+    pages = sorted(pathlib.Path("darkstar/dashboards").glob("*.html"))
+    assert pages, "no dashboards found"
+    for page in pages:
+        css = page.read_text()
+        css = css[css.index("<style>") + 7:css.index("</style>")]
+        # --c is assigned per element inline by the chip renderer, never in :root.
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", css)) - {"--c"}
+        declared = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+        assert not (used - declared), f"{page.name} uses undeclared {sorted(used - declared)}"
+
+
+def test_panel_headings_outrank_sub_headings(monkeypatch, tmp_path):
+    """They were 13px and 12px, both --muted at weight 600 — one pixel apart and nothing else.
+
+    That is what made the page read flat: a panel title was painted the dimmest ink available, the
+    same as captions and hints. The scale only works if h2 is brighter AND larger than h3.
+    """
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "type.duckdb")
+    css = page[page.index("<style>") + 7:page.index("</style>")]
+    h2 = re.search(r"\bh2\{([^}]*)\}", css).group(1)
+    h3 = re.search(r"\bh3\{([^}]*)\}", css).group(1)
+    h2_size = float(re.search(r"font-size:([\d.]+)px", h2).group(1))
+    h3_size = float(re.search(r"font-size:([\d.]+)px", h3).group(1))
+    assert h2_size > h3_size, f"h2 ({h2_size}px) must be larger than h3 ({h3_size}px)"
+    assert "var(--ink)" in h2, "a panel title must use the brightest ink, not --muted"
+    assert "var(--muted)" in h3, "a sub-heading should stay dim so the tiers separate"
+
+
+def test_score_cards_do_not_share_a_surface_with_the_panel_holding_them(monkeypatch, tmp_path):
+    """.stat, .fc and .panel all used var(--panel), leaving a 1px border as the only separation."""
+    import re
+    page = _slas_page(monkeypatch, tmp_path, "surf.duckdb")
+    css = page[page.index("<style>") + 7:page.index("</style>")]
+    for selector in (r"\.stat\{", r"\.fc\{"):
+        rule = re.search(selector + r"([^}]*)\}", css).group(1)
+        assert "var(--well)" in rule, f"{selector} must sit on the recessed surface"
+        assert "background:var(--panel)" not in rule

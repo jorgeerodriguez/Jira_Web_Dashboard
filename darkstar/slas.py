@@ -39,18 +39,23 @@ from __future__ import annotations
 
 import re
 import statistics
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 
 from darkstar.mrflow import first_review_at
 from darkstar.metrics import (
+    BUSINESS_HOURS_PER_DAY,
     BUSINESS_TZ,
     DELIVERY_TYPES,
     SELF_SERVICE_EPOCH,
     business_hours_between,
+    business_date,
     business_month,
+    choose_grain,
     pctile,
+    period_end,
+    period_start,
     ready_hours,
     window_start,
 )
@@ -201,7 +206,23 @@ def default_window_start(now: datetime) -> datetime:
     return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
 
 
-def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime) -> dict:
+def _is_partial(start: date, grain: str, since: datetime, until: datetime | None,
+                now: datetime) -> bool:
+    """True when the window or the clock cuts this period short, so its counts are not a full one.
+
+    Three ways a period is truncated, and all three read as a real dip if unflagged: the first period
+    of a lookback that began mid-period ("last 30 days" almost never starts on a Monday, and a
+    monthly window almost never starts on the 1st), the last period of a bounded window, and the
+    period in progress right now.
+
+    Comparison is on business-tz calendar dates, because that is what a period label means.
+    """
+    ceiling = min(until, now) if until is not None else now
+    return start < business_date(since) or period_end(start, grain) > business_date(ceiling)
+
+
+def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime,
+                until: datetime | None = None, grain: str | None = None) -> dict:
     """Volume, turnaround, SLA compliance (per audience x type) + agent success rate.
 
     `since` is the population floor (requests created on or after it), passed in rather than
@@ -209,11 +230,14 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     """
     # Scope to delivery types, as leadtime/velocity/intake do: a Feature or Epic is a container for
     # requests, not a request, and its months-long lifetime badly inflates a turnaround median.
+    # Row grain follows the window unless the page forces one. Medians cannot be re-aggregated from
+    # coarser medians, so this has to happen here rather than by folding rows in the browser.
+    grain = grain or choose_grain(since, until, now)
     delivery = ", ".join(["?"] * len(DELIVERY_TYPES))
     issues = connection.execute(
         f"SELECT key, status, status_category, created, labels FROM issues "
-        f"WHERE created >= ? AND issuetype IN ({delivery})",
-        [since, *DELIVERY_TYPES],
+        f"WHERE created >= ? AND (? IS NULL OR created < ?) AND issuetype IN ({delivery})",
+        [since, until, until, *DELIVERY_TYPES],
     ).fetchall()
 
     transitions_by_key: dict[str, list[tuple[str, datetime]]] = {}
@@ -271,6 +295,9 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     delivered_total = 0
     first_review_waits: list[float] = []
     self_service_reviewed = 0
+    turnaround_by_period: dict[date, list[float]] = {}
+    created_by_period: dict[date, int] = {}
+    origin_by_period: dict[date, dict[str, int]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -288,14 +315,19 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             (self_service_hours if is_self_service else other_hours).append(hours)
             if is_self_service:
                 delivered_self_service += 1
+                turnaround_by_period.setdefault(period_start(created, grain), []).append(hours)
             if is_ai_generated:
                 delivered_ai_generated += 1
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
             self_service_reviewed += 1
             first_review_waits.append(mr["first_review_hours"])
+        bucket = period_start(created, grain)
+        origin = origin_by_period.setdefault(bucket, {"agent": 0, "human": 0})
+        origin["agent" if is_self_service else "human"] += 1
         if is_self_service:
             month = business_month(created)
             created_by_month[month] = created_by_month.get(month, 0) + 1
+            created_by_period[bucket] = created_by_period.get(bucket, 0) + 1
 
         if not is_self_service:
             continue
@@ -387,6 +419,59 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "first_review_p90_hours": pctile(first_review_waits, 0.9),
     }
 
+    # Turnaround by the month the request was CREATED. A single blended figure over the window
+    # libels current performance when the team is improving fast: on the pilot data the p50 ran
+    # 114.0h (May), 6.3h (Jun), 7.5h (Jul), 2.7h (Aug). The share within a working day is carried
+    # alongside because the p50 range is wide enough that a linear axis buries the recent months.
+    # Grouped by period rather than always by week: a 90-day lookback is 14 weekly rows, which is a
+    # list to scroll instead of a trend to read, and a 7-day lookback is one row that says nothing.
+    # The grain comes from the window, so the table stays roughly four to thirteen rows throughout.
+    #
+    # No rest-of-PE column. Measured head to head on live Jira for June, with abandoned statuses
+    # excluded from both arms, self-service ran 15.9h p50 against 37.9h and 174.8h p90 against
+    # 144.0h -- better at the median, worse in the tail, Mann-Whitney z=+1.44, not significant at
+    # n=26. A ratio printed per period would read as a finding when the data does not carry one. The
+    # origin series below is what the self-service work actually demonstrates.
+    #
+    # `created` sits beside `delivered` because these rows group by the period a request ARRIVED. A
+    # period whose cohort has not closed yet shows only the requests that finished quickly, which
+    # reads as a fast period; delivered < created is how a reader sees that.
+    turnaround = []
+    for start in sorted(set(turnaround_by_period) | set(created_by_period)):
+        hours = turnaround_by_period.get(start, [])
+        turnaround.append({
+            "period": start.isoformat(),
+            "created": created_by_period.get(start, 0),
+            "delivered": len(hours),
+            "p50_hours": round(statistics.median(hours), 1) if hours else None,
+            "p90_hours": pctile(hours, 0.9),
+            "within_day_pct": (round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100)
+                               if hours else None),
+            "partial": _is_partial(start, grain, since, until, now),
+        })
+
+    # Origin: what share of the requests PE takes on arrive through a skill rather than a person
+    # filing them. Counted in TICKETS, per period of creation, so it lines up with the turnaround
+    # panel beside it. Merge requests are deliberately not the unit -- one request routinely spawns
+    # several (July: 643 MRs against 117 distinct tickets), so an MR count answers a question about
+    # branches rather than about demand.
+    #
+    # Classification is how the ticket was CREATED: the Jira watermark a skill stamps, or the pe:*
+    # label on a merge request it opened when the watermark is missing. Reading an MR for that signal
+    # is not the same as counting it.
+    origin = []
+    for start in sorted(origin_by_period):
+        slot = origin_by_period[start]
+        total = slot["agent"] + slot["human"]
+        origin.append({
+            "period": start.isoformat(),
+            "agent": slot["agent"],
+            "human": slot["human"],
+            "total": total,
+            "agent_share_pct": round(slot["agent"] / total * 100),
+            "partial": _is_partial(start, grain, since, until, now),
+        })
+
     agent_success = {
         "terminal": success_terminal,
         "succeeded": success_done,
@@ -397,6 +482,9 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     return {
         "buckets": out_buckets,
         "headline": headline,
+        "grain": grain,
+        "turnaround": turnaround,
+        "origin": origin,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],
         "targets": SLA_TARGETS_HOURS,

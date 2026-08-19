@@ -9,6 +9,13 @@
     --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
     --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
     --pos:#41c98a; --neg:#f2705f;
+    /* Three surfaces, not one. Everything used to sit on --panel, so a score card inside a panel had
+       nothing but a 1px border to separate it from its own container. --head reads as raised (the
+       panel's title bar), --well as recessed (the thing holding a number). */
+    --head:#202836; --well:#151b25;
+    /* One accent, taken from the chart palette so it is already in the page's vocabulary. Used only
+       where the eye should land first: panel disclosure markers and the focused control. */
+    --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
@@ -29,11 +36,14 @@
     border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
     padding:clamp(22px,4vw,44px);
   }
-  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 12px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+        color:var(--accent); margin:0 0 12px}
   h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
   .dek{color:var(--ink2); font-size:16px; margin:0; max-width:66ch}
 
-  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 4px}
+  /* The lookback drives every panel, so it reads as a toolbar rather than as loose inputs. */
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 22px;
+        background:var(--well); border:1px solid var(--line); border-radius:11px; padding:12px 14px}
   .controls .lbl{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-right:2px}
   .chip{
     display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
@@ -81,11 +91,16 @@
   .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
   .whisk{stroke-width:1.25; opacity:.55}
 
-  h2{font-size:13px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:600; margin:38px 0 6px}
-  .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:70ch}
-  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--panel)}
-  .stat .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
-  .stat .v{font-family:var(--mono); font-size:29px; font-weight:600; letter-spacing:-.02em; margin-top:4px; font-variant-numeric:tabular-nums}
+  /* Panel titles are the brightest, largest mono on the page; sub-headings stay small and dim. They
+     were 13px/12px both in --muted at weight 600, which is why nothing read as a heading. */
+  h2{font-size:14px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.085em;
+     color:var(--ink); font-weight:700; margin:38px 0 6px}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--well);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.025); transition:border-color .15s}
+  .stat:hover{border-color:var(--line2)}
+  .stat .k{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted)}
+  .stat .v{font-family:var(--mono); font-size:30px; font-weight:600; letter-spacing:-.025em; color:var(--ink);
+        margin-top:5px; line-height:1.05; font-variant-numeric:tabular-nums}
   .stat .s{font-size:12px; color:var(--ink2); margin-top:3px}
   .stat .s.pos{color:var(--pos)} .stat .s.neg{color:var(--neg)}
   .tbar-val{font-family:var(--mono); font-size:13px; font-weight:600; fill:var(--ink)}
@@ -97,8 +112,17 @@
   caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
   th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  thead th{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+        color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line2); padding-bottom:9px}
   tbody td{border-bottom:1px solid var(--line)}
+  /* Wide rows of tabular numbers are hard to track across; a hover band does the work a zebra
+     stripe would without adding permanent noise. */
+  tbody tr{transition:background .12s}
+  tbody tr:hover td{background:rgba(255,255,255,.03)}
+  tbody tr:last-child td{border-bottom:none}
+  /* The first column is the row's identity (a week, an author), so it carries more weight than the
+     numbers it labels. */
+  tbody td:first-child{color:var(--ink); font-weight:560}
   td.num{font-family:var(--mono)}
   tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
   tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
@@ -106,24 +130,67 @@
   .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
 
   .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
-  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--panel)}
+  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--well);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
   .fc .who{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px}
   .fc .dot-badge{width:9px; height:9px; border-radius:50%}
   .fc .big{font-family:var(--mono); font-size:28px; font-weight:600; letter-spacing:-.02em; margin:6px 0 1px; font-variant-numeric:tabular-nums}
   .fc .rng{font-family:var(--mono); font-size:12px; color:var(--muted)}
   .fc.empty{color:var(--muted); font-size:13px; display:flex; align-items:center}
 
-  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:76ch}
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); max-width:76ch}
+  .foot > div{margin-top:7px}
+  .foot summary{cursor:pointer; font-family:var(--mono); font-size:12px; text-transform:uppercase;
+        letter-spacing:.1em; color:var(--muted); user-select:none}
+  .foot summary:hover{color:var(--ink2)}
+  .foot[open] summary{margin-bottom:4px}
   .foot b{color:var(--ink2); font-weight:600}
   .foot code{font-family:var(--mono); color:var(--ink2)}
+  h3{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.13em;
+     color:var(--muted); font-weight:600; margin:26px 0 8px}
   h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
-  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--muted); transition:transform .18s; transform:translateY(-1px)}
+  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--accent);
+        transition:transform .18s; transform:translateY(-1px)}
   h2.collapsible[aria-expanded="true"]::before{transform:translateY(-1px) rotate(90deg)}
-  h2.collapsible:hover,h2.collapsible:hover::before{color:var(--ink2)}
-  h2.collapsible:focus-visible{outline:2px solid var(--line2); outline-offset:3px; border-radius:5px}
+  h2.collapsible:hover{color:#fff}
+  h2.collapsible:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:5px}
   .sec-hidden{display:none !important}
+  .panel{border:1px solid var(--line); border-radius:12px; padding:0 20px 18px; background:var(--panel);
+         box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 18px 40px -30px rgba(0,0,0,.8);
+         transition:border-color .15s}
+  .panel:hover{border-color:var(--line2)}
+  /* The title becomes a bar spanning the panel: negative margins reach back out through the panel's
+     own padding, and the radius matches the panel minus its 1px border. */
+  .panel > h2{margin:0 -20px 14px; padding:13px 20px; background:var(--head);
+              border-bottom:1px solid var(--line); border-radius:11px 11px 0 0}
+  /* One collapsed explainer per panel instead of a standing wall of prose. */
+  .note{margin:0 0 12px}
+  .note summary{cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase;
+        letter-spacing:.09em; color:var(--muted); user-select:none; list-style:none}
+  .note summary::-webkit-details-marker{display:none}
+  .note summary::before{content:"\24D8"; margin-right:6px}
+  .note summary:hover{color:var(--ink2)}
+  .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
+  .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
+        text-decoration:underline dotted; cursor:pointer}
+  .linkish:hover{color:var(--ink)}
+  /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
+     and the daily chart — span both. */
+  /* No align-items:start — grid's default stretch is what makes two panels in a row match height.
+     The panel is a flex column so its table takes the slack rather than leaving a gap. */
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:22px}
+  .panel{min-width:0; display:flex; flex-direction:column}
+  .panel > .tbl-wrap:last-child{flex:1}
+  .panel.wide{grid-column:1 / -1}
+  @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
+  /* Must outrank .filter's display, or the hidden attribute is ignored and a control the code
+     thinks is put away stays on screen. */
+  .controls [hidden]{display:none}
   .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
           text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
+  .filter select{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 10px; text-transform:none}
+  .filter select:focus-visible,.filter input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
   .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
           border:1px solid var(--line2); border-radius:8px; padding:6px 11px; min-width:220px; text-transform:none;
           letter-spacing:0}
@@ -149,8 +216,12 @@
   .rowx{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1;
         padding:0 2px}
   .rowx:hover{color:var(--neg)}
-  .bar{display:block; height:8px; border-radius:2px; background:var(--ink2); opacity:.55; min-width:1px}
+  .swatch{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px;
+        vertical-align:baseline}
+  .bar{display:block; height:7px; border-radius:999px; min-width:2px;
+       background:linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent))}
   td.barcell{width:38%; padding-left:14px}
+  .mini{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:7px}
 </style>
 </head>
 <body>
@@ -164,34 +235,113 @@
 <main class="card">
   <p class="eyebrow">Platform Engineering · Self-Service</p>
   <h1>Self-Service Delivery</h1>
-  <p class="dek">How much of PE's delivered work now comes through the self-service skills, how fast
-  those requests close, and how long merge requests take to land.
-  <b>All hours are business hours</b> — Mon–Fri 08:00–17:00 US/Pacific, holidays excluded, one standard
-  clock, since Audacy's users are overwhelmingly North American. The workflows began 2026-03.</p>
+  <p class="dek">How much of PE's delivered work comes through the self-service skills, how fast those
+  requests close, and how long merge requests take to land. All hours are business hours.</p>
 
   <div class="controls">
-    <label class="filter">Lookback from
+    <label class="filter">Lookback
+      <select id="preset">
+        <option value="">Panel defaults</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="last-week">Last week</option>
+        <option value="mtd">Month to date</option>
+        <option value="last-month">Last month</option>
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label class="filter" id="customRange" hidden>from
       <input id="since" type="date" min="2026-01-01">
+      <span>to</span>
+      <input id="until" type="date" min="2026-01-01">
+    </label>
+    <label class="filter">Rows
+      <select id="grain">
+        <option value="">Auto</option>
+        <option value="day">Daily</option>
+        <option value="week">Weekly</option>
+        <option value="month">Monthly</option>
+      </select>
     </label>
     <button class="btn" id="sinceReset" type="button">Reset to defaults</button>
     <span class="filter-hint" id="sinceHint"></span>
   </div>
 
+  <div class="panels">
+  <section class="panel wide">
   <h2>Self-service impact</h2>
-  <p class="h2sub">A <b>label</b> means the request came through a self-service skill; a
+  <details class="note"><summary>About this panel</summary>
+  <p>A <b>label</b> means the request came through a self-service skill; a
   <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
   overlap but are not the same, so the share card reports both.</p>
+  </details>
   <div class="cards" id="successStats"></div>
 
-  <h2>MR turnaround by author</h2>
-  <p class="h2sub">Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
+  </section>
+  <section class="panel">
+  <h2>Delivery turnaround</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Self-service requests grouped by the period they were <b>created</b>. The grain follows the
+  lookback: up to two weeks is daily, up to a month is weekly, and anything longer is monthly, so the
+  table stays a handful of rows rather than growing with the window. <b>Rows</b> in the toolbar forces
+  a grain when you want one — 90 days week by week is 14 rows, which is sometimes what you want.</p>
+  <p>Grouping by arrival means a recent cohort may not have closed. <b>In</b> is what arrived,
+  <b>Done</b> what has landed, and a <b>*</b> marks the gap: that period's p50 counts only the
+  requests that finished, so it reads faster than it will once the rest land. A period the window or
+  the clock cuts short is marked <b>partial</b> — which includes the first row whenever the lookback
+  starts mid-period, and it almost always does.</p>
+  <p>The bar is the share closed inside one working day, scaled to the best period shown — the p50
+  range is wide enough that plotting it linearly would bury the recent periods.</p>
+  </details>
+  <div class="tbl-wrap"><table id="turnaroundTbl"></table></div>
+  </section>
+  <section class="panel">
+  <h2>How requests arrive</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Every request created that period, split by <b>how it was created</b>: filed by a self-service
+  skill, or filed by a person. The bar is the self-service share, and it is the capacity argument in
+  the only unit that means anything here — demand PE absorbed without a person writing the ticket.</p>
+  <p>The unit is <b>requests, not merge requests</b>. One request counts once however many MRs it
+  took, which is often several: July ran 643 merged MRs against just <b>117 distinct tickets</b>, one
+  of them spread across 19. Counting branches would answer a different question and inflate every
+  total roughly threefold.</p>
+  <p>A request counts as self-service if a skill's <b>Jira watermark</b> is on it, or if a merge
+  request it produced carries a <b>pe:*</b> label — some early skill-filed tickets never got the
+  watermark, and that label is the only remaining evidence. Reading a merge request for that signal
+  is not the same as counting it, so the bounded lookback deliberately does not cut it off.</p>
+  <p>A period is marked <b>partial</b> whenever the window or the clock cuts it short — the first
+  period of a lookback that began mid-period, the last period of a bounded range, and the period in
+  progress. All three hold a part-period of requests and would otherwise read as a real dip.</p>
+  </details>
+  <div class="tbl-wrap"><table id="originTbl"></table></div>
+  </section>
+  <section class="panel wide">
+  <h2>MR turnaround</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
   <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
   excluded — the author is still working, not waiting on review. Note that an engineer working EET can
   score near zero here, since their own workday falls inside the Pacific night.</p>
+  <p>Filter is comma-separated and matches any part of a
+    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
+    by username and an email address matches nothing. Environment is read from the repo name, falling
+    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
+    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
+    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
+    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
+    yet. Use <b>×</b> on a row to hide someone.</p>
+  <p>The same merged MRs, cut by the business-timezone day they landed rather than by
+  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
+  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
+  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
+  </details>
+
   <div class="controls">
     <label class="filter">Filter authors
       <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
-             aria-describedby="mrFilterHint">
+             >
     </label>
     <label class="filter">Add author
       <input id="addUser" type="text" placeholder="search GitLab users" autocomplete="off"
@@ -211,50 +361,58 @@
       </select>
     </label>
   </div>
-  <span class="filter-hint" id="mrFilterHint">Filter is comma-separated and matches any part of a
-    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
-    by username and an email address matches nothing. Environment is read from the repo name, falling
-    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
-    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
-    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
-    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
-    yet. Use <b>×</b> on a row to hide someone.</span>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <p class="filter-hint" id="hiddenNote"></p>
   <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
-  <div id="hiddenChips" class="chips"></div>
+  <h3>By day merged</h3>
 
-  <h2>Daily MR turnaround</h2>
-  <p class="h2sub">The same merged MRs, cut by the business-timezone day they landed rather than by
-  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
-  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
-  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
   <div class="tbl-wrap"><div id="dailyChart"></div></div>
-
-  <div class="foot">
-    <div><b>What's counted.</b> DEVOPS issues carrying an agent watermark (a <code>pe-*</code> Jira label).
-    The request type comes from the linked GitLab MR's <code>pe:&lt;skill&gt;</code> label
-    (<code>pe:iac-request</code> / <code>pe:k8s-request</code> / <code>pe:tf-module</code> / <code>pe:troubleshoot</code>),
-    matched to the issue by its <code>DEVOPS-</code> key; an issue with no linked MR falls back to its Jira
-    <code>pe-*</code> label. Delivery turnaround = created → first <code>Done</code> (changelog). Review
-    turnaround = MR <code>opened_at</code> → <code>merged_at</code>. v1 tracks AI requests; human-side is a follow-up.</div>
-    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
-    filed 15:00 and closed 08:00 next morning is 2h, not 17h. Targets are business hours too.</div>
-    <div><b>Review median vs. MR turnaround.</b> The per-type <b>review median</b> above keeps one MR per
-    Jira issue (the earliest, for deterministic bucketing), so an issue delivered across several MRs
-    contributes once. The <b>MR turnaround</b> table counts every merged MR. Only merged MRs are ingested,
-    so neither is a queue depth — an MR still open is invisible until it lands.</div>
-    <div><b>Windows.</b> The impact cards read the trailing 3 months of requests by creation date;
-    MR turnaround keeps its own 6-month window back to 2026-03, when the workflows began. Both are
-    overridden by the lookback control at the top.</div>
-    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task). A Feature or
-    Epic is a container for requests, not a request, and its lifetime distorts the median. Roughly
-    18% of a typical request's turnaround falls <i>after</i> its MR merged — shipped work waiting to
-    be closed out — so an auto-transition on merge would improve every figure here for free.</div>
-    <div><b>Agent success (v1).</b> Store-derived: terminal AI requests that reached Done vs
-    Won't Do/Cancelled. Invocation-level success from the CloudWatch GenAI dashboard (DEVOPS-9562) is deferred.</div>
+  </section>
   </div>
+
+  <details class="foot">
+    <summary>How these numbers are derived</summary>
+
+    <div><b>Self-service vs AI-generated.</b> A request is <b>self-service</b> when a skill-stamped
+    label is present — <code>pe-*</code>, <code>ai-generated</code> or <code>self-service</code> on the
+    Jira issue, or <code>pe:&lt;skill&gt;</code> on the linked MR. It is <b>AI-generated</b> when the MR
+    description carries a <code>Generated with Claude Code</code> footer, whoever filed the ticket. They
+    overlap but are not the same: the Jira labels only began 2026-05-27, two months after the first
+    agent-footered MR, and 96 issues since then are footer-only — ordinary human-filed tickets PE
+    delivered with the agent.</div>
+
+    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
+    filed 15:00 and closed 08:00 next morning is 2h, not 17h. A business day is 9h, a week 45h. Raw
+    calendar time is not reported anywhere.</div>
+
+    <div><b>Delivery turnaround</b> = created → first <code>Done</code> in the changelog
+    (<code>resolutiondate</code> is null on ~85% of issues). <b>MR turnaround</b> = <b>ready</b> →
+    merged: time in draft is excluded, because the author is still working rather than waiting on
+    review. Across the 20 slowest MRs, 67% of attributed hours had been draft time.</div>
+
+    <div><b>Time to first review</b> is the earliest of a non-author comment, a non-author approval, or
+    a merge by someone other than the author. PE engineers merge their own work once a colleague
+    approves, so a self-merge is not evidence nobody looked — the approval is the review. Requests from
+    outside PE cannot be merged by the requester, so there the merge is the review.</div>
+
+    <div><b>Environment</b> comes from the repo name, falling back to the changed file paths for repos
+    like <code>gitops-k8s-team-a2</code> that hold both trees. A change touching both is counted as
+    mixed and left out of the environment views.</div>
+
+    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task) — a Feature or
+    Epic is a container for requests, not a request. Only merged MRs are ingested, so nothing here is a
+    queue depth: an MR still open is invisible until it lands.</div>
+
+    <div><b>Windows.</b> Impact cards and the monthly trend read the trailing 3 months of requests by
+    creation date; MR turnaround keeps its own 6-month window back to 2026-03, when the workflows
+    began. Both are overridden by the lookback control at the top.</div>
+
+    <div><b>Worth fixing.</b> Roughly 18% of a typical request's turnaround falls <i>after</i> its MR
+    merged — shipped work waiting to be closed out. An auto-transition on merge would improve every
+    figure here for free (DEVOPS-10186).</div>
+  </details>
 </main>
 <script>
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -297,15 +455,24 @@ function mrFilterTerms(){
     .split(",").map(t=>t.trim().toLowerCase()).filter(Boolean);
 }
 
+function authorColours(d){
+  const map = new Map();
+  (d.series || []).forEach((sr, i) => map.set(sr.name, PALETTE[i % PALETTE.length]));
+  return map;
+}
+
 function renderMrTable(d){
+  const colour = authorColours(d);
   const terms = mrFilterTerms();
   const shown = terms.length
     ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
     : d.authors;
   const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median (h)</th>`+
              `<th>p90 (h)</th><th></th></tr></thead>`;
-  const row=(a,cls)=>`<tr class="${cls}">
-     <td>${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
+  const seriesKey = new Map((d.series || []).map((sr, i) => [sr.name, String(i)]));
+  const row=(a,cls)=>`<tr class="${cls}" data-k="${seriesKey.has(a.name) ? seriesKey.get(a.name) : ""}">
+     <td>${colour.get(a.name) ? `<span class="swatch" style="background:${colour.get(a.name)}"></span>` : ""}`+
+        `${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
      <td class="num">${a.merged}</td>
      <td class="num">${fmt(a.biz_hours_median)}</td>
      <td class="num">${fmt(a.biz_hours_p90)}</td>
@@ -322,17 +489,60 @@ function renderMrTable(d){
     `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
 }
 
-/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to
-   both endpoints as ?since=; empty means "each panel uses its own default window". */
+/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to both
+   endpoints as ?since=/?until=; empty means "each panel uses its own default window".
+
+   Every preset resolves to dates in the BUSINESS timezone, not the browser's. A colleague in EET
+   picking "Yesterday" at 09:00 their time is still eight hours behind Pacific midnight, so a local
+   computation would ask for the wrong day and quietly show them different numbers than everyone
+   else. `until` is exclusive, matching the API. */
+const PRESET_KEY = "darkstar.slas.preset";
+const GRAIN_KEY = "darkstar.slas.grain";
 const SINCE_KEY = "darkstar.slas.since";
+const UNTIL_KEY = "darkstar.slas.until";
+const BUSINESS_TZ = "America/Los_Angeles";
+
+function businessToday(){
+  // en-CA renders ISO-8601, so this is the current date *in Pacific* regardless of where we run.
+  const [y, m, d] = new Date().toLocaleDateString("en-CA", {timeZone: BUSINESS_TZ}).split("-");
+  return new Date(Date.UTC(+y, +m - 1, +d));
+}
+const iso = utc => utc.toISOString().slice(0, 10);
+const shift = (utc, days) => new Date(utc.getTime() + days * 86400000);
+
+/* Returns {since, until} as ISO dates, or null for "panel defaults". `until` is exclusive, so a
+   range ending "today" passes tomorrow and a single day passes the next day. */
+function presetRange(preset){
+  const today = businessToday();
+  const monday = ref => shift(ref, -((ref.getUTCDay() + 6) % 7));   // Sun=0 -> 6, so Monday is 0
+  switch(preset){
+    case "yesterday":  return {since: iso(shift(today, -1)), until: iso(today)};
+    case "last-week":  return {since: iso(shift(monday(today), -7)), until: iso(monday(today))};
+    case "mtd":        return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))),
+                               until: iso(shift(today, 1))};
+    case "last-month": return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1))),
+                               until: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)))};
+    case "30": case "60": case "90":
+      return {since: iso(shift(today, -Number(preset))), until: iso(shift(today, 1))};
+    case "custom": {
+      const since = document.getElementById("since").value;
+      const until = document.getElementById("until").value;
+      return since ? {since, until: until || ""} : null;
+    }
+    default: return null;
+  }
+}
 let mrData = null, slaData = null;
 
 /* Query string for a panel: the shared lookback, plus the author filter where the endpoint
    supports it. Built with URLSearchParams so an empty value simply never appears. */
 function query(withMrFilters){
   const p = new URLSearchParams();
-  const since = document.getElementById("since").value;
-  if(since) p.set("since", since);
+  const range = presetRange(document.getElementById("preset").value);
+  if(range && range.since) p.set("since", range.since);
+  if(range && range.until) p.set("until", range.until);
+  const grain = document.getElementById("grain").value;
+  if(grain) p.set("grain", grain);
   if(withMrFilters){
     const terms = mrFilterTerms();
     if(terms.length) p.set("authors", terms.join(","));
@@ -353,11 +563,14 @@ async function getJSON(path, withAuthors){
   return res.json();
 }
 
+/* Hidden authors are listed here rather than as a row of pills in the panel body: it is roster
+   state you set once, not something to read on every visit. Each name restores itself. */
 function renderHidden(){
   const hidden = (mrData && mrData.hidden) || [];
-  document.getElementById("hiddenChips").innerHTML = hidden.length
-    ? `<span class="filter-hint">Hidden:</span>` + hidden.map(n =>
-        `<span class="chip">${esc(n)}<button type="button" data-show="${esc(n)}" title="Show ${esc(n)}">+</button></span>`).join("")
+  document.getElementById("hiddenNote").innerHTML = hidden.length
+    ? `Hidden from this table: ` + hidden.map(n =>
+        `<button type="button" class="linkish" data-show="${esc(n)}" title="Show ${esc(n)} again">${esc(n)}</button>`
+      ).join(", ") + `. Click a name to show it again.`
     : "";
 }
 
@@ -411,6 +624,8 @@ async function reload(){
   [slaData, mrData] = await Promise.all([
     getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
   renderSuccess(slaData.headline);
+  renderTurnaroundTable(slaData.turnaround, slaData.grain);
+  renderOriginTable(slaData.origin, slaData.grain);
   renderMrTable(mrData);
   renderDailyChart(mrData);
   renderHidden();
@@ -429,13 +644,89 @@ async function reload(){
     ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${fmt(fr.hours_median)}h</b> `+
       `to first review, p90 ${fmt(fr.hours_p90)}h. The rest merged with no comment at all.`
     : `No human review comments on these MRs in the window.`;
-  document.getElementById("sinceHint").textContent = document.getElementById("since").value
-    ? "Applied to every panel on this page."
-    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround ${mrData.window_months} months from ${mrData.window_start}.`;
+  const range = presetRange(document.getElementById("preset").value);
+  const rows = `Rows grouped by ${GRAIN_NOUN[slaData.grain] || slaData.grain}`+
+    `${document.getElementById("grain").value ? "" : " (chosen from the window)"}.`;
+  document.getElementById("sinceHint").textContent = range
+    ? `${range.since} to ${range.until || "now"} (end exclusive), applied to every panel. ${rows}`
+    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround `+
+      `${mrData.window_months} months from ${mrData.window_start}. ${rows}`;
 }
 
 /* Median per day, with an inline bar scaled to the worst day in view — enough to see a trend
    without an axis. Days with no merged MRs simply do not appear. */
+/* Month-by-month turnaround. A table rather than a plotted line: the p50 range spans two orders
+   of magnitude, so a linear axis buries exactly the recent months this panel exists to show. The
+   bar carries the trend on a bounded scale — share closed inside one working day. */
+/* Weekly, and labelled by the Monday commencing, because a week label has to be a date a person
+   can look up. `created` sits beside `delivered`: these rows group by the week a request came IN,
+   so a week whose cohort has not closed shows only what finished fast. */
+/* One renderer for whichever grain the window resolved to. `created` sits beside `delivered`: these
+   rows group by the period a request came IN, so a period whose cohort has not closed shows only
+   what finished fast. */
+const GRAIN_LABEL = {day: "Day", week: "Week of", month: "Month"};
+const GRAIN_NOUN = {day: "day", week: "week", month: "month"};
+
+function periodLabel(iso, grain){
+  if(grain !== "month") return iso;
+  const [y, m] = iso.split("-");
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]} ${y}`;
+}
+
+function renderTurnaroundTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>In</th><th>Done</th>`+
+             `<th>p50</th><th>p90</th><th class="barcell">Inside a day</th></tr></thead>`;
+  const best=Math.max(1,...(rows||[]).map(r=>r.within_day_pct||0));
+  const body=(rows||[]).map(r=>`<tr>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
+     <td class="num">${r.created}</td>
+     <td class="num">${r.delivered < r.created
+        ? `<span title="${r.created - r.delivered} still open, so this ${noun} is still settling">${r.delivered}*</span>`
+        : r.delivered}</td>
+     <td class="num">${fmt(r.p50_hours)}${r.p50_hours!=null?"h":""}</td>
+     <td class="num">${fmt(r.p90_hours)}${r.p90_hours!=null?"h":""}</td>
+     <td class="barcell">${r.within_day_pct==null ? '<span class="na">—</span>'
+        : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/best)}%"></span>`+
+          `<span class="mini">${r.within_day_pct}%</span>`}</td>
+   </tr>`).join("");
+  document.getElementById("turnaroundTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="6" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>Business hours from created to done, by the ${noun} the request arrived. “In” is `+
+    `requests created that ${noun} and “Done” how many have landed — a <b>*</b> marks a cohort still `+
+    `settling, whose p50 counts only the ones that finished. The bar is the share closed inside one `+
+    `working day, scaled to the best ${noun} shown.</caption>`;
+}
+
+/* How requests arrive: skill-filed against human-filed, counted in REQUESTS.
+
+   Not merge requests. One request routinely spawns several — July ran 643 MRs against 117 distinct
+   tickets — so an MR count answers a question about branches while looking like one about demand. */
+function renderOriginTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>Self-service</th>`+
+             `<th>Human-filed</th><th>All</th><th class="barcell">Self-service share</th></tr></thead>`;
+  const body=(rows||[]).map(r=>`<tr>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
+     <td class="num">${r.agent}</td>
+     <td class="num">${r.human}</td>
+     <td class="num">${r.total}</td>
+     <td class="barcell">${r.agent_share_pct==null ? '<span class="na">—</span>'
+        : `<span class="bar" style="width:${r.agent_share_pct}%"></span>`+
+          `<span class="mini">${r.agent_share_pct}%</span>`}</td>
+   </tr>`).join("");
+  const solid=(rows||[]).filter(r=>r.agent_share_pct!=null && !r.partial);
+  const arc=(solid.length>1)
+    ? `Self-service went from ${solid[0].agent_share_pct}% of requests in `+
+      `${periodLabel(solid[0].period, grain)} to ${solid[solid.length-1].agent_share_pct}% in `+
+      `${periodLabel(solid[solid.length-1].period, grain)}.`
+    : "Widen the lookback to see the trend.";
+  document.getElementById("originTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="5" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>${arc} Counted in <b>requests</b>, by the ${noun} each was created — one request counts `+
+    `once however many merge requests it took.</caption>`;
+}
+
 function niceCeil(v){
   if(v <= 0) return 1;
   const mag = Math.pow(10, Math.floor(Math.log10(v)));
@@ -457,7 +748,7 @@ function renderDailyChart(d){
       `No merged MRs in the window${(d.filter||[]).length ? " for that author filter" : ""}.</p>`;
     return;
   }
-  const W = 900, H = 280, L = 52, R = 14, T = 14, B = 34;
+  const W = 900, H = 280, L = 44, R = 12, T = 14, B = 34;
   const top = niceCeil(Math.max(...series.flatMap(s => s.points.map(p => p.biz_hours_median || 0)), 1));
   const idx = Object.fromEntries(days.map((day, i) => [day, i]));
   const x = i => L + (days.length === 1 ? (W-L-R)/2 : i * (W-L-R) / (days.length-1));
@@ -465,13 +756,14 @@ function renderDailyChart(d){
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top*f));
   const grid = ticks.map(t => `<line class="grid-line" x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}"/>`+
-    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join("");
-  const step = Math.max(1, Math.ceil(days.length/8));
+    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}h</text>`).join("");
+  const step = Math.max(1, Math.ceil(days.length/5));
   const xlabels = days.map((day,i) => i % step ? "" :
     `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
 
+  const colour = authorColours(d);
   const lines = series.map((s, si) => {
-    const col = PALETTE[si % PALETTE.length];
+    const col = colour.get(s.name) || PALETTE[si % PALETTE.length];
     const pts = s.points.filter(p => p.day in idx);
     if(!pts.length) return "";
     const path = pts.map((p,i) => `${i?"L":"M"}${x(idx[p.day]).toFixed(1)},${y(p.biz_hours_median).toFixed(1)}`).join("");
@@ -487,9 +779,8 @@ function renderDailyChart(d){
            dots + `</g>`;
   }).join("");
 
-  const legend = series.map((s, si) =>
-    `<span class="chip" data-k="${si}" aria-pressed="true" style="--c:${PALETTE[si % PALETTE.length]}">`+
-    `<span class="dot"></span>${esc(s.name)}</span>`).join("");
+  // No legend: the table above carries the same colours, and hovering one of its rows highlights
+  // the matching line, so a separate legend would only repeat it.
 
   host.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Daily merge-request turnaround by author">
@@ -498,7 +789,6 @@ function renderDailyChart(d){
        ${lines}${xlabels}
        <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
      </svg>
-     <div class="chips" id="dailyLegend">${legend}</div>
      ${d.mixed ? `<p class="filter-hint">${d.mixed} merge request${d.mixed===1?"":"s"} touched both the `+
         `production and non-production trees and ${d.mixed===1?"is":"are"} excluded from the environment `+
         `views — a change spanning both belongs to neither.</p>` : ""}
@@ -523,10 +813,11 @@ function bindDailyHover(){
   const svg = host.querySelector("svg");
   if(!svg) return;
   const groups = svg.querySelectorAll(".series");
-  const chips = host.querySelectorAll("#dailyLegend .chip");
+  const chips = [];
   const emphasise = k => {
     groups.forEach(g => g.style.opacity = (k==null || g.dataset.k===k) ? "" : "0.13");
-    chips.forEach(c => c.style.opacity = (k==null || c.dataset.k===k) ? "" : "0.3");
+    document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr =>
+      tr.style.opacity = (k==null || !tr.dataset.k || tr.dataset.k===k) ? "" : "0.35");
   };
   const base = () => {
     if(dailyLocked != null && !svg.querySelector(`.series[data-k="${dailyLocked}"]`)) dailyLocked = null;
@@ -543,34 +834,61 @@ function bindDailyHover(){
     dailyLocked = g ? (dailyLocked === g.dataset.k ? null : g.dataset.k) : null;
     base();
   });
-  chips.forEach(c => {
-    c.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(c.dataset.k); });
-    c.addEventListener("mouseleave", base);
-    c.style.cursor = "pointer";
-    c.addEventListener("click", () => {
-      dailyLocked = dailyLocked === c.dataset.k ? null : c.dataset.k;
-      base();
-    });
+  // The author table is the legend now: hovering a row isolates that author's line, clicking pins
+  // it. Rows without a series (no merged MRs in the window) carry an empty key and are inert.
+  document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr => {
+    const k = tr.dataset.k;
+    if(!k) return;
+    tr.style.cursor = "pointer";
+    tr.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(k); });
+    tr.addEventListener("mouseleave", base);
+    tr.addEventListener("click", () => { dailyLocked = dailyLocked === k ? null : k; base(); });
   });
   base();
 }
 
-async function init(){
-  const since = document.getElementById("since");
-  since.value = localStorage.getItem(SINCE_KEY) || "";
-  try{
-    await reload();
-  }catch(e){
-    showError("Failed to load: " + e.message);
-    return;
-  }
+function syncCustomVisibility(){
+  const custom = document.getElementById("preset").value === "custom";
+  document.getElementById("customRange").hidden = !custom;
+}
 
-  since.addEventListener("change", async () => {
+/* Wiring comes BEFORE the first load, and nothing here may return early.
+
+   A missing element in one render used to throw out of reload(), and init() caught it and returned
+   — so every listener after that point was never attached and the whole page went inert: lookback,
+   author filter, environment, add and hide. A broken panel has to cost that panel, not the page. */
+async function init(){
+  const preset = document.getElementById("preset");
+  const grain = document.getElementById("grain");
+  const since = document.getElementById("since");
+  const until = document.getElementById("until");
+  grain.value = localStorage.getItem(GRAIN_KEY) || "";
+  since.value = localStorage.getItem(SINCE_KEY) || "";
+  until.value = localStorage.getItem(UNTIL_KEY) || "";
+  // A stored bare date predates the presets. Carry it over as a custom range rather than dropping
+  // it, so a refresh does not silently widen the window someone was reading.
+  preset.value = localStorage.getItem(PRESET_KEY) || (since.value ? "custom" : "");
+  syncCustomVisibility();
+
+  const applyRange = async () => {
+    localStorage.setItem(PRESET_KEY, preset.value);
+    localStorage.setItem(GRAIN_KEY, grain.value);
     localStorage.setItem(SINCE_KEY, since.value);
+    localStorage.setItem(UNTIL_KEY, until.value);
+    syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
-  });
+  };
+  preset.addEventListener("change", applyRange);
+  grain.addEventListener("change", applyRange);
+  // Typing a date IS choosing a custom range. Without this, editing from/to while the select still
+  // said "Panel defaults" resolved to null and the dates were silently discarded.
+  const applyCustom = async () => { preset.value = "custom"; await applyRange(); };
+  since.addEventListener("change", applyCustom);
+  until.addEventListener("change", applyCustom);
   document.getElementById("sinceReset").addEventListener("click", async () => {
-    since.value = ""; localStorage.removeItem(SINCE_KEY);
+    preset.value = ""; grain.value = ""; since.value = ""; until.value = "";
+    [PRESET_KEY, GRAIN_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));
+    syncCustomVisibility();
     try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
   });
   // Debounced refetch: the daily medians are computed server-side, so filtering must round-trip.
@@ -615,27 +933,39 @@ async function init(){
     const name = e.target.getAttribute && e.target.getAttribute("data-hide");
     if(name) editAuthors({op: "hide", display_name: name});
   });
-  document.getElementById("hiddenChips").addEventListener("click", e => {
+  document.getElementById("hiddenNote").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-show");
     if(name) editAuthors({op: "show", display_name: name});
   });
+
+  // Last, so a failure here leaves every control above still working.
+  try{
+    await reload();
+  }catch(e){
+    showError("Failed to load: " + e.message);
+  }
 }
 init();
 
-/* ---------- collapsible sections: each <h2> toggles the elements beneath it (up to the next h2 / footer) ---------- */
+/* ---------- collapsible sections ----------
+   Each panel's <h2> toggles the rest of its own section, so the grid can nest them. The notes block
+   starts collapsed: it is reference material, and expanded it dominated the page. */
 (function(){
-  const card=document.querySelector("main.card");
-  const isStop=el=> el.tagName==="H2" || el.classList.contains("foot");
-  card.querySelectorAll(":scope > h2").forEach(h=>{
-    const body=[]; let n=h.nextElementSibling;
-    while(n && !isStop(n)){ body.push(n); n=n.nextElementSibling; }
-    h.classList.add("collapsible");
-    h.setAttribute("role","button");
-    h.setAttribute("tabindex","0");
-    h.setAttribute("aria-expanded","true");
-    const set=open=>{ h.setAttribute("aria-expanded",String(open)); body.forEach(el=>el.classList.toggle("sec-hidden",!open)); };
-    h.addEventListener("click",()=>set(h.getAttribute("aria-expanded")!=="true"));
-    h.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(h.getAttribute("aria-expanded")!=="true"); }});
+  const panels=[...document.querySelectorAll("section.panel")].map(sec=>({
+    head: sec.querySelector("h2"),
+    body: [...sec.children].filter(el=>el.tagName!=="H2"),
+    open: true,
+  }));
+  panels.forEach(({head, body, open})=>{
+    if(!head) return;
+    head.classList.add("collapsible");
+    head.setAttribute("role","button");
+    head.setAttribute("tabindex","0");
+    head.setAttribute("aria-expanded",String(open));
+    const set=o=>{ head.setAttribute("aria-expanded",String(o)); body.forEach(el=>el.classList.toggle("sec-hidden",!o)); };
+    set(open);
+    head.addEventListener("click",()=>set(head.getAttribute("aria-expanded")!=="true"));
+    head.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(head.getAttribute("aria-expanded")!=="true"); }});
   });
 })();
 </script>
