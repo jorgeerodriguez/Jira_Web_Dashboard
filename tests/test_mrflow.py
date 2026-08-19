@@ -20,7 +20,8 @@ def _mr(id, account_id, opened, merged):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
-        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="")
+        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
+        source_branch="")
 
 
 def _report(conn, roster=None, name_filter=None, environment="all"):
@@ -256,7 +257,8 @@ def _mr_in(id, account_id, project_path, opened, merged):
     return store.MergeRequestRow(
         id=id, project_path=project_path, iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
-        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="")
+        web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
+        source_branch="")
 
 
 def test_environment_filter_splits_prod_from_nonprod():

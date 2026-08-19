@@ -24,11 +24,13 @@ def _issue(key, labels, created, status="Done", issuetype="Story"):
         fetched_at=datetime(2026, 7, 28, 0, 0, 0))
 
 
-def _mr(id, key, labels, opened, merged, description=""):
+def _mr(id, key, labels, opened, merged, description="", branch=""):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"{key} do a thing", opened_at=opened, merged_at=merged, labels=labels,
-        web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description)
+        web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0),
+        events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description,
+        source_branch=branch)
 
 
 def _seed():
@@ -556,3 +558,94 @@ def test_a_monthly_row_is_partial_when_the_window_starts_mid_month():
         datetime(2026, 7, 1, 7, 0, 0))["origin"]}
     assert rows["2026-05-01"]["partial"] is True, "window opened on the 21st"
     assert rows["2026-06-01"]["partial"] is False, "a whole month inside the window"
+
+
+def test_a_branch_name_links_a_request_whose_title_omits_the_prefix():
+    """The commonest real miss: the title carries the number without "DEVOPS-".
+
+    "feat(10117): add flux-reader iam role" is a genuine reference that DEVOPS-\\d+ never matched, so
+    the request looked like it had no merge request at all — no skill label, no footer, no review
+    time. Jira's own development panel links these through the branch, and so must this.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-10117", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0))])
+    store.upsert_merge_requests(conn, [store.MergeRequestRow(
+        id=1, project_path="audacy-inc/devops/x", iid=1, author_account_id="a",
+        title="feat(10117): add flux-reader iam role", opened_at=datetime(2026, 8, 5, 16, 0, 0),
+        merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=["pe:iac-request"], web_url="u",
+        merged_by="", fetched_at=datetime(2026, 8, 6, 0, 0, 0),
+        events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="",
+        source_branch="DEVOPS-10117-flux-reader")])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1, "the branch is the only signal, and it must count"
+    assert row["human"] == 0
+
+
+def test_a_description_cross_reference_does_not_hijack_an_unrelated_request():
+    """Sources are tried strongest-first, never unioned, and this is why.
+
+    A title or branch naming a ticket means "this MR implements it". A description saying "supersedes
+    DEVOPS-9001" does not. Unioning would let prose mark an unrelated request self-service, and a
+    false positive corrupts the metric where a missed link merely leaves a request unclassified.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-9000", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0)),
+        _issue("DEVOPS-9001", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0)),
+    ])
+    store.upsert_merge_requests(conn, [_mr(
+        1, "DEVOPS-9000", ["pe:iac-request"],
+        datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
+        description="Reworks the module. Supersedes DEVOPS-9001.", branch="DEVOPS-9000-rework")])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert row["agent"] == 1, "only the request the title names is implemented by this MR"
+    assert row["human"] == 1, "the merely-mentioned request stays human-filed"
+
+
+def test_the_description_is_read_when_nothing_stronger_names_a_request():
+    """It is the weakest signal, not an unused one — worth ~2 points of coverage on its own."""
+    conn = _fresh()
+    store.upsert_issues(conn, [_issue("DEVOPS-9002", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0))])
+    store.upsert_merge_requests(conn, [_mr(
+        1, "no-key-here", ["pe:iac-request"],
+        datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
+        description="Implements DEVOPS-9002.", branch="chore/tidy")])
+    assert _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]["agent"] == 1
+
+
+def test_one_merge_request_can_implement_several_requests():
+    """A single MR titled for two tickets must carry its signals to both, not just the first."""
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-9003", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0)),
+        _issue("DEVOPS-9004", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0)),
+    ])
+    store.upsert_merge_requests(conn, [_mr(
+        1, "DEVOPS-9003 and DEVOPS-9004", ["pe:iac-request"],
+        datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0), branch="pair")])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert (row["agent"], row["human"]) == (2, 0)
+
+
+def test_a_humanised_branch_title_still_links():
+    """GitLab turns a branch into a title and mangles the key doing it.
+
+    A branch DEVOPS-9426 becomes the title "Devops 9426" — lowercased, space-separated. A strict
+    DEVOPS-\\d+ pattern misses that shape on 48 of 5,878 merged MRs, and each miss silently moves a
+    request into the human-filed column.
+    """
+    conn = _fresh()
+    store.upsert_issues(conn, [
+        _issue("DEVOPS-9426", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0)),
+        _issue("DEVOPS-9257", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0)),
+    ])
+    for mr_id, title, key in ((1, "Devops 9426", "DEVOPS-9426"),
+                              (2, "Feature/devops 9257 prod cognito userpools", "DEVOPS-9257")):
+        store.upsert_merge_requests(conn, [store.MergeRequestRow(
+            id=mr_id, project_path="audacy-inc/devops/x", iid=mr_id, author_account_id="a",
+            title=title, opened_at=datetime(2026, 8, 5, 16, 0, 0),
+            merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=["pe:iac-request"], web_url="u",
+            merged_by="", fetched_at=datetime(2026, 8, 6, 0, 0, 0),
+            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch="")])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
+    assert (row["agent"], row["human"]) == (2, 0), "both humanised titles must link"

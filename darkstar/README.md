@@ -449,6 +449,38 @@ Agent success counts terminal requests that are not abandoned. Note DEVOPS spell
 **`Will Not Do`**, not `Won't Do`; `_ABANDONED` holds both spellings plus Cancelled/Rejected, since
 matching only the latter scored every abandoned request as a success and pinned the rate at 100%.
 
+## Linking a request to its code
+
+A request is tied to merge requests so the panels can read the MR's `pe:*` label, its agent footer and
+its review timing. Darkstar used to look for the key in the **MR title only**, which missed a lot.
+Jira's own development panel links through branch names and commit messages too, and measuring against
+5,878 merged MRs showed how much that costs — 284 requests created May–Jun 2026:
+
+| linking signal | requests classifiable by environment | unlinked |
+|---|---|---|
+| MR title only | 25.7% | 181 |
+| + branch name | 29.6% | 155 |
+| + branch + MR description | **31.7%** | 146 |
+| + commit messages | ~32% | ~143 |
+
+Commit messages were sampled rather than assumed: of 60 PE-repo MRs with no key in title, branch or
+description, **one** had it in a commit. Not worth an API call per merge request, so they are not read.
+
+**The sources are tried strongest-first, never unioned.** A title or branch naming a ticket means
+"this MR implements it"; a description saying `Supersedes DEVOPS-9001` does not. Unioning lets prose
+mark an unrelated request self-service, and a false positive corrupts a metric where a missed link
+merely leaves a request unclassified. It costs roughly nine requests in 284 — the safe direction.
+
+The key pattern is case-insensitive with a loose separator, because GitLab humanises a branch into an
+MR title and mangles the key doing it: `Devops 9426`, `Feature/devops 9257 prod cognito userpools`,
+`devops_10073`. A strict `DEVOPS-\d+` misses 48 of those 5,878 MRs, and on the existing store the
+looser pattern alone finds 34 more tickets from titles already crawled. It does **not** rescue a bare
+number like `feat(10117)` — nothing can, short of matching every integer — which is precisely why the
+branch has to be read as well.
+
+`source_branch` is nullable and joins the ALTER-added set, so `_needs_backfill` forces one full
+re-crawl to fill it on the 2,594 existing rows rather than leaving history permanently unlinked.
+
 ## Detecting a self-service request
 
 Three independent signals, unioned — any one is enough, because each alone misses a slice:

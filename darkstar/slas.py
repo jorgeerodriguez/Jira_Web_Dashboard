@@ -94,7 +94,34 @@ _DONE: str = "Done"
 _ABANDONED: frozenset[str] = frozenset(
     {"Will Not Do", "Won't Do", "Wont Do", "Cancelled", "Canceled", "Rejected"}
 )
-_KEY_RE = re.compile(r"DEVOPS-\d+")
+# Case-insensitive with a loose separator, because GitLab humanises a branch into an MR title and
+# the key comes back mangled: "Devops 9426", "Feature/devops 9257 prod cognito userpools",
+# "devops_10073". A strict DEVOPS-\d+ misses 48 of 5,878 merged MRs on those variants alone. It does
+# NOT rescue a bare number like "feat(10117)" -- nothing can, without matching every integer -- which
+# is exactly why the branch name has to be read as well.
+_KEY_RE = re.compile(r"DEVOPS[-_ ]?(\d+)", re.IGNORECASE)
+
+
+def _mr_issue_keys(title: str, source_branch: str, description: str) -> list[str]:
+    """Which DEVOPS issues a merge request implements, strongest evidence only.
+
+    Jira's own development panel links a ticket to code through the branch name and commit messages
+    as well as the title, and reading the title alone missed a lot: measured over 284 requests and
+    5,878 merged MRs, title-only reached 25.7% of requests, adding the branch 29.6%, adding the
+    description 31.7%. Commit messages were sampled separately and add ~nothing -- 1 of 60 MRs.
+
+    The sources are tried in order rather than unioned, and that is deliberate. A title or branch
+    naming a ticket means "this MR implements it"; a description mentioning one might only mean
+    "supersedes DEVOPS-1234" or "see DEVOPS-1234". Unioning lets a cross-reference in prose mark an
+    unrelated ticket as self-service, and a false positive corrupts a metric where a missed link
+    merely leaves a request unclassified. It costs about nine requests in 284 -- the safe direction.
+    """
+    for text in (title, source_branch, description):
+        found = _KEY_RE.findall(text or "")
+        if found:
+            # dict.fromkeys keeps first-seen order, so the primary reference stays first
+            return list(dict.fromkeys(f"DEVOPS-{n}" for n in found))
+    return []
 # Three months, not six: delivery turnaround has improved roughly 100x since the workflows began
 # (p50 by month created: Apr 406.7h, May 114.0h, Jun 18.0h, Jul 13.9h, Aug 3.0h), so a six-month
 # window calibrates the targets against a team that no longer exists. Three keeps ~220 delivered
@@ -246,8 +273,9 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     ).fetchall():
         transitions_by_key.setdefault(key, []).append((to_status, changed_at))
 
-    # Per-issue-key MR info: bucket (from the MR's pe:<skill> label) + review turnaround. The MR
-    # title references the DEVOPS-<n> key. First MR with a recognized bucket / valid times wins.
+    # Per-issue-key MR info: bucket (from the MR's pe:<skill> label) + review turnaround, keyed by
+    # every issue the MR implements (see _mr_issue_keys). First MR with a recognized bucket / valid
+    # times wins.
     events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
     for mr_id, kind, happened_at in connection.execute(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
@@ -255,31 +283,32 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
     mr_by_key: dict[str, dict] = {}
-    for mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by in connection.execute(
-        "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by "
-        "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
+    for (mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by,
+         source_branch) in connection.execute(
+        "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by, "
+        "source_branch FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
-        match = _KEY_RE.search(title or "")
-        if not match:
-            continue
-        entry = mr_by_key.setdefault(
-            match.group(0),
-            {"bucket": None, "review_hours": None, "skill_label": False, "footer": False,
-             "first_review_hours": None})
-        # Bucketing may still read the footer's "via /<skill>" — it names the skill reliably. That is
-        # a separate question from whether the footer *qualifies* the issue as self-service.
-        if entry["bucket"] is None:
-            entry["bucket"] = _mr_bucket(mr_labels or []) or _footer_bucket(description)
-        entry["skill_label"] = entry["skill_label"] or bool(_mr_bucket(mr_labels or []))
-        entry["footer"] = entry["footer"] or has_agent_footer(description)
-        if entry["review_hours"] is None and opened_at and merged_at:
-            events = events_by_mr.get(mr_id, [])
-            entry["review_hours"] = ready_hours(opened_at, merged_at, events)
-            author_is_merger = (not merged_by) or merged_by == author_account_id
-            review_at = first_review_at(events, merged_at, author_is_merger)
-            if review_at is not None:
-                entry["first_review_hours"] = ready_hours(opened_at, min(review_at, merged_at), events)
+        for key in _mr_issue_keys(title, source_branch, description):
+            entry = mr_by_key.setdefault(
+                key,
+                {"bucket": None, "review_hours": None, "skill_label": False, "footer": False,
+                 "first_review_hours": None})
+            # Bucketing may still read the footer's "via /<skill>" — it names the skill reliably.
+            # That is a separate question from whether the footer *qualifies* the issue as
+            # self-service.
+            if entry["bucket"] is None:
+                entry["bucket"] = _mr_bucket(mr_labels or []) or _footer_bucket(description)
+            entry["skill_label"] = entry["skill_label"] or bool(_mr_bucket(mr_labels or []))
+            entry["footer"] = entry["footer"] or has_agent_footer(description)
+            if entry["review_hours"] is None and opened_at and merged_at:
+                events = events_by_mr.get(mr_id, [])
+                entry["review_hours"] = ready_hours(opened_at, merged_at, events)
+                author_is_merger = (not merged_by) or merged_by == author_account_id
+                review_at = first_review_at(events, merged_at, author_is_merger)
+                if review_at is not None:
+                    entry["first_review_hours"] = ready_hours(
+                        opened_at, min(review_at, merged_at), events)
 
     # bucket key -> accumulator
     buckets: dict[tuple[str, str], dict] = {}

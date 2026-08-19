@@ -40,7 +40,7 @@ def test_initialize_schema_migrates_existing_merge_requests_table():
         id=2, project_path="p", iid=2, author_account_id="a", title="DEVOPS-9 x",
         opened_at=datetime(2026, 7, 20, 9, 0, 0), merged_at=datetime(2026, 7, 21, 9, 0, 0),
         labels=["pe:iac-request"], web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0),
-        description="")])
+        description="", source_branch="")])
     assert conn.execute("SELECT labels FROM merge_requests WHERE id = 2").fetchone()[0] == ["pe:iac-request"]
 
 
@@ -53,7 +53,8 @@ def test_a_fresh_store_has_the_same_nullability_as_a_migrated_one():
     could not represent at all — so a test could not reproduce production state, and any handling of
     the unread case was untestable. Nothing enforces the pairing but this test.
     """
-    migrated = ["opened_at", "labels", "description", "events_fetched_at", "merged_by"]
+    migrated = ["opened_at", "labels", "description", "events_fetched_at", "merged_by",
+                "source_branch"]
 
     fresh = duckdb.connect(":memory:")
     store.initialize_schema(fresh)
