@@ -172,14 +172,14 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     iid               BIGINT NOT NULL,
     author_account_id VARCHAR NOT NULL,
     title             VARCHAR NOT NULL,
-    opened_at         TIMESTAMP NOT NULL,
+    opened_at         TIMESTAMP,
     merged_at         TIMESTAMP NOT NULL,
-    labels            VARCHAR[] NOT NULL,
+    labels            VARCHAR[],
     web_url           VARCHAR NOT NULL,
-    merged_by         VARCHAR NOT NULL,
+    merged_by         VARCHAR,
     fetched_at        TIMESTAMP NOT NULL,
-    events_fetched_at TIMESTAMP NOT NULL,
-    description       VARCHAR NOT NULL
+    events_fetched_at TIMESTAMP,
+    description       VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS mr_events (

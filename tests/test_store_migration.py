@@ -42,3 +42,40 @@ def test_initialize_schema_migrates_existing_merge_requests_table():
         labels=["pe:iac-request"], web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0),
         description="")])
     assert conn.execute("SELECT labels FROM merge_requests WHERE id = 2").fetchone()[0] == ["pe:iac-request"]
+
+
+def test_a_fresh_store_has_the_same_nullability_as_a_migrated_one():
+    """A fresh CREATE and an ALTER-migrated store must agree, or code is written against two schemas.
+
+    The ALTER-added merge_request columns are deliberately nullable: NULL means "predates this
+    column, the next crawl backfills it", which is exactly what `_needs_backfill` selects on. While
+    CREATE declared them NOT NULL, the deployed store held 117 NULL descriptions that a fresh store
+    could not represent at all — so a test could not reproduce production state, and any handling of
+    the unread case was untestable. Nothing enforces the pairing but this test.
+    """
+    migrated = ["opened_at", "labels", "description", "events_fetched_at", "merged_by"]
+
+    fresh = duckdb.connect(":memory:")
+    store.initialize_schema(fresh)
+    nullable = {row[0]: row[1] for row in fresh.execute(
+        "SELECT column_name, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'merge_requests'").fetchall()}
+    for column in migrated:
+        assert nullable[column] == "YES", f"{column} must stay nullable to mark 'not yet backfilled'"
+
+    # merged_at and the identity columns are supplied by every insert and must stay NOT NULL, or a
+    # half-written row becomes indistinguishable from one still awaiting backfill.
+    for column in ("id", "project_path", "iid", "title", "merged_at", "fetched_at"):
+        assert nullable[column] == "NO", f"{column} must stay NOT NULL"
+
+
+def test_an_unread_description_is_representable_so_backfill_detection_can_be_tested():
+    """The state the deployed store is actually in must be constructible in a test."""
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    conn.execute(
+        "INSERT INTO merge_requests (id, project_path, iid, author_account_id, title, merged_at, "
+        "web_url, fetched_at) VALUES (1, 'p', 1, 'a', 'DEVOPS-1 x', '2026-08-05 17:00:00', 'u', "
+        "'2026-08-06 00:00:00')")
+    assert conn.execute(
+        "SELECT count(*) FROM merge_requests WHERE description IS NULL").fetchone()[0] == 1

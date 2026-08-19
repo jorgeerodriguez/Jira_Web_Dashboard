@@ -36,26 +36,36 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
 
 - **Impact cards** — share of all delivered PE work that came through a skill (with the share whose
   code was AI-written beside it), requests this month vs last, self-service delivery speed against
-  the rest of PE delivery, and time to first review.
-- **MR turnaround by author** — ready→merged per author, slowest first, filterable by author and
-  by environment.
-- **Delivery turnaround by month** — self-service requests grouped by creation month, **against the
-  same month's non-self-service delivery**. A self-service figure alone says nothing about whether
-  the skills help; the rest of PE's delivered work that month is the only fair baseline, measured on
-  the same clock under the same population rules. `faster_by` is `None` whenever either side is
-  empty, so a month with one self-service request cannot manufacture a speedup, and a month with no
-  self-service work still appears rather than being silently omitted. A single
+  the rest of PE delivery, and time to first review. That speed card carries the same significance
+  caveat as the dropped monthly column — see **Delivery turnaround by month** below.
+- **Delivery turnaround by month** — self-service requests grouped by creation month. A single
   blended figure over the window libels current performance while the team is improving fast: the
   p50 has run 406.7h (Apr), 99.2h (May), 13.8h (Jun), 10.0h (Jul), 2.9h (Aug). Reported as a table
   with a bar for the share closed inside one working day, because the p50 spans two orders of
   magnitude and a linear axis would bury exactly the recent months the panel exists to show.
+
+  There is **no rest-of-PE comparison column**, and that is a measured decision rather than an
+  omission. Head to head on live Jira for June, with abandoned statuses excluded from both arms,
+  self-service ran 15.9h p50 against 37.9h but 174.8h p90 against 144.0h — better at the median,
+  worse in the tail, Mann-Whitney z=+1.44 at n=26, which is not significant. A monthly multiple
+  would read as a finding the sample cannot carry. What the work does demonstrate is capacity, which
+  the next panel reports.
+- **Agent share of delivery** — every MR merged that month split by whether its description carries
+  the Claude footer, including MRs that name no Jira issue, because the claim is about PE's whole
+  output rather than the ticketed subset. This is the panel that carries the self-service argument:
+  agent-written and hand-written MRs merge at the *same* speed (p50 0.3h against 0.1h across 424 and
+  1046 MRs, the same engineers in both groups) because merging is already minutes for everyone, so a
+  rising share at flat headcount is throughput bought rather than latency traded. Ran 3% (Mar), 5%
+  (Apr), 21% (May), 16% (Jun), 33% (Jul), 44% (Aug, part-month). The month in progress is flagged
+  `partial`, and a trailing `+n?` counts MRs whose description the crawl has not read yet —
+  authorship unknown, held out of the share instead of being scored as hand-written.
 - **MR turnaround** — one panel, because the table and the daily chart are the same population under
   the same filters. Ready→merged per author, slowest first, then the same MRs cut by the day they
   landed as one coloured line per author. The table **is** the chart's legend: colours are assigned
   per author from the series order and shared by both, and hovering a table row isolates that
   author's line (click to pin). There is no separate legend, because it would only repeat the table.
 
-The page is a two-column grid of bordered panels; the card row and the daily chart span both
+The page is a two-column grid of bordered panels; the card row and MR turnaround span both
 columns, collapsing to one column below 980px. Each panel's heading collapses its own section, and
 each carries **one** collapsed "About this panel" explainer rather than standing prose — the page
 was mostly text otherwise. Dynamic status stays visible: a crawl still owed, rows that cannot be
@@ -277,6 +287,20 @@ simply miss.
 last month empty *by construction* — and the card rendered that as "up from 0", in green, which
 reads as spectacular growth. It is a fact about the lookback, not the team. The card now says the
 comparison is unavailable instead.
+
+The same rule governs two other places, because the failure mode is always the same — an absence
+rendered as a measurement:
+
+- **Unread MR descriptions.** `description IS NULL` means the backfill has not read that MR yet, not
+  that it lacks an agent footer. Counting those as hand-written would understate agent share by an
+  amount that grows with crawl lag rather than with anything real, so they are counted into
+  `unmeasured`, held out of the share denominator, and shown as a trailing `+n?`.
+- **Schema nullability.** The ALTER-added `merge_requests` columns (`opened_at`, `labels`,
+  `description`, `events_fetched_at`, `merged_by`) are nullable *on purpose*: NULL is the marker
+  `_needs_backfill` selects on. `CREATE TABLE` had them `NOT NULL`, so a fresh store and a migrated
+  one had different schemas — the deployed store held 117 NULL descriptions that a fresh store could
+  not represent, which made the state untestable. The two paths are now aligned and
+  `test_store_migration.py` pins them together, since nothing else enforces it.
 
 ## Population
 

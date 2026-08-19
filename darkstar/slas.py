@@ -232,11 +232,21 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         events_by_mr.setdefault(mr_id, []).append((kind, happened_at))
 
     mr_by_key: dict[str, dict] = {}
+    capacity_by_month: dict[tuple[int, int], dict[str, int]] = {}
     for mr_id, title, opened_at, merged_at, mr_labels, description, author_account_id, merged_by in connection.execute(
         "SELECT id, title, opened_at, merged_at, labels, description, author_account_id, merged_by "
         "FROM merge_requests WHERE merged_at >= ? ORDER BY id",
         [since],
     ).fetchall():
+        slot = capacity_by_month.setdefault(business_month(merged_at),
+                                            {"agent": 0, "hand": 0, "unknown": 0})
+        # A NULL description means the backfill has not read this MR yet, which is not the same as
+        # having no footer. Counting it as hand-written would credit the agent with less than it
+        # wrote, so it sits out of the ratio and is reported instead.
+        if description is None:
+            slot["unknown"] += 1
+        else:
+            slot["agent" if has_agent_footer(description) else "hand"] += 1
         match = _KEY_RE.search(title or "")
         if not match:
             continue
@@ -273,7 +283,6 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     first_review_waits: list[float] = []
     self_service_reviewed = 0
     turnaround_by_month: dict[tuple[int, int], list[float]] = {}
-    other_turnaround_by_month: dict[tuple[int, int], list[float]] = {}
     created_by_month: dict[tuple[int, int], int] = {}
 
     for key, status, status_category, created, labels in issues:
@@ -292,8 +301,6 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             if is_self_service:
                 delivered_self_service += 1
                 turnaround_by_month.setdefault(business_month(created), []).append(hours)
-            else:
-                other_turnaround_by_month.setdefault(business_month(created), []).append(hours)
             if is_ai_generated:
                 delivered_ai_generated += 1
         if is_self_service and mr is not None and mr["first_review_hours"] is not None:
@@ -397,28 +404,45 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # libels current performance when the team is improving fast: on the pilot data the p50 ran
     # 114.0h (May), 6.3h (Jun), 7.5h (Jul), 2.7h (Aug). The share within a working day is carried
     # alongside because the p50 range is wide enough that a linear axis buries the recent months.
-    # Each month carries the non-self-service delivery median beside it. A self-service figure on
-    # its own says nothing about whether the skills are helping; the same month's ordinary PE work is
-    # the only fair baseline, measured on the same clock over the same population rules.
+    # No rest-of-PE column. Measured head to head on live Jira for June, with abandoned statuses
+    # excluded from both arms, self-service ran 15.9h p50 against 37.9h and 174.8h p90 against
+    # 144.0h -- better at the median, worse in the tail, Mann-Whitney z=+1.44, not significant at
+    # n=26. A ratio printed monthly would read as a finding when the data does not carry one. The
+    # capacity series below is what the self-service work actually demonstrates.
     monthly = []
-    for month in sorted(set(turnaround_by_month) | set(other_turnaround_by_month)):
-        hours = turnaround_by_month.get(month, [])
-        other = other_turnaround_by_month.get(month, [])
-        own_p50 = round(statistics.median(hours), 1) if hours else None
-        other_p50 = round(statistics.median(other), 1) if other else None
+    for month in sorted(turnaround_by_month):
+        hours = turnaround_by_month[month]
         monthly.append({
             "month": f"{month[0]:04d}-{month[1]:02d}",
             "delivered": len(hours),
-            "p50_hours": own_p50,
+            "p50_hours": round(statistics.median(hours), 1) if hours else None,
             "p90_hours": pctile(hours, 0.9),
             "within_day_pct": (round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100)
                                if hours else None),
-            "other_delivered": len(other),
-            "other_p50_hours": other_p50,
-            # How many times faster self-service was that month. None when either side is empty, so
-            # a month with one self-service request cannot manufacture a ratio out of nothing.
-            "faster_by": (round(other_p50 / own_p50, 1)
-                          if own_p50 and other_p50 and own_p50 > 0 else None),
+        })
+
+    # Capacity: what share of everything PE merges the agent now writes. Counted over every merged
+    # MR in the window, including those naming no Jira issue, because the question is how much of
+    # total output is agent-authored -- not how much of the ticketed subset is. Per-MR merge speed is
+    # flat between the two (p50 0.3h agent vs 0.1h hand over 424/1046 MRs, the same engineers in
+    # both), so a rising share at flat headcount is throughput bought, not latency traded.
+    capacity = []
+    current_month = business_month(now)
+    for month in sorted(capacity_by_month):
+        slot = capacity_by_month[month]
+        total = slot["agent"] + slot["hand"]
+        capacity.append({
+            "month": f"{month[0]:04d}-{month[1]:02d}",
+            "agent": slot["agent"],
+            "hand": slot["hand"],
+            "total": total,
+            # Merged in the month but not yet backfilled, so its authorship is unknown. Outside
+            # `total` on purpose: the share is of MRs whose authorship was actually determined.
+            "unmeasured": slot["unknown"],
+            "agent_share_pct": round(slot["agent"] / total * 100) if total else None,
+            # The month in progress is a part-month; labelling it stops a low count reading as a
+            # collapse in output and a high share reading as a settled figure.
+            "partial": month == current_month,
         })
 
     agent_success = {
@@ -432,6 +456,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         "buckets": out_buckets,
         "headline": headline,
         "monthly": monthly,
+        "capacity": capacity,
         "agent_success": agent_success,
         "types": list(_BUCKETS) + [_OTHER],
         "targets": SLA_TARGETS_HOURS,

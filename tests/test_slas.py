@@ -364,46 +364,105 @@ def test_monthly_trend_is_empty_when_nothing_delivered():
     assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["monthly"] == []
 
 
-def test_monthly_trend_carries_the_non_self_service_baseline():
-    """A self-service figure alone says nothing about whether the skills help.
+def test_monthly_trend_no_longer_reports_a_rest_of_pe_ratio():
+    """The comparison was removed because the data does not support it.
 
-    The same month's ordinary PE work is the only fair baseline: same clock, same population rules.
+    Head to head on live June data, abandoned excluded from both arms, self-service ran 15.9h p50
+    against 37.9h but 174.8h p90 against 144.0h -- better at the median, worse in the tail, and
+    Mann-Whitney z=+1.44 at n=26, which is not significant. Printing a monthly multiple would read
+    as a finding the sample cannot carry, so these keys must stay gone.
     """
     conn = _fresh()
-    # self-service: 2 business hours
     store.upsert_issues(conn, [_issue("DEVOPS-80", ["DevOps", "pe-iac-request"],
                                       datetime(2026, 8, 5, 16, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-80"], [store.TransitionRow(
         key="DEVOPS-80", to_status="Done", changed_at=datetime(2026, 8, 5, 18, 0, 0), seq=0)])
-    # ordinary PE work the same month: 6 business hours
     store.upsert_issues(conn, [_issue("DEVOPS-81", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0))])
     store.replace_transitions(conn, ["DEVOPS-81"], [store.TransitionRow(
         key="DEVOPS-81", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
 
     row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
     assert row["delivered"] == 1 and row["p50_hours"] == 2.0
-    assert row["other_delivered"] == 1 and row["other_p50_hours"] == 6.0
-    assert row["faster_by"] == 3.0
+    for gone in ("other_delivered", "other_p50_hours", "faster_by"):
+        assert gone not in row
 
 
-def test_no_ratio_is_manufactured_when_one_side_is_empty():
-    """A month with self-service work but no comparison group must not report a speedup."""
+def test_capacity_counts_merge_requests_that_name_no_ticket():
+    """The capacity claim is about PE's whole output, not the ticketed slice of it.
+
+    Most merged MRs carry no DEVOPS key in the title. Counting only linked ones would measure how
+    much of the *ticketed* work is agent-written and report it as the share of everything, which is
+    the number the panel is built to state.
+    """
     conn = _fresh()
-    store.upsert_issues(conn, [_issue("DEVOPS-82", ["DevOps", "pe-iac-request"],
-                                      datetime(2026, 8, 5, 16, 0, 0))])
-    store.replace_transitions(conn, ["DEVOPS-82"], [store.TransitionRow(
-        key="DEVOPS-82", to_status="Done", changed_at=datetime(2026, 8, 5, 18, 0, 0), seq=0)])
-    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
-    assert row["other_delivered"] == 0 and row["other_p50_hours"] is None
-    assert row["faster_by"] is None
+    store.upsert_merge_requests(conn, [
+        _mr(90, "DEVOPS-90", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
+            description="Generated with Claude Code"),
+        # no key in the title, so the turnaround half of the report skips it entirely
+        store.MergeRequestRow(
+            id=91, project_path="audacy-inc/devops/x", iid=91, author_account_id="a",
+            title="bump the chart version", opened_at=datetime(2026, 8, 6, 16, 0, 0),
+            merged_at=datetime(2026, 8, 6, 17, 0, 0), labels=[], web_url="u", merged_by="",
+            fetched_at=datetime(2026, 8, 7, 0, 0, 0), events_fetched_at=datetime(2026, 8, 7, 0, 0, 0),
+            description="Generated with Claude Code"),
+        store.MergeRequestRow(
+            id=92, project_path="audacy-inc/devops/x", iid=92, author_account_id="a",
+            title="hand-written tweak", opened_at=datetime(2026, 8, 6, 16, 0, 0),
+            merged_at=datetime(2026, 8, 6, 18, 0, 0), labels=[], web_url="u", merged_by="",
+            fetched_at=datetime(2026, 8, 7, 0, 0, 0), events_fetched_at=datetime(2026, 8, 7, 0, 0, 0),
+            description="just a bump"),
+    ])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"][0]
+    assert row["agent"] == 2, "the untitled agent MR must still count toward capacity"
+    assert row["hand"] == 1
+    assert row["total"] == 3 and row["agent_share_pct"] == 67
 
 
-def test_a_month_with_only_non_self_service_work_still_appears():
-    """Otherwise the trend silently omits months where the skills were not used at all."""
+def test_capacity_marks_the_month_in_progress_as_partial():
+    """An unlabelled part-month reads as a collapse in output, or as a settled share.
+
+    August through the 18th holds roughly two thirds of a month's merges. Without the flag the
+    panel presents that shortfall as a real decline.
+    """
     conn = _fresh()
-    store.upsert_issues(conn, [_issue("DEVOPS-83", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0))])
-    store.replace_transitions(conn, ["DEVOPS-83"], [store.TransitionRow(
-        key="DEVOPS-83", to_status="Done", changed_at=datetime(2026, 8, 6, 22, 0, 0), seq=0)])
-    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["monthly"][0]
-    assert row["delivered"] == 0 and row["p50_hours"] is None
-    assert row["other_delivered"] == 1 and row["faster_by"] is None
+    store.upsert_merge_requests(conn, [
+        _mr(93, "DEVOPS-93", [], datetime(2026, 7, 6, 16, 0, 0), datetime(2026, 7, 6, 17, 0, 0),
+            description="Generated with Claude Code"),
+        _mr(94, "DEVOPS-94", [], datetime(2026, 8, 6, 16, 0, 0), datetime(2026, 8, 6, 17, 0, 0),
+            description="Generated with Claude Code"),
+    ])
+    rows = {r["month"]: r for r in _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"]}
+    assert rows["2026-07"]["partial"] is False
+    assert rows["2026-08"]["partial"] is True
+
+
+def test_capacity_is_empty_rather_than_a_row_of_zeroes_with_no_merges():
+    """An empty window must yield no rows at all.
+
+    A synthesised 0-of-0 row would render as a month in which the agent wrote none of the work,
+    which is a different claim from having nothing crawled yet.
+    """
+    assert _report(_fresh(), datetime(2026, 8, 18, 12, 0, 0))["capacity"] == []
+
+
+def test_capacity_does_not_score_an_unread_description_as_hand_written():
+    """A NULL description means the backfill has not reached that MR, not that it lacks a footer.
+
+    Scoring it as hand-written silently understates agent share, and the understatement grows with
+    crawl lag rather than with anything real. It belongs outside the ratio, reported separately.
+    """
+    conn = _fresh()
+    store.upsert_merge_requests(conn, [
+        _mr(95, "DEVOPS-95", [], datetime(2026, 8, 5, 16, 0, 0), datetime(2026, 8, 5, 17, 0, 0),
+            description="Generated with Claude Code"),
+        store.MergeRequestRow(
+            id=96, project_path="audacy-inc/devops/x", iid=96, author_account_id="a",
+            title="DEVOPS-96 not yet backfilled", opened_at=datetime(2026, 8, 6, 16, 0, 0),
+            merged_at=datetime(2026, 8, 6, 17, 0, 0), labels=[], web_url="u", merged_by="",
+            fetched_at=datetime(2026, 8, 7, 0, 0, 0),
+            events_fetched_at=datetime(2026, 8, 7, 0, 0, 0), description=None),
+    ])
+    row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["capacity"][0]
+    assert row["hand"] == 0, "an unread description must not be counted as hand-written"
+    assert row["unmeasured"] == 1
+    assert row["total"] == 1 and row["agent_share_pct"] == 100
