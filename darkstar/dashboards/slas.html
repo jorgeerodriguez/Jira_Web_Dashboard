@@ -171,6 +171,19 @@
   .note summary::before{content:"\24D8"; margin-right:6px}
   .note summary:hover{color:var(--ink2)}
   .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
+  /* No link may fall back to the browser default. Measured against this panel, #0000EE is 1.72:1
+     and the visited #551A8B is 1.47:1, where AA body text needs 4.5:1 — effectively unreadable. The
+     accent is 5.94:1 on --panel and 6.35:1 on --well. The nav sits outside main.card and keeps its
+     own quieter treatment, so this cannot reach it. */
+  .card a{color:var(--accent)}
+  .card a:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+  /* Merge-request refs are identifiers, so they read better in mono, and an underline that is not
+     full-strength keeps a column of them from turning into a wall of rules. */
+  tbody a{font-family:var(--mono); text-decoration:none; padding-bottom:1px;
+        border-bottom:1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+        transition:color .12s, background .12s, border-color .12s}
+  tbody a:hover{color:#fff; border-bottom-color:#fff; background:var(--accent-soft)}
+  caption a,.note a,.foot a{text-decoration:underline; text-underline-offset:2px}
   .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
         text-decoration:underline dotted; cursor:pointer}
   .linkish:hover{color:var(--ink)}

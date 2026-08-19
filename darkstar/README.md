@@ -113,6 +113,21 @@ as `5d`, a working week, and rendering it as `1d 21h` would be a different kind 
 figure stays in each cell's `title`, so nothing is lost. The chart's y axis stays in plain hours: it
 is a linear hour scale, and mixed units on the ticks would make even spacing look arbitrary.
 
+## Links carry a measured contrast
+
+The drill-down's merge-request refs shipped as bare `<a>` tags, and the page defines no generic link
+rule, so they fell back to the browser default. Measured against the panel that is **1.72:1**, and
+**1.47:1** once visited, where AA body text needs 4.5:1 — unreadable, and reported as such.
+
+`main.card a` now sets the accent (5.94:1 on `--panel`, 6.35:1 on `--well`) so no future link in the
+card can fall back. The nav sits outside `main.card` and keeps its own quieter treatment, so the rule
+cannot reach it. Table links additionally render in mono, since a merge-request ref is an identifier,
+with a part-strength underline that would otherwise turn a column of them into a wall of rules.
+
+The other dashboards were checked and do not have this problem: `intake`'s `.key` is `#7db0ff` at
+7.99:1 and `delivery-forecast`'s `.k`/`.skey` are `--muted` at 4.78:1. Both pass, though the forecast
+links are dim enough to be worth revisiting.
+
 ## Inspecting an outlier
 
 **Slowest merge requests** under the MR turnaround chart is the drill-down behind the aggregates —
