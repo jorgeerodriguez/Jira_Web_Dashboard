@@ -305,8 +305,8 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     grain = grain or choose_grain(since, until, now)
     delivery = ", ".join(["?"] * len(DELIVERY_TYPES))
     issues = connection.execute(
-        f"SELECT key, status, status_category, created, labels, mr_field_url, dev_pr_count, "
-        f"dev_commit_count FROM issues "
+        f"SELECT key, status, status_category, created, labels, mr_field_url, dev_has_pr, "
+        f"dev_has_commits FROM issues "
         f"WHERE created >= ? AND (? IS NULL OR created < ?) AND issuetype IN ({delivery})",
         [since, until, until, *DELIVERY_TYPES],
     ).fetchall()
@@ -387,16 +387,24 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     linked_by_source: dict[str, int] = {}
     code_not_linked = 0
 
-    for (key, status, status_category, created, labels, mr_field_url, dev_pr_count,
-         dev_commit_count) in issues:
+    for (key, status, status_category, created, labels, mr_field_url, dev_has_pr,
+         dev_has_commits) in issues:
         mr, link_source = _resolve_link(key, mr_field_url, mr_signals, refs_by_branch, refs_by_title)
         if link_source is not None:
             linked_by_source[link_source] = linked_by_source.get(link_source, 0) + 1
-        # Jira's Development field says code exists but nothing here could name the merge request.
-        # Counted, because "we could not attach it" and "there is none" are different facts and only
-        # one of them is about the team. The PR count alone under-reports -- on DEVOPS-10117 the
-        # summary blob listed four repositories and no pull requests at all -- so either signal counts.
-        elif (dev_pr_count or 0) > 0 or (dev_commit_count or 0) > 0:
+        # Jira reports code and none of our routes could name a merge request WE HAVE CRAWLED. Three
+        # causes, and they are not equally common: the merge request usually exists and is simply not
+        # in this crawl (darkstar ingests only merged MRs from tracked authors and scopes, so an open
+        # one, an outside author or an un-crawled project is invisible); Jira may have linked it via a
+        # commit message, which is not read here; and least often the work genuinely has no merge
+        # request -- commits pushed to a branch and no MR opened, which was 6 of the 221 requests
+        # created in August. Counted rather than folded into "no code", because a hole in our own
+        # linkage is not a fact about the team.
+        #
+        # Either flag counts. They come from JQL rather than the Development summary field, which is a
+        # cache that omitted DEVOPS-10117's merged pull request and disagreed with its own panel on
+        # build count. None means never queried and is not evidence; False means Jira said no.
+        elif dev_has_pr or dev_has_commits:
             code_not_linked += 1
         # Agent-created if ANY signal fires: the Jira watermark, the linked MR's pe:* label, or the
         # linked MR's "Generated with Claude Code" footer. Any one alone misses a slice of the work.

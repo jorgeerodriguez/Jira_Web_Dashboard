@@ -14,7 +14,7 @@ def _report(conn, now, grain="week"):
 
 
 def _issue(key, labels, created, status="Done", issuetype="Story", mr_url=None,
-           dev_prs=None, dev_commits=None):
+           dev_pr=None, dev_commits=None):
     return store.IssueRow(
         key=key, id=int(key.split("-")[1]), project="DEVOPS", issuetype=issuetype,
         status=status, status_category=("done" if status in ("Done", "Will Not Do") else "indeterminate"),
@@ -22,7 +22,7 @@ def _issue(key, labels, created, status="Done", issuetype="Story", mr_url=None,
         reporter=None, business_lead=None, parent_key=None,
         created=created, updated=created, resolutiondate=None,
         planned_start=None, target_end=None, labels=labels,
-        mr_field_url=mr_url, dev_pr_count=dev_prs, dev_commit_count=dev_commits,
+        mr_field_url=mr_url, dev_has_pr=dev_pr, dev_has_commits=dev_commits,
         fetched_at=datetime(2026, 7, 28, 0, 0, 0))
 
 
@@ -719,14 +719,14 @@ def test_jira_reporting_code_with_no_link_found_is_counted_as_a_gap():
     """
     conn = _fresh()
     store.upsert_issues(conn, [
-        _issue("DEVOPS-503", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0), dev_prs=2, dev_commits=3),
-        # the shape seen on DEVOPS-10117: repositories reported, pull requests absent from the blob
-        _issue("DEVOPS-504", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0), dev_prs=0, dev_commits=4),
+        _issue("DEVOPS-503", ["DevOps"], datetime(2026, 8, 5, 16, 0, 0), dev_pr=True, dev_commits=True),
+        # commits but no pull request: 6 of the 221 requests created in August looked like this
+        _issue("DEVOPS-504", ["DevOps"], datetime(2026, 8, 5, 17, 0, 0), dev_pr=False, dev_commits=True),
         # Jira positively reports nothing linked
-        _issue("DEVOPS-505", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0), dev_prs=0, dev_commits=0),
+        _issue("DEVOPS-505", ["DevOps"], datetime(2026, 8, 6, 16, 0, 0), dev_pr=False, dev_commits=False),
         # Jira told us nothing at all
         _issue("DEVOPS-506", ["DevOps"], datetime(2026, 8, 6, 17, 0, 0)),
     ])
     linkage = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["linkage"]
-    assert linkage["code_not_linked"] == 2, "either count is enough; a real zero and a null are not"
+    assert linkage["code_not_linked"] == 2, "either flag is enough; a real False and a None are not"
     assert linkage["linked"] == 0

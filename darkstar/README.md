@@ -486,16 +486,33 @@ resting on a typed title deserves less weight than one resting on a URL somebody
 can only discount it if the split is visible. On a store whose syncs have not yet refilled the new
 columns it reads *198 · MR title* and nothing else — which is the point.
 
-Beside it, **code exists, not linked** counts requests where Jira's development panel
-(`customfield_10400`) reports commits or pull requests but nothing here could name the merge request.
-That is a hole in our linkage, not a request without code, and the two must not be added together. The
-pull-request count in that field under-reports — on DEVOPS-10117 the summary blob listed four
-repositories and no pull requests at all, while JQL reports pull requests on the same issue — so either
-count is taken as evidence. A `NULL` means Jira said nothing and is never treated as zero.
+Beside it, **in Jira, not matched here** counts requests whose development panel shows commits or a
+pull request while none of our routes could name a merge request *this crawl has*. It is named for
+whose gap it is, because there are three causes and they are not equally common:
+
+| cause | reality | frequency |
+|---|---|---|
+| the merge request is not in this crawl | darkstar ingests only **merged** MRs from tracked authors and scopes, so an open MR, an outside author or an un-crawled project is invisible here | most of it |
+| Jira linked it by commit message | a route not read here | some |
+| there genuinely is no merge request | commits pushed to a branch, no MR ever opened | **6 of 221** August requests |
+
+An earlier label read "code exists, not linked", which sounds like the last row and is mostly the
+first. A hole in our own crawl is not a fact about the team.
+
+**The Development field itself is not read.** `customfield_10400` serves a *cache*, and on DEVOPS-10117
+it reported build count 5 where the panel showed 2, omitted the issue's merged pull request entirely,
+and carried `"isStale": true`. A gap counter built on it reported "no pull request" for an issue that
+had a merged one. JQL's `development[pullrequests]` index agreed with the panel, so the flags come from
+**two extra JQL queries per sync** — one per predicate, since Jira rejects both `development[]` clauses
+in a single query — scoped by the same JQL as the batch. `False` means Jira was asked and said no;
+`None` means nobody asked, and only the first is evidence.
+
+Note the panel labels these **Pull Request** even for GitLab, which is Jira's generic term; the JQL key
+is `development[pullrequests]`.
 
 ### Migration
 
-`source_branch` on `merge_requests` and `mr_field_url` / `dev_pr_count` / `dev_commit_count` on
+`source_branch` on `merge_requests` and `mr_field_url` / `dev_has_pr` / `dev_has_commits` on
 `issues` are all nullable and ALTER-added. `_needs_backfill` forces one full GitLab re-crawl for the
 branch; the Jira fields refill on the next issue sync. Until both run, the linkage strip will
 correctly show every link coming from titles.

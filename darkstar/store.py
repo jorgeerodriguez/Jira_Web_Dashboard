@@ -48,12 +48,16 @@ class IssueRow:
     # inferred from text a human typed for another purpose. Sampled clean -- 18 of 18 were a single
     # canonical https://gitlab.com/<group>/<project>/-/merge_requests/<iid>.
     mr_field_url: str | None
-    # Counts from Jira's Development field (customfield_10400), which summarises the dev panel. They
-    # identify no particular merge request, so they cannot link anything -- but a non-zero count with
-    # no link found means "this request HAS code we failed to attach", which is a reportable gap
-    # rather than a request with no code. The value Jira serves is a cached summary and can be stale.
-    dev_pr_count: int | None
-    dev_commit_count: int | None
+    # Whether Jira's development panel shows a pull request / commits for this request. Booleans, and
+    # they come from a JQL predicate rather than from the Development summary field: that field
+    # (customfield_10400) serves a CACHE, and on DEVOPS-10117 it reported five builds where the panel
+    # showed two, omitted the merged pull request entirely, and carried "isStale":true. JQL's
+    # development[pullrequests] index agreed with the panel. These identify no particular merge
+    # request, so they cannot link anything -- but a request Jira says has code, with no link found
+    # here, is a hole in our own crawl rather than a request without code.
+    # None means the flag has not been queried yet, which is not the same as False.
+    dev_has_pr: bool | None
+    dev_has_commits: bool | None
     fetched_at: datetime
 
 
@@ -131,7 +135,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "mr_field_url", "dev_pr_count", "dev_commit_count", "fetched_at",
+    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
@@ -163,8 +167,8 @@ CREATE TABLE IF NOT EXISTS issues (
     target_end          DATE,
     labels              VARCHAR[] NOT NULL,
     mr_field_url        VARCHAR,
-    dev_pr_count        INTEGER,
-    dev_commit_count    INTEGER,
+    dev_has_pr          BOOLEAN,
+    dev_has_commits     BOOLEAN,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -245,8 +249,8 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
-    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_pr_count INTEGER")
-    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_commit_count INTEGER")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
     logger.debug("schema initialized")
 
 

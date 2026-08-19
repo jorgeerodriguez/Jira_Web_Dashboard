@@ -499,10 +499,17 @@ function renderLinkage(l){
   const rows = Object.entries(l.by_source).filter(([, n]) => n > 0).map(([src, n]) =>
     `<span class="lk"><b>${n}</b> ${esc(LINK_LABEL[src] || src)}`+
     `<span class="na">&nbsp;·&nbsp;${esc(LINK_NOTE[src] || "")}</span></span>`).join("");
+  // Named for whose gap it is. "code exists, not linked" read as "code with no merge request", which
+  // is the rarest of the three causes — 6 of 221 August requests had commits and no pull request at
+  // all. Usually the pull request exists and this crawl does not have it: darkstar ingests only
+  // MERGED merge requests from tracked authors and scopes, so an open one, an outside author or an
+  // un-crawled project is invisible here while Jira sees it plainly.
   const gap = l.code_not_linked
-    ? `<span class="lk gap" title="Jira's development panel reports code on these, but nothing here `+
-      `could name the merge request — a gap in linkage, not requests without code">`+
-      `<b>${l.code_not_linked}</b> code exists, not linked</span>`
+    ? `<span class="lk gap" title="Jira's development panel reports commits or a pull request on `+
+      `these, and none of our routes could name a crawled merge request. Usually the merge request `+
+      `exists and is not in this crawl — darkstar ingests only merged MRs from tracked authors and `+
+      `scopes — rather than the work having no merge request at all.">`+
+      `<b>${l.code_not_linked}</b> in Jira, not matched here</span>`
     : "";
   document.getElementById("linkage").innerHTML = l.linked || l.code_not_linked
     ? `<span class="lk-head">Linked to code</span>${rows}${gap}`

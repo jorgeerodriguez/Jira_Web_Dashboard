@@ -16,9 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -36,36 +35,12 @@ logger = logging.getLogger("darkstar.ingest")
 _ISSUE_FIELDS: str = (
     "summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,"
     "parent,project,customfield_11751,customfield_10946,customfield_10947,"
-    # customfield_11534 = "Merge Request" (free text, a GitLab MR URL); customfield_10400 =
-    # "Development", Jira's cached dev-panel summary. Both come free with this call.
-    "customfield_11534,customfield_10400"
+    # customfield_11534 = "Merge Request", a free-text field holding a GitLab MR URL. The Development
+    # field (customfield_10400) is deliberately NOT fetched: it serves a stale cache that omitted a
+    # merged pull request on DEVOPS-10117 and disagreed with its own panel on build count. The dev
+    # panel is read through JQL instead -- see fetch_dev_panel_keys.
+    "customfield_11534"
 )
-
-# Jira serves the Development field as a summary blob rather than structured JSON: a Java-style
-# toString with a `json={...}` member holding the real counts. Only the counts are wanted, and only
-# to tell "has code we did not link" apart from "has no code", so the counts are read out of the
-# outer blob with a regex rather than by parsing the embedded JSON.
-_DEV_PR_RE = re.compile(r"pullrequest\s*=\s*\{[^}]*?count\s*=\s*(\d+)")
-_DEV_COMMIT_RE = re.compile(r"repository\s*=\s*\{[^}]*?count\s*=\s*(\d+)")
-
-
-def _dev_counts(raw: object) -> tuple[int | None, int | None]:
-    """(pull requests, commit-carrying repositories) from Jira's Development summary field.
-
-    None, not 0, when the field is absent: absent means Jira told us nothing, while 0 means Jira
-    positively reported no linked code, and only the latter is evidence.
-    """
-    if not isinstance(raw, str) or not raw:
-        return (None, None)
-    prs = _DEV_PR_RE.search(raw)
-    commits = _DEV_COMMIT_RE.search(raw)
-    return (int(prs.group(1)) if prs else 0, int(commits.group(1)) if commits else 0)
-_FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
-_PAGE_SIZE: int = 100
-_WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
-_RETRY_ATTEMPTS: int = 3
-_RETRY_BACKOFF_SECONDS: float = 2.0
-
 
 @dataclass(frozen=True)
 class SyncPlan:
@@ -182,8 +157,9 @@ def _map_issue(issue: Issue, fetched_at: datetime) -> store.IssueRow:
         target_end=_parse_date(fields.get("customfield_10947")),
         labels=list(fields.get("labels") or []),
         mr_field_url=(fields.get("customfield_11534") or None),
-        dev_pr_count=_dev_counts(fields.get("customfield_10400"))[0],
-        dev_commit_count=_dev_counts(fields.get("customfield_10400"))[1],
+        # Filled by fetch_dev_panel_keys after the batch is mapped; unknown until then.
+        dev_has_pr=None,
+        dev_has_commits=None,
         fetched_at=fetched_at,
     )
 
@@ -205,6 +181,45 @@ def fetch_issues(jira: JIRA, jql: str) -> list[store.IssueRow]:
         if not next_token:
             break
     return rows
+
+
+def fetch_dev_panel_keys(jira: JIRA, scope_jql: str, predicate: str) -> set[str]:
+    """Keys whose development panel satisfies `predicate`, e.g. "development[pullrequests].all > 0".
+
+    One JQL query for the whole batch rather than a field on each issue, because the Development
+    summary field is a CACHE and lies: on DEVOPS-10117 it reported five builds where the panel showed
+    two, omitted the issue's merged pull request altogether, and flagged itself "isStale". The JQL
+    index agreed with the panel, and one query is cheaper than a field nobody can trust.
+
+    Jira rejects two development[] clauses OR'd together, so each predicate is asked separately.
+    """
+    keys: set[str] = set()
+    next_token: str | None = None
+    while True:
+        kwargs = {"jql_str": f"({scope_jql}) AND {predicate}", "maxResults": _PAGE_SIZE,
+                  "fields": "key"}
+        if next_token:
+            kwargs["nextPageToken"] = next_token
+        issues = _retry(lambda: jira.enhanced_search_issues(**kwargs),
+                        f"enhanced_search_issues({predicate})")
+        if not issues:
+            break
+        keys.update(issue.key for issue in issues)
+        next_token = getattr(issues, "nextPageToken", None)
+        if not next_token:
+            break
+    return keys
+
+
+def apply_dev_panel_flags(rows: list[store.IssueRow], with_pr: set[str],
+                          with_commits: set[str]) -> list[store.IssueRow]:
+    """Set dev_has_pr / dev_has_commits on the batch from the two key sets.
+
+    False, not None, for a row that was queried and did not come back: Jira positively reported no
+    linked code, which IS evidence. None survives only where the query never ran.
+    """
+    return [replace(row, dev_has_pr=row.key in with_pr, dev_has_commits=row.key in with_commits)
+            for row in rows]
 
 
 def _extract_transitions(key: str, histories: list[dict]) -> list[store.TransitionRow]:
@@ -259,6 +274,13 @@ def run_sync(
     """Execute one planned sync: fetch, write issues + transitions, advance the watermark."""
     jql = _FULL_JQL if plan.watermark is None else build_incremental_jql(plan.watermark, jira_tz)
     issues = fetch_issues(jira, jql)
+    # Two extra queries for the whole batch, scoped by the same JQL, replacing a per-issue field that
+    # cannot be trusted. Jira will not accept both development[] clauses in one query.
+    issues = apply_dev_panel_flags(
+        issues,
+        fetch_dev_panel_keys(jira, jql, "development[pullrequests].all > 0"),
+        fetch_dev_panel_keys(jira, jql, "development[commits].all > 0"),
+    )
     keys = [issue.key for issue in issues]
     transitions = fetch_transitions(jira, keys)
 
