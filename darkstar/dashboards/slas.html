@@ -366,7 +366,8 @@ async function editAuthors(body){
   }
   const saved = await res.json();
   document.getElementById("authorHint").textContent = saved.recrawl_queued
-    ? "Added. A full GitLab re-crawl is queued — their MRs appear after the next sync."
+    ? "Added. Fetching their merge requests from GitLab now — this takes a few minutes for a full "
+      + "crawl. Reload the page once it finishes; they will not appear before then."
     : "Saved.";
   await reload();
 }

@@ -5,7 +5,7 @@ covers the PE team plus the contributors hardcoded in TRACKED_MR_AUTHORS; this f
 add a contributor or hide one from the table without a deploy, the same way overrides.py handles
 the SME matrix. darkstar's second write path.
 
-Shape: {"added": {gitlab_username: display_name}, "hidden": [display_name, ...]}
+Shape: {"added": {gitlab_username: display_name}, "hidden": [...], "version": int}
   - added:  extra GitLab usernames the ingest should attribute. They are keyed in the store by
             their *username*, not a Jira accountId, precisely so they cannot leak into the
             roster-gated views (velocity/capacity/SME all look up ROSTER by accountId and miss).
@@ -22,7 +22,11 @@ import os
 import threading
 
 _LOCK = threading.Lock()
-_EMPTY: dict = {"added": {}, "hidden": []}
+# `version` is a monotonic counter bumped by every add. The GitLab crawl records the version it
+# read when it STARTED, so an author added while a crawl is running leaves version != recorded and
+# the next crawl is a full one. Without it, a crawl finishing after a second add would stamp its
+# watermark and the second author's history would never be fetched.
+_EMPTY: dict = {"added": {}, "hidden": [], "version": 0}
 
 
 def read(path: str) -> dict:
@@ -39,6 +43,7 @@ def _read_locked(path: str) -> dict:
         data = json.load(handle)
     data.setdefault("added", {})
     data.setdefault("hidden", [])
+    data.setdefault("version", 0)
     return data
 
 
@@ -70,6 +75,9 @@ def apply(path: str, op: str, username: str, display_name: str) -> tuple[dict, b
             needs_recrawl = username not in added
             added[username] = display_name or username
             data["hidden"] = [name for name in hidden if name != added[username]]
+            if needs_recrawl:
+                # Bump before the crawl starts, so a crawl already in flight cannot record it.
+                data["version"] = int(data.get("version", 0)) + 1
         elif op == "remove":
             added.pop(username, None)
         elif op == "hide":

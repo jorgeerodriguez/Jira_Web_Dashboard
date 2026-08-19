@@ -198,20 +198,34 @@ def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window
     only MRs updated since the last successful sync (minus a small margin). The watermark advances
     only after a successful crawl, so a failed run just retries the same slice next time. A store
     holding incomplete in-window rows is re-crawled in full once (see _needs_backfill).
+
+    The roster is read ONCE here and both used for the crawl and recorded against it. That pairing
+    is what makes adding an author safe under concurrency: an author added while this crawl is
+    running bumps the version past the one recorded at the end, so the next crawl is full and picks
+    them up. Re-reading the roster later, or recording the version at the end, would let a crawl
+    stamp a version it never actually crawled and lose that author's history for good.
     """
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    version = int(roster.get("version", 0))
     watermark = store.get_gitlab_watermark(connection)
     window_cutoff = now - timedelta(days=window_days)
-    if watermark is None or _needs_backfill(connection, window_cutoff):
+    roster_changed = version != store.get_roster_version(connection)
+    if watermark is None or roster_changed or _needs_backfill(connection, window_cutoff):
         cutoff = window_cutoff
+        if roster_changed:
+            logger.info("gitlab sync: roster version %s != crawled %s, forcing a full crawl",
+                        version, store.get_roster_version(connection))
     else:
         cutoff = watermark - _WATERMARK_MARGIN
-    written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS)
+    written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS, roster)
     store.set_gitlab_watermark(connection, now)
+    store.set_roster_version(connection, version)
     return written
 
 
 def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
-                 group_ids: tuple[int, ...], project_ids: tuple[int, ...]) -> tuple[int, int]:
+                 group_ids: tuple[int, ...], project_ids: tuple[int, ...],
+                 roster: dict) -> tuple[int, int]:
     """Crawl merged MRs by roster members from the given groups + projects; store MRs + file paths.
 
     `cutoff` is a naive-UTC floor: only MRs updated on GitLab and merged on or after it are
@@ -231,7 +245,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
     # their GitLab username rather than a Jira accountId, so they cannot reach the roster-gated
     # views (velocity/capacity/SME look up ROSTER by accountId and simply miss).
-    added = (mr_authors.read(mr_authors.authors_path(config.db_path())).get("added") or {})
+    added = roster.get("added") or {}
     attributable = {**MR_AUTHORS, **{username: username for username in added}}
 
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
