@@ -136,6 +136,9 @@
   .note summary::before{content:"\24D8"; margin-right:6px}
   .note summary:hover{color:var(--ink2)}
   .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
+  .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
+        text-decoration:underline dotted; cursor:pointer}
+  .linkish:hover{color:var(--ink)}
   /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
      and the daily chart — span both. */
   .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px; align-items:start}
@@ -231,6 +234,7 @@
     <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
     Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
     yet. Use <b>×</b> on a row to hide someone.</p>
+    <p id="hiddenNote"></p>
   </details>
   <div class="controls">
     <label class="filter">Filter authors
@@ -259,7 +263,6 @@
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
   <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
-  <div id="hiddenChips" class="chips"></div>
 
   </section>
   <section class="panel wide">
@@ -414,11 +417,14 @@ async function getJSON(path, withAuthors){
   return res.json();
 }
 
+/* Hidden authors are listed here rather than as a row of pills in the panel body: it is roster
+   state you set once, not something to read on every visit. Each name restores itself. */
 function renderHidden(){
   const hidden = (mrData && mrData.hidden) || [];
-  document.getElementById("hiddenChips").innerHTML = hidden.length
-    ? `<span class="filter-hint">Hidden:</span>` + hidden.map(n =>
-        `<span class="chip">${esc(n)}<button type="button" data-show="${esc(n)}" title="Show ${esc(n)}">+</button></span>`).join("")
+  document.getElementById("hiddenNote").innerHTML = hidden.length
+    ? `Hidden from this table: ` + hidden.map(n =>
+        `<button type="button" class="linkish" data-show="${esc(n)}" title="Show ${esc(n)} again">${esc(n)}</button>`
+      ).join(", ") + `. Click a name to show it again.`
     : "";
 }
 
@@ -697,7 +703,7 @@ async function init(){
     const name = e.target.getAttribute && e.target.getAttribute("data-hide");
     if(name) editAuthors({op: "hide", display_name: name});
   });
-  document.getElementById("hiddenChips").addEventListener("click", e => {
+  document.getElementById("hiddenNote").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-show");
     if(name) editAuthors({op: "show", display_name: name});
   });
