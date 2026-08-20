@@ -251,6 +251,8 @@
   .bar{display:block; height:7px; border-radius:999px; min-width:2px;
        background:linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent))}
   td.barcell{width:38%; padding-left:14px}
+  /* The answer column carries the weight; the spans beside it are workings. */
+  tbody td.strong{color:var(--ink); font-weight:640}
   .mini{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:7px}
 </style>
 </head>
@@ -475,7 +477,11 @@ function durText(hours){
   if(mins < 60) return `${mins}m`;
   const h = Math.floor(mins / 60), m = mins % 60;
   if(h < HOURS_PER_DAY) return m ? `${h}h ${m}m` : `${h}h`;
-  const d = Math.floor(h / HOURS_PER_DAY), rh = h % HOURS_PER_DAY;
+  // Round to the nearest hour past a working day rather than flooring. Flooring lost up to 59
+  // minutes per cell, which made a decomposition that balances exactly look ~an hour out: 43.9h
+  // rendered "4d 7h" beside a 3h 12m draft and a 47.1h total.
+  const rounded = Math.round(mins / 60);
+  const d = Math.floor(rounded / HOURS_PER_DAY), rh = rounded % HOURS_PER_DAY;
   return rh ? `${d}d ${rh}h` : `${d}d`;
 }
 
@@ -852,8 +858,12 @@ function renderSlowest(d){
   const from = slowestPage * SLOWEST_PER_PAGE;
   const page = rows.slice(from, from + SLOWEST_PER_PAGE);
 
-  const head = `<thead><tr><th>MR</th><th>Author</th><th>Ready&nbsp;&rarr;&nbsp;merged</th>`+
-               `<th>Open</th><th>Draft</th><th>Red CI</th><th>To review</th><th>Merged</th></tr></thead>`;
+  // Read right to left this is a decomposition: Open, less the time it sat in Draft, less the time
+  // a red pipeline blocked it, leaves the Turnaround. Read left to right it is the answer first and
+  // then what was taken out to get there. The three right-hand spans sum to Open.
+  const head = `<thead><tr><th>MR</th><th>Author</th><th>Turnaround</th>`+
+               `<th>Red CI</th><th>Draft</th><th>Open</th>`+
+               `<th>To review</th><th>Merged</th></tr></thead>`;
   const body = page.map((r, i) => {
     const draft = Math.max(0, Math.round((r.open_hours - r.ready_hours) * 10) / 10);
     return `<tr>
@@ -862,23 +872,24 @@ function renderSlowest(d){
        `${esc(r.project.split("/").pop())}!${r.iid}</a>`+
        `${r.environment && r.environment !== "other" ? ` <span class="na">·&nbsp;${esc(r.environment)}</span>` : ""}</td>
      <td>${esc(r.author)}</td>
-     <td class="num">${dur(r.ready_hours)}</td>
-     <td class="num">${dur(r.open_hours)}</td>
-     <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
+     <td class="num strong">${dur(r.ready_hours)}</td>
      <td class="num">${r.red_hours > 0
         ? `<span class="neg">${durText(r.red_hours)}</span>` : '<span class="na">—</span>'}</td>
+     <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
+     <td class="num">${dur(r.open_hours)}</td>
      <td class="num">${dur(r.first_review_hours)}</td>
      <td class="num">${esc(r.merged.slice(0, 10))}</td>
    </tr>`;
   }).join("");
   document.getElementById("slowestTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="8" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
-    `<caption><b>Ready&nbsp;&rarr;&nbsp;merged</b> is the figure the table and chart above are built `+
-    `from: the time an MR was offered for review <i>and</i> mergeable. <b>Open</b> is the whole span, `+
-    `<b>Draft</b> the time the author had not offered it yet, and <b>Red CI</b> the time a failing `+
-    `pipeline blocked the merge whoever reviewed it. Both are excluded from the clock and shown here `+
-    `instead — a large figure in either means the wait was never on review. Same author and `+
-    `environment filters as the table above.</caption>`;
+    `<caption><b>Turnaround + Red CI + Draft = Open.</b> Read right to left: <b>Open</b> is the whole `+
+    `span, less the <b>Draft</b> time the author had not offered it for review, less the <b>Red CI</b> `+
+    `time a failing pipeline blocked the merge whoever looked at it, leaves the <b>Turnaround</b> — `+
+    `the figure the table and chart above are built from. A large number in either middle column `+
+    `means the wait was never on review. A working day is <b>9 hours</b>, so a day here is not 24; `+
+    `hover any cell for the exact decimal figure. Same author and environment filters as above.`+
+    `</caption>`;
 
   const shownFrom = rows.length ? from + 1 : 0;
   const shownTo = Math.min(from + SLOWEST_PER_PAGE, rows.length);

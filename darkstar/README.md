@@ -185,11 +185,25 @@ to be honest about. It is also what let the server cap rise from 25 to 100 — a
 unreachable rather than merely unlisted. New data resets to page one, so a narrower filter cannot
 leave you on a page that no longer exists.
 
-Each row carries **two** clocks, and the pair is the point. `Ready → merged` is the figure the table
-and chart are built from; `Open` is the whole span; `Draft` is the difference. An MR open five days
-with two ready hours was the author still working, and one with five ready days was waiting on
-review — a single "age" column cannot tell those apart, which is exactly the question the panel gets
-asked. `To review` is the wait for the first human comment on the same ready clock.
+The duration columns are a **decomposition**, not a list:
+
+```
+Turnaround  +  Red CI  +  Draft  =  Open
+```
+
+Read right to left that is the whole span less the time the author had not offered it for review, less
+the time a failing pipeline blocked the merge whoever looked at it, leaving the turnaround. Read left
+to right it is the answer first and then what was taken out to reach it. A large number in either
+middle column means the wait was never on review, which is the question this panel gets asked.
+
+The order was originally Turnaround, Open, Draft, Red CI — a flat list that hid the arithmetic
+entirely. Adam spotted it on `gitops-k8s-team-a2!2109`: 5d 2h open, 3h 12m draft, 4d 7h turnaround,
+which does not look like it subtracts. It did (47.1 = 43.9 + 3.2 + 0) and two things made it
+unreadable: a **day here is nine hours**, not 24, and the formatter *floored* the remainder, losing up
+to 59 minutes a cell. The day tier now rounds, the identity is stated in the caption, the nine-hour day
+is stated with it, and every cell keeps its exact decimal figure on hover.
+
+`To review` sits outside the sum: it is the wait for the first human comment, on the same clock.
 
 ## Visual hierarchy
 
