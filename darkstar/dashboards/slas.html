@@ -199,6 +199,9 @@
   .pager .btn[disabled]{opacity:.4; cursor:default}
   .pager .btn[disabled]:hover{color:var(--muted); border-color:var(--line2)}
   /* The rank is the row's position in the slowest ordering, which a page of ten would otherwise lose. */
+  /* Why a zero is a zero, without widening the column. */
+  .hint{display:block; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--muted); opacity:.75; line-height:1.5}
   .rank{display:inline-block; min-width:22px; font-family:var(--mono); font-size:11px;
         color:var(--muted); text-align:right; margin-right:9px}
   .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
@@ -750,10 +753,14 @@ async function reload(){
       ? `Merge-request data current as of ${esc(crawl.last_crawl)}.`
       : `No GitLab crawl has completed yet.`;
   const fr = mrData.first_review || {};
+  const by = fr.by_source || {};
+  const parts = [["comment", "a comment"], ["approval", "an approval"], ["merge", "the merge alone"]]
+    .filter(([k]) => by[k]).map(([k, label]) => `<b>${by[k]}</b> by ${label}`);
   document.getElementById("reviewNote").innerHTML = fr.reviewed
-    ? `Of these, <b>${fr.reviewed}</b> drew a human review comment — median <b>${durText(fr.hours_median)}</b> `+
-      `to first review, p90 ${durText(fr.hours_p90)}. The rest merged with no comment at all.`
-    : `No human review comments on these MRs in the window.`;
+    ? `All <b>${fr.reviewed}</b> drew a review signal — ${parts.join(", ")} — median `+
+      `<b>${durText(fr.hours_median)}</b> to first review, p90 ${durText(fr.hours_p90)}. `+
+      `A comment or approval is a review; where neither exists the merge timestamp is the review.`
+    : `No review signals on these MRs in the window.`;
   const range = presetRange(document.getElementById("preset").value);
   const rows = `Rows grouped by ${GRAIN_NOUN[slaData.grain] || slaData.grain}`+
     `${document.getElementById("grain").value ? "" : " (chosen from the window)"}.`;
@@ -851,6 +858,29 @@ function renderOriginTable(rows, grain){
 const SLOWEST_PER_PAGE = 10;
 let slowestPage = 0;
 
+/* Time to first review, with the zero explained rather than left bare.
+
+   A zero here is arithmetically right and says nothing on its own: 31.6% of merge requests were
+   reviewed outside business hours, and 11.1% were reviewed before the author marked the MR ready, so
+   no ready time preceded the review at all. Both read as "0m" and look broken. The cell names the
+   signal that counted — a comment, an approval, or the merge itself when nobody commented — and says
+   which kind of zero it is. */
+const REVIEW_SOURCE = {comment: "a human comment", approval: "an approval",
+                       merge: "merged by someone other than the author, with no comment"};
+
+function reviewCell(r){
+  if(r.first_review_hours == null) return '<span class="na">—</span>';
+  const via = REVIEW_SOURCE[r.first_review_source] || r.first_review_source;
+  if(r.first_review_hours > 0){
+    return `<span title="First review signal: ${esc(via)}">${durText(r.first_review_hours)}</span>`;
+  }
+  const why = r.first_review_before_ready
+    ? "reviewed before the author marked it ready, so no waiting time preceded it"
+    : "reviewed outside working hours, so no business time elapsed";
+  return `<span class="na" title="First review signal: ${esc(via)} — ${why}">0m`+
+         `<span class="hint">${r.first_review_before_ready ? "pre-ready" : "off-hours"}</span></span>`;
+}
+
 function renderSlowest(d){
   const rows = d.slowest || [];
   const pages = Math.max(1, Math.ceil(rows.length / SLOWEST_PER_PAGE));
@@ -879,7 +909,7 @@ function renderSlowest(d){
         ? `<span class="neg">${durText(r.red_hours)}</span>` : '<span class="na">—</span>'}</td>
      <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
      <td class="num">${dur(r.open_hours)}</td>
-     <td class="num">${dur(r.first_review_hours)}</td>
+     <td class="num">${reviewCell(r)}</td>
      <td class="num">${esc(r.merged.slice(0, 10))}</td>
    </tr>`;
   }).join("");

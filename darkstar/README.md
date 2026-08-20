@@ -213,7 +213,23 @@ unreadable: a **day here is nine hours**, not 24, and the formatter *floored* th
 to 59 minutes a cell. Minutes are now carried at every tier so the identity holds exactly, it is stated in the caption, the
 nine-hour day is stated with it, and every cell keeps its exact decimal figure on hover.
 
-`To review` sits outside the sum: it is the wait for the first human comment, on the same clock.
+### To review
+
+Outside the sum, and on the same clock: the wait until the first review signal. Three signals, earliest
+wins — a **comment**, an **approval**, or the **merge itself** where neither exists, because an MR from
+outside PE cannot be merged by its requester, so the merge is PE's review action. A self-merge is not a
+signal on its own.
+
+**A zero here is real, and unexplained it reads as broken.** Of merge requests since June, 57.4%
+produce a real elapsed figure, **31.6% were reviewed outside working hours** so no business time
+elapsed, and **11.1% were reviewed before the author marked the MR ready** so no waiting time preceded
+the review at all. `gitops-k8s-team-a2!2109` is the second kind: opened Wed 17:40, approved Wed 18:39,
+marked ready Thu 11:07 — approved while still a draft, in the evening.
+
+So the cell names which zero it is, `pre-ready` or `off-hours`, and every cell names the signal that
+counted on hover. The panel note breaks the total down the same way — of 63 merge requests, 52 by
+approval, 5 by comment, 6 by the merge alone — because "all 63 were reviewed" invites disbelief
+otherwise, and it is worth being able to see that only 6 rest on the weakest signal.
 
 ## Visual hierarchy
 
