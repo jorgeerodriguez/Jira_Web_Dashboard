@@ -185,10 +185,18 @@ so a page of ten does not lose its place in the ordering.
 
 Paged rather than scrolled, deliberately. A fixed box with an inner scrollbar hides how deep the tail
 goes and is easy to miss inside a page that already scrolls; a pager states the population outright
-(`11–20 of 100 slowest · 30 faster of 130 measured not listed`), which is the thing a drill-down has
-to be honest about. It is also what let the server cap rise from 25 to 100 — at 25 the rest were
-unreachable rather than merely unlisted. New data resets to page one, so a narrower filter cannot
-leave you on a page that no longer exists.
+(`1–5 of 100 slowest · 30 faster of 130 measured not listed`), which is the thing a drill-down has to
+be honest about. It is also what let the server cap rise from 25 to 100 — at 25 the rest were
+unreachable rather than merely unlisted.
+
+**Five rows by default**, adjustable to 10, 20 or 50 and remembered in `localStorage`. Ten filled the
+panel and pushed everything below it off screen, and this is a list for inspecting outliers rather than
+browsing. Changing the size keeps the first visible row visible instead of jumping to the top —
+widening the page to look closer at row 12 should not send you back to row 1. New data resets to page
+one, so a narrower filter cannot leave you on a page that no longer exists.
+
+The pager updates its own parts rather than being re-rendered, because the size control lives inside it
+and would lose its state on every reload.
 
 The duration columns are a **decomposition**, not a list, and they reconcile exactly:
 

@@ -195,6 +195,11 @@
   .pager{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
         margin-top:12px; font-family:var(--mono); font-size:12px; color:var(--muted)}
   .pager .pg-btns{display:inline-flex; align-items:center; gap:8px}
+  .pager .pg-size{display:inline-flex; align-items:center; gap:6px; margin-right:6px;
+        text-transform:uppercase; letter-spacing:.08em}
+  .pager .pg-size select{font-family:var(--mono); font-size:12px; color:var(--ink);
+        background:var(--panel); border:1px solid var(--line2); border-radius:7px; padding:3px 6px}
+  .pager .pg-size select:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
   .pager .pg-at{min-width:52px; text-align:center; color:var(--ink2)}
   .pager .btn[disabled]{opacity:.4; cursor:default}
   .pager .btn[disabled]:hover{color:var(--muted); border-color:var(--line2)}
@@ -414,7 +419,22 @@
 
   <h3>Slowest merge requests</h3>
   <div class="tbl-wrap"><table id="slowestTbl"></table></div>
-  <div class="pager" id="slowestPager"></div>
+  <div class="pager" id="slowestPager">
+    <span class="pg-count" id="slowestCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Rows
+        <select id="slowestPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-pg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="slowestAt"></span>
+      <button class="btn" type="button" data-pg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
   </section>
   </div>
 
@@ -855,7 +875,10 @@ function renderOriginTable(rows, grain){
    is easy to miss inside a page that already scrolls; a pager states the population outright, which
    is the thing a drill-down has to be honest about. It also let the server cap go from 25 to 100 --
    at 25 the rest were unreachable, not merely unlisted. */
-const SLOWEST_PER_PAGE = 10;
+// Five by default: ten filled the panel and pushed everything below it off screen, and the list is
+// for inspecting outliers rather than browsing. Adjustable, and remembered.
+const SLOWEST_SIZE_KEY = "darkstar.slas.slowestPerPage";
+let slowestPerPage = 5;
 let slowestPage = 0;
 
 /* Time to first review, with the zero explained rather than left bare.
@@ -883,10 +906,10 @@ function reviewCell(r){
 
 function renderSlowest(d){
   const rows = d.slowest || [];
-  const pages = Math.max(1, Math.ceil(rows.length / SLOWEST_PER_PAGE));
+  const pages = Math.max(1, Math.ceil(rows.length / slowestPerPage));
   if(slowestPage > pages - 1) slowestPage = pages - 1;   // a narrower filter can shorten the list
-  const from = slowestPage * SLOWEST_PER_PAGE;
-  const page = rows.slice(from, from + SLOWEST_PER_PAGE);
+  const from = slowestPage * slowestPerPage;
+  const page = rows.slice(from, from + slowestPerPage);
 
   // Read right to left this is a decomposition: Open, less the time it sat in Draft, less the time
   // a red pipeline blocked it, leaves the Turnaround. Read left to right it is the answer first and
@@ -926,19 +949,18 @@ function renderSlowest(d){
     `Same author and environment filters as above.</caption>`;
 
   const shownFrom = rows.length ? from + 1 : 0;
-  const shownTo = Math.min(from + SLOWEST_PER_PAGE, rows.length);
+  const shownTo = Math.min(from + slowestPerPage, rows.length);
   const tail = d.slowest_omitted
     ? ` · ${d.slowest_omitted} faster of ${d.measured} measured not listed`
     : (d.measured ? ` · all ${d.measured} measured` : "");
-  document.getElementById("slowestPager").innerHTML = rows.length
-    ? `<span class="pg-count">${shownFrom}\u2013${shownTo} of ${rows.length} slowest${tail}</span>`+
-      `<span class="pg-btns">`+
-      `<button class="btn" type="button" data-pg="prev" ${slowestPage === 0 ? "disabled" : ""} `+
-      `aria-label="Previous page">&lsaquo; Prev</button>`+
-      `<span class="pg-at">${slowestPage + 1} / ${pages}</span>`+
-      `<button class="btn" type="button" data-pg="next" ${slowestPage >= pages - 1 ? "disabled" : ""} `+
-      `aria-label="Next page">Next &rsaquo;</button></span>`
-    : "";
+  // Update the parts, never the container: the size select lives in it and would lose its state.
+  const pager = document.getElementById("slowestPager");
+  pager.hidden = !rows.length;
+  document.getElementById("slowestCount").textContent =
+    rows.length ? `${shownFrom}\u2013${shownTo} of ${rows.length} slowest${tail}` : "";
+  document.getElementById("slowestAt").textContent = `${slowestPage + 1} / ${pages}`;
+  pager.querySelector('[data-pg="prev"]').disabled = slowestPage === 0;
+  pager.querySelector('[data-pg="next"]').disabled = slowestPage >= pages - 1;
 }
 
 function niceCeil(v){
@@ -1146,6 +1168,19 @@ async function init(){
   document.getElementById("mrTbl").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-hide");
     if(name) editAuthors({op: "hide", display_name: name});
+  });
+  const perPage = document.getElementById("slowestPerPage");
+  const stored = localStorage.getItem(SLOWEST_SIZE_KEY);
+  if(stored && [...perPage.options].some(o => o.value === stored)) perPage.value = stored;
+  slowestPerPage = Number(perPage.value);
+  perPage.addEventListener("change", () => {
+    // Keep the first visible row visible rather than jumping to the top: changing the size to look
+    // closer at row 12 should not send you back to row 1.
+    const anchor = slowestPage * slowestPerPage;
+    slowestPerPage = Number(perPage.value);
+    localStorage.setItem(SLOWEST_SIZE_KEY, perPage.value);
+    slowestPage = Math.floor(anchor / slowestPerPage);
+    renderSlowest(mrData);
   });
   document.getElementById("slowestPager").addEventListener("click", e => {
     const dir = e.target.getAttribute && e.target.getAttribute("data-pg");
