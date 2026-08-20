@@ -109,3 +109,36 @@ def environment_of(project_path: str, changed_paths: list[str]) -> str:
     if in_prod:
         return PRODUCTION
     return OTHER_ENVIRONMENT
+
+# A merge request counts as self-service when either signal is present. Two independent signals,
+# because each alone misses a slice: the footer predates the labels by two months, and the labels
+# catch skill-filed work whose description was rewritten. Kept here rather than in slas.py because
+# mrflow needs it too and slas already imports mrflow -- putting it there would be a cycle.
+_AGENT_FOOTER_RE = re.compile(
+    r"generated\s+with\s+\[?claude\s+code|authored-by:\s*claude|claude\.com/claude-code",
+    re.IGNORECASE,
+)
+# Any pe:-prefixed label, matching the iac-request-labels.sh hook, which accepts any such prefix
+# rather than a fixed list. A boolean does not need to know WHICH skill produced the MR.
+_SKILL_LABEL_PREFIX = "pe:"
+
+
+def has_agent_footer(description: str | None) -> bool:
+    """True iff an MR description carries the skills' "Generated with Claude Code" footer."""
+    return bool(_AGENT_FOOTER_RE.search(description or ""))
+
+
+def has_skill_label(labels: list[str] | None) -> bool:
+    """True iff any label marks the MR as produced by a self-service skill."""
+    return any(str(label).startswith(_SKILL_LABEL_PREFIX) for label in (labels or []))
+
+
+def is_self_service_mr(description: str | None, labels: list[str] | None) -> bool:
+    """Whether a merge request came out of a self-service workflow.
+
+    The self-service page exists to score how well self-service is working, so its panels must not
+    silently include ordinary PE work. Measured over 1,571 merge requests since June 2026, only 29%
+    carried a footer and 20% a pe:* label -- so an unscoped panel is 71% unrelated work, and engineers
+    with no access to the skills at all (70 and 51 merge requests each) appeared in it.
+    """
+    return has_agent_footer(description) or has_skill_label(labels)

@@ -16,10 +16,17 @@ _BEN = TRACKED_MR_AUTHORS["audacy-ben.bonora"]
 _NOW = datetime(2026, 8, 18, 12, 0, 0)
 
 
-def _mr(id, account_id, opened, merged):
+def _mr(id, account_id, opened, merged, self_service=True):
+    """A merged MR by `account_id`.
+
+    Self-service by default, because this page is scoped to self-service work and almost every test
+    here is about turnaround mechanics rather than scope. Pass self_service=False to build one the
+    panel must exclude.
+    """
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id=account_id,
-        title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
+        title=f"MR {id}", opened_at=opened, merged_at=merged,
+        labels=["pe:iac-request"] if self_service else [],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
         source_branch="", pipelines_fetched_at=_NOW)
 
@@ -254,9 +261,10 @@ def test_series_respects_hidden_authors():
 # --- environment split -------------------------------------------------------------------------
 
 def _mr_in(id, account_id, project_path, opened, merged):
+    """As _mr, in a named project. Self-service by default for the same reason."""
     return store.MergeRequestRow(
         id=id, project_path=project_path, iid=id, author_account_id=account_id,
-        title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
+        title=f"MR {id}", opened_at=opened, merged_at=merged, labels=["pe:iac-request"],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
         source_branch="", pipelines_fetched_at=_NOW)
 
@@ -551,3 +559,49 @@ def test_red_time_inside_a_draft_spell_is_not_deducted_twice():
     row = _report(conn)["slowest"][0]
     assert row["ready_hours"] == 3.0, "1h Mon + 2h Tue; the red hours were all inside the draft"
     assert row["red_hours"] == 7.0, "still reported in full, even though none of it was deducted"
+
+
+def test_ordinary_pe_work_is_excluded_from_a_page_that_scores_self_service():
+    """Adam: "This page is specifically here to score PE on how well self-service is working."
+
+    Unscoped, the panel was 71% unrelated merge requests — only 29% of 1,571 since June carried an
+    agent footer and 20% a pe:* label. Two engineers with no access to the skills at all showed 70 and
+    51 merge requests of turnaround on it, which is what gave the game away.
+    """
+    opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
+    conn = _seed([
+        _mr(1, _BEN, opened, merged, self_service=True),
+        _mr(2, _BEN, opened, merged, self_service=False),
+        _mr(3, _BEN, opened, merged, self_service=False),
+    ])
+    report = _report(conn)
+    assert report["team"]["merged"] == 1, "only the self-service MR is measured"
+    assert report["not_self_service"] == 2, "and the excluded ones are counted, not vanished"
+    assert len(report["slowest"]) == 1
+
+
+def test_an_agent_footer_alone_keeps_an_mr_in_scope():
+    """Two independent signals: the footer predates the pe:* labels by two months."""
+    opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
+    row = _mr(1, _BEN, opened, merged, self_service=False)
+    from dataclasses import replace
+    conn = _seed([replace(row, description="Generated with Claude Code via /iac-request")])
+    assert _report(conn)["team"]["merged"] == 1
+    assert _report(conn)["not_self_service"] == 0
+
+
+def test_an_author_with_no_self_service_work_disappears_entirely():
+    """Oleh and Denys had 70 and 51 merge requests, none of them self-service.
+
+    They must not appear at all rather than appear with a misleading figure — the panel is scored as
+    self-service performance, and their work is not that.
+    """
+    opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
+    conn = _seed([
+        _mr(1, _BEN, opened, merged, self_service=True),
+        _mr(2, _ADAM, opened, merged, self_service=False),
+        _mr(3, _ADAM, opened, merged, self_service=False),
+    ])
+    report = _report(conn)
+    assert [a["name"] for a in report["authors"] if a["merged"]] == ["Ben Bonora"]
+    assert report["not_self_service"] == 2

@@ -59,16 +59,21 @@ def _bound_anywhere(tree):
 
 
 @pytest.mark.parametrize("path", _module_paths(), ids=lambda p: p.name)
-def test_module_defines_every_private_name_it_uses(path):
-    """A module-private name (leading underscore) must be defined in the module that uses it."""
+def test_module_defines_every_name_it_uses(path):
+    """Every name a module loads must be defined, imported, or bound somewhere in it.
+
+    Originally this only checked module-private names, which was half a guard: `ready_spans` was used
+    in mrflow.py without being added to its metrics import, and the check passed because the name has
+    no leading underscore. Public names are exactly as easy to forget — more so, since they come from
+    an import list rather than from a definition a few lines up.
+    """
     tree = ast.parse(path.read_text())
     known = _defined_at_module_level(tree) | _bound_anywhere(tree)
     used = {n.id for n in ast.walk(tree)
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     # Module dunders are supplied by the interpreter, not by the source.
     supplied = {"__file__", "__name__", "__doc__", "__package__", "__spec__", "__loader__"}
-    missing = sorted(n for n in used - known - supplied
-                     if n.startswith("_") and not hasattr(builtins, n))
+    missing = sorted(n for n in used - known - supplied if not hasattr(builtins, n))
     assert not missing, f"{path.name} references undefined {missing}"
 
 

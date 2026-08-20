@@ -39,14 +39,20 @@ from datetime import datetime
 
 import duckdb
 
-from darkstar.gitlab_domains import MIXED_ENVIRONMENT, OTHER_ENVIRONMENT, environment_of
+from darkstar.gitlab_domains import (
+    MIXED_ENVIRONMENT,
+    OTHER_ENVIRONMENT,
+    environment_of,
+    is_self_service_mr,
+)
 from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
     business_hours_between,
-    red_spans,
     pctile,
     ready_hours,
+    ready_spans,
+    red_spans,
     window_start,
 )
 from darkstar import store
@@ -97,6 +103,27 @@ def first_review_at(events: list[tuple[str, datetime]], merged_at: datetime,
     if not author_is_merger:
         candidates.append(merged_at)
     return min(candidates) if candidates else None
+
+
+def first_review_signal(events: list[tuple[str, datetime]], merged_at: datetime,
+                        author_is_merger: bool) -> tuple[datetime | None, str | None]:
+    """`first_review_at` plus WHICH signal it was: "comment", "approval" or "merge".
+
+    Reported because the wait can legitimately come out as zero and a bare "0m" reads as broken:
+    31.6% of merge requests were reviewed outside business hours and 11.1% before the author marked
+    the MR ready. Naming the signal lets the panel say which, instead of showing an unexplained zero.
+    It also makes "every MR was reviewed" credible -- 92.6% carry a comment or an approval and only
+    7.4% rest on the merge alone.
+    """
+    candidates: list[tuple[datetime, str]] = [
+        (when, "comment" if kind == "review" else "approval")
+        for kind, when in events if kind in ("review", "approval")
+    ]
+    if not author_is_merger:
+        candidates.append((merged_at, "merge"))
+    if not candidates:
+        return (None, None)
+    return min(candidates, key=lambda pair: pair[0])
 
 
 def _matches(name: str, terms: list[str]) -> bool:
@@ -185,17 +212,27 @@ def mr_turnaround_report(
     by_author_day: dict[str, dict[str, list[float]]] = {}
     review_waits: list[float] = []
     reviewed = 0
+    by_source: dict[str, int] = {}
     mixed = 0
     slowest: list[dict] = []
+    not_self_service = 0
     for (mr_id, account_id, project_path, opened_at, merged_at, merged_by, iid, title,
-         web_url) in connection.execute(
+         web_url, description, mr_labels) in connection.execute(
         "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by, iid, title, "
-        "web_url FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) "
-        "AND opened_at IS NOT NULL",
+        "web_url, description, labels FROM merge_requests "
+        "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
         [since, until, until],
     ).fetchall():
         name = names.get(account_id)
         if name is None or name in hidden or not _matches(name, name_filter):
+            continue
+        # This page exists to score how well self-service is working, so ordinary PE work is out of
+        # scope. Unscoped, the panel was 71% unrelated merge requests -- only 29% of 1,571 carried an
+        # agent footer and 20% a pe:* label -- and engineers with no access to the skills at all
+        # showed turnaround figures on it. Counted rather than silently dropped, so a thin panel reads
+        # as "scoped" and not as "the team delivered little".
+        if not is_self_service_mr(description, mr_labels):
+            not_self_service += 1
             continue
         env = environment_of(project_path, paths_by_mr.get(mr_id, []))
         if env == MIXED_ENVIRONMENT:
@@ -215,11 +252,18 @@ def mr_turnaround_report(
         # so compare on the username the ingest attributed the MR under where it has one.
         # An unknown merger counts as a self-merge: absence of evidence is not review.
         author_is_merger = (not merged_by) or merged_by == account_id
-        review_at = first_review_at(events, merged_at, author_is_merger)
+        review_at, review_source = first_review_signal(events, merged_at, author_is_merger)
+        review_wait = None
+        # A review arriving before the author marks the MR ready yields a genuine zero: no ready time
+        # preceded it. Recorded so the panel can say so rather than show a bare 0m.
+        review_before_ready = False
         if review_at is not None:
             reviewed += 1
-            review_waits.append(
-                ready_hours(opened_at, min(review_at, merged_at), events, reds))
+            review_wait = ready_hours(opened_at, min(review_at, merged_at), events, reds)
+            review_waits.append(review_wait)
+            spans = ready_spans(opened_at, merged_at, events)
+            review_before_ready = bool(spans) and review_at < spans[0][0]
+            by_source[review_source] = by_source.get(review_source, 0) + 1
         # Per-MR detail for the drill-down. `open_hours` is the whole span in business hours and
         # `ready_hours` only the spells it was marked ready, so the gap between them IS the draft
         # time -- which is the usual answer to "why was this open for days". On the 20 slowest MRs
@@ -235,7 +279,9 @@ def mr_turnaround_report(
             "open_hours": round(business_hours_between(opened_at, merged_at), 1),
             "ready_hours": round(hours, 1),
             "red_hours": round(red, 1),
-            "first_review_hours": (round(review_waits[-1], 1) if review_at is not None else None),
+            "first_review_hours": (round(review_wait, 1) if review_wait is not None else None),
+            "first_review_source": review_source,
+            "first_review_before_ready": review_before_ready,
             "environment": env,
         })
         day = business_date(merged_at).isoformat()
@@ -287,6 +333,9 @@ def mr_turnaround_report(
         "environment": environment,
         "crawl": crawl_state(connection, roster),
         "mixed": mixed,
+        # Merge requests by tracked authors carrying neither an agent footer nor a pe:* label, so
+        # excluded from this page by scope. Reported for the same reason every other omission is.
+        "not_self_service": not_self_service,
         "incomplete": int(incomplete or 0),
         # Slowest first, because the question this list answers is always about an outlier. Each row
         # carries both clocks: open_hours is the whole span, ready_hours only the ready spells, so
@@ -299,6 +348,8 @@ def mr_turnaround_report(
         # ingest), on the same ready-clock. Separates "nobody looked" from "reviewed, then iterated".
         "first_review": {
             "reviewed": reviewed,
+            # Which signal was earliest, so "every MR was reviewed" can be read for what it is.
+            "by_source": by_source,
             "hours_median": round(statistics.median(review_waits), 1) if review_waits else None,
             "hours_p90": pctile(review_waits, 0.9),
         },

@@ -106,7 +106,12 @@ tiers because the values span four orders of magnitude:
 | under a minute | `<1m` | 0.001h |
 | under an hour | minutes | 0.1h → `6m` |
 | under a working day | hours and minutes | 2.9h → `2h 54m` |
-| a working day or more | working days and hours | 174.8h → `19d 3h` |
+| a working day or more | days, hours **and minutes** | 43.9h → `4d 7h 54m` |
+
+Minutes are carried at **every** tier. Dropping them past a day looked tidier and cost up to 59
+minutes a cell, which made a decomposition that balances perfectly look an hour out — `4d 7h` beside a
+`3h 12m` draft and a `5d 2h` total does not read as arithmetic even though `43.9 + 3.2 = 47.1` exactly.
+Verbose and unambiguous beats tidy here, because the columns are meant to be checked.
 
 **A day here is nine hours, not twenty-four**, because that is what the clock counts — so 45h renders
 as `5d`, a working week, and rendering it as `1d 21h` would be a different kind of wrong. The decimal
@@ -127,6 +132,29 @@ with a part-strength underline that would otherwise turn a column of them into a
 The other dashboards were checked and do not have this problem: `intake`'s `.key` is `#7db0ff` at
 7.99:1 and `delivery-forecast`'s `.k`/`.skey` are `--muted` at 4.78:1. Both pass, though the forecast
 links are dim enough to be worth revisiting.
+
+## MR turnaround is scoped to self-service
+
+This page scores how well self-service is working, so the MR panels count only merge requests carrying
+an **agent footer** or a **`pe:*` label**. Two independent signals, because each alone misses a slice:
+the footer predates the labels by two months, and the labels catch skill work whose description was
+rewritten.
+
+Unscoped the panel was **71% unrelated work** — of 1,571 merge requests merged since June 2026 only 29%
+carried a footer and 20% a label — and engineers with no access to the skills at all appeared in it with
+turnaround figures, 70 and 51 merge requests each. That is what gave it away.
+
+The excluded count is reported under the table, so a thin panel reads as *scoped* rather than as "the
+team delivered little". On the current store that is 382 measured against 324 excluded.
+
+The exclusions are genuine misses of the signal, not detection failures: **zero** excluded merge
+requests contain "generated with" or "co-authored" in any form. 56% have no description at all, which
+cannot carry a footer — and a skill-produced MR always has one, because the skill writes it. 36% carry a
+`DEVOPS-` key in the title or branch: real ticket work, just not skill-produced, and correctly out of
+scope here.
+
+The residual risk is a skill-written MR whose description was squashed or rewritten and which never got
+a label. There is no third signal to measure that against, so it is stated rather than estimated.
 
 ## The ready clock excludes red pipelines
 
@@ -180,16 +208,59 @@ so a page of ten does not lose its place in the ordering.
 
 Paged rather than scrolled, deliberately. A fixed box with an inner scrollbar hides how deep the tail
 goes and is easy to miss inside a page that already scrolls; a pager states the population outright
-(`11–20 of 100 slowest · 30 faster of 130 measured not listed`), which is the thing a drill-down has
-to be honest about. It is also what let the server cap rise from 25 to 100 — at 25 the rest were
-unreachable rather than merely unlisted. New data resets to page one, so a narrower filter cannot
-leave you on a page that no longer exists.
+(`1–5 of 100 slowest · 30 faster of 130 measured not listed`), which is the thing a drill-down has to
+be honest about. It is also what let the server cap rise from 25 to 100 — at 25 the rest were
+unreachable rather than merely unlisted.
 
-Each row carries **two** clocks, and the pair is the point. `Ready → merged` is the figure the table
-and chart are built from; `Open` is the whole span; `Draft` is the difference. An MR open five days
-with two ready hours was the author still working, and one with five ready days was waiting on
-review — a single "age" column cannot tell those apart, which is exactly the question the panel gets
-asked. `To review` is the wait for the first human comment on the same ready clock.
+**Five rows by default**, adjustable to 10, 20 or 50 and remembered in `localStorage`. Ten filled the
+panel and pushed everything below it off screen, and this is a list for inspecting outliers rather than
+browsing. Changing the size keeps the first visible row visible instead of jumping to the top —
+widening the page to look closer at row 12 should not send you back to row 1. New data resets to page
+one, so a narrower filter cannot leave you on a page that no longer exists.
+
+The pager updates its own parts rather than being re-rendered, because the size control lives inside it
+and would lose its state on every reload.
+
+The duration columns are a **decomposition**, not a list, and they reconcile exactly:
+
+```
+Mergeable → merged  +  Red CI  +  Draft  =  Open
+      4d 7h 54m     +   0m     + 3h 12m  =  5d 2h 6m
+```
+
+**`Mergeable → merged` is the one number to read.** It is the business hours the merge request was
+approvable — marked ready, pipeline green — and therefore waiting on PE to merge it. The header says so
+rather than making the reader infer it from a word like "turnaround".
+
+Read right to left that is the whole span less the time the author had not offered it for review, less
+the time a failing pipeline blocked the merge whoever looked at it, leaving the time that was
+genuinely on PE. Read left to right it is the answer first and then what was taken out to reach it. A large number in either
+middle column means the wait was never on review, which is the question this panel gets asked.
+
+The order was originally Ready→merged, Open, Draft, Red CI — a flat list that hid the arithmetic
+entirely. Adam spotted it on `gitops-k8s-team-a2!2109`: 5d 2h open, 3h 12m draft, 4d 7h turnaround,
+which does not look like it subtracts. It did (47.1 = 43.9 + 3.2 + 0) and two things made it
+unreadable: a **day here is nine hours**, not 24, and the formatter *floored* the remainder, losing up
+to 59 minutes a cell. Minutes are now carried at every tier so the identity holds exactly, it is stated in the caption, the
+nine-hour day is stated with it, and every cell keeps its exact decimal figure on hover.
+
+### To review
+
+Outside the sum, and on the same clock: the wait until the first review signal. Three signals, earliest
+wins — a **comment**, an **approval**, or the **merge itself** where neither exists, because an MR from
+outside PE cannot be merged by its requester, so the merge is PE's review action. A self-merge is not a
+signal on its own.
+
+**A zero here is real, and unexplained it reads as broken.** Of merge requests since June, 57.4%
+produce a real elapsed figure, **31.6% were reviewed outside working hours** so no business time
+elapsed, and **11.1% were reviewed before the author marked the MR ready** so no waiting time preceded
+the review at all. `gitops-k8s-team-a2!2109` is the second kind: opened Wed 17:40, approved Wed 18:39,
+marked ready Thu 11:07 — approved while still a draft, in the evening.
+
+So the cell names which zero it is, `pre-ready` or `off-hours`, and every cell names the signal that
+counted on hover. The panel note breaks the total down the same way — of 63 merge requests, 52 by
+approval, 5 by comment, 6 by the merge alone — because "all 63 were reviewed" invites disbelief
+otherwise, and it is worth being able to see that only 6 rest on the weakest signal.
 
 ## Visual hierarchy
 
