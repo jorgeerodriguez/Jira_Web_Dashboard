@@ -128,6 +128,42 @@ The other dashboards were checked and do not have this problem: `intake`'s `.key
 7.99:1 and `delivery-forecast`'s `.k`/`.skey` are `--muted` at 4.78:1. Both pass, though the forecast
 links are dim enough to be worth revisiting.
 
+## The ready clock excludes red pipelines
+
+`ready → merged` counts the hours an MR was **offered for review and mergeable**. Two spans are cut
+out of it:
+
+| excluded | why |
+|---|---|
+| **draft** | the author has not asked for review yet, so nobody is waiting |
+| **red CI** | a failing pipeline blocks the merge whoever reviews it; the ball is with whoever pushes the fix |
+
+The red exclusion is universal rather than conditional on who authored the MR. The alternative was
+tempting — the clearest case is an outside author parking a broken MR while PE waits — but measured
+over the slowest merge requests it is not where the time is: **32%** of open hours on PE-authored ones
+were spent red against **4%** on externally-authored ones. The distribution is bimodal, not a smear:
+an MR is either red for essentially its whole life or never. `tf-gcp-edp-dev!180` sat red for 187.6 of
+187.7 hours across ten runs.
+
+Two consequences worth understanding:
+
+**It is interval arithmetic, not subtraction.** Draft and red overlap, so deducting red *hours* from
+the ready total double-counts and can drive an MR to zero. `subtract_spans` removes the overlap
+instead. There is a test for exactly this: 3h ready, 7h red, all of the red inside the draft window,
+answer still 3h.
+
+**Excluded is not hidden.** `red_hours` is reported on every row and shown as its own **Red CI** column
+in the drill-down, so an MR parked broken for days still says so instead of merely reporting a small
+number. Only `failed` stops the clock — a run still in flight is the normal state of a live MR.
+
+A pipeline fetch that fails leaves the MR with its **full** clock and no exclusion. That errs toward
+charging PE for time it may not owe, which is the safe direction: a network error must never quietly
+make a merge request look fast.
+
+This costs one API call per merge request and roughly doubles a full crawl, which already runs at
+about 0.75s/MR. `mr_pipelines` stores the raw results rather than a computed red total, so the clock
+can be retuned without re-crawling — the same reasoning as keeping MR descriptions verbatim.
+
 ## Inspecting an outlier
 
 **Slowest merge requests** under the MR turnaround chart is the drill-down behind the aggregates —

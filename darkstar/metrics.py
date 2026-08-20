@@ -124,36 +124,105 @@ SELF_SERVICE_EPOCH: datetime = (
 )
 
 
-def ready_hours(opened_at: datetime, merged_at: datetime,
-                events: list[tuple[str, datetime]]) -> float:
-    """Business hours the MR spent marked ready, i.e. actually waiting on PE.
+def ready_spans(opened_at: datetime, merged_at: datetime,
+                events: list[tuple[str, datetime]]) -> list[tuple[datetime, datetime]]:
+    """The intervals an MR spent marked ready, i.e. actually offered for review.
 
     An MR sitting in draft is not waiting on anyone -- the author is still working. Measuring from
-    `opened_at` charged that time to review: on the 20 slowest MRs, 67% of all attributed hours
-    were draft time, and one 612-hour MR was marked ready 15 minutes before it merged.
+    `opened_at` charged that time to review: on the 20 slowest MRs, 67% of all attributed hours were
+    draft time, and one 612-hour MR was marked ready 15 minutes before it merged.
 
     The clock starts ready and stops on every "draft", restarting on every "ready", so an MR that
-    toggles repeatedly accrues only its ready spells. An MR whose first event is "ready" was opened
-    as a draft, so the clock does not start until then.
+    toggles repeatedly yields one span per ready spell. An MR whose first event is "ready" was opened
+    as a draft, so no span starts until then.
     """
     toggles = [(kind, when) for kind, when in events if kind in ("ready", "draft")]
     if not toggles:
-        return business_hours_between(opened_at, merged_at)
+        return [(opened_at, merged_at)]
 
-    total = 0.0
+    spans: list[tuple[datetime, datetime]] = []
     is_ready = toggles[0][0] != "ready"   # first event "ready" => it was a draft before that
     spell_start = opened_at
     for kind, when in toggles:
         moment = min(max(when, opened_at), merged_at)
         if is_ready and kind == "draft":
-            total += business_hours_between(spell_start, moment)
+            spans.append((spell_start, moment))
             is_ready = False
         elif not is_ready and kind == "ready":
             spell_start = moment
             is_ready = True
     if is_ready:
-        total += business_hours_between(spell_start, merged_at)
-    return total
+        spans.append((spell_start, merged_at))
+    return spans
+
+
+def subtract_spans(spans: list[tuple[datetime, datetime]],
+                   holes: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    """`spans` with every part that overlaps a hole removed, in order.
+
+    Written as interval arithmetic rather than "subtract the hole hours from the total" because the
+    two overlap only partly: a pipeline can go red while the MR is in draft, and that time must not be
+    deducted twice.
+    """
+    if not holes:
+        return list(spans)
+    ordered = sorted(holes)
+    result: list[tuple[datetime, datetime]] = []
+    for start, end in spans:
+        cursor = start
+        for hole_start, hole_end in ordered:
+            if hole_end <= cursor or hole_start >= end:
+                continue
+            if hole_start > cursor:
+                result.append((cursor, hole_start))
+            cursor = max(cursor, hole_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            result.append((cursor, end))
+    return result
+
+
+def ready_hours(opened_at: datetime, merged_at: datetime,
+                events: list[tuple[str, datetime]],
+                red_spans: list[tuple[datetime, datetime]]) -> float:
+    """Business hours an MR was ready for review AND its pipeline was not failing.
+
+    Red time is excluded because a broken pipeline is not PE being slow to review: the merge request
+    cannot be merged whoever looks at it, and the ball is with whoever pushes the fix. Measured over
+    the slowest merge requests, 32% of open hours on PE-authored ones and 4% on externally-authored
+    ones were spent red, so leaving it in badly skews the figure it is meant to report.
+
+    Excluded, not hidden -- `red_hours` is reported beside this so a merge request parked broken for
+    days still shows why, rather than simply reporting a small number.
+    """
+    return sum(business_hours_between(start, end)
+               for start, end in subtract_spans(ready_spans(opened_at, merged_at, events), red_spans))
+
+
+def red_spans(pipeline_events: list[tuple[str, datetime]], opened_at: datetime,
+              merged_at: datetime) -> list[tuple[datetime, datetime]]:
+    """Intervals where the newest pipeline result was a failure, clipped to the MR's life.
+
+    A pipeline's status holds until the next one reports, so a failure at 10:00 followed by a success
+    at 15:00 makes 10:00-15:00 red. Statuses other than "failed" simply end a red interval; a run that
+    is still going is not a failure.
+    """
+    ordered = sorted(pipeline_events, key=lambda event: event[1])
+    spans: list[tuple[datetime, datetime]] = []
+    red_from: datetime | None = None
+    for status, when in ordered:
+        moment = min(max(when, opened_at), merged_at)
+        if status == "failed":
+            if red_from is None:
+                red_from = moment
+        elif red_from is not None:
+            if moment > red_from:
+                spans.append((red_from, moment))
+            red_from = None
+    if red_from is not None and merged_at > red_from:
+        spans.append((red_from, merged_at))
+    return spans
 
 
 def business_date(when: datetime) -> date:

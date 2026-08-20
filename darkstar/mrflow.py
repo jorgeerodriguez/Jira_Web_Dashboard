@@ -44,6 +44,7 @@ from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
     business_hours_between,
+    red_spans,
     pctile,
     ready_hours,
     window_start,
@@ -158,6 +159,12 @@ def mr_turnaround_report(
         ).fetchall():
             paths_by_mr.setdefault(mr_id, []).append(path)
 
+    pipelines_by_mr: dict[int, list[tuple[str, datetime]]] = {}
+    for mr_id, status, happened_at in connection.execute(
+        "SELECT mr_id, status, happened_at FROM mr_pipelines ORDER BY mr_id, seq"
+    ).fetchall():
+        pipelines_by_mr.setdefault(mr_id, []).append((status, happened_at))
+
     events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
     for mr_id, kind, happened_at in connection.execute(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
@@ -199,7 +206,11 @@ def mr_turnaround_report(
         elif environment != _ALL_ENVIRONMENTS and env != environment:
             continue
         events = events_by_mr.get(mr_id, [])
-        hours = ready_hours(opened_at, merged_at, events)
+        # Red time is not PE being slow to review: the MR cannot merge whoever looks at it, and the
+        # ball is with whoever pushes the fix. Excluded from the clock, reported beside it.
+        reds = red_spans(pipelines_by_mr.get(mr_id, []), opened_at, merged_at)
+        red = sum(business_hours_between(start, end) for start, end in reds)
+        hours = ready_hours(opened_at, merged_at, events, reds)
         # merged_by holds a GitLab username; account_id is the Jira accountId for roster members,
         # so compare on the username the ingest attributed the MR under where it has one.
         # An unknown merger counts as a self-merge: absence of evidence is not review.
@@ -207,7 +218,8 @@ def mr_turnaround_report(
         review_at = first_review_at(events, merged_at, author_is_merger)
         if review_at is not None:
             reviewed += 1
-            review_waits.append(ready_hours(opened_at, min(review_at, merged_at), events))
+            review_waits.append(
+                ready_hours(opened_at, min(review_at, merged_at), events, reds))
         # Per-MR detail for the drill-down. `open_hours` is the whole span in business hours and
         # `ready_hours` only the spells it was marked ready, so the gap between them IS the draft
         # time -- which is the usual answer to "why was this open for days". On the 20 slowest MRs
@@ -222,6 +234,7 @@ def mr_turnaround_report(
             "merged": merged_at.isoformat(sep=" ", timespec="minutes"),
             "open_hours": round(business_hours_between(opened_at, merged_at), 1),
             "ready_hours": round(hours, 1),
+            "red_hours": round(red, 1),
             "first_review_hours": (round(review_waits[-1], 1) if review_at is not None else None),
             "environment": env,
         })

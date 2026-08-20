@@ -50,6 +50,7 @@ from darkstar.metrics import (
     DELIVERY_TYPES,
     SELF_SERVICE_EPOCH,
     business_hours_between,
+    red_spans,
     business_date,
     business_month,
     choose_grain,
@@ -320,6 +321,12 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
     # Per-issue-key MR info: bucket (from the MR's pe:<skill> label) + review turnaround, keyed by
     # every issue the MR implements (see _mr_issue_keys). First MR with a recognized bucket / valid
     # times wins.
+    pipelines_by_mr: dict[int, list[tuple[str, datetime]]] = {}
+    for mr_id, status, happened_at in connection.execute(
+        "SELECT mr_id, status, happened_at FROM mr_pipelines ORDER BY mr_id, seq"
+    ).fetchall():
+        pipelines_by_mr.setdefault(mr_id, []).append((status, happened_at))
+
     events_by_mr: dict[int, list[tuple[str, datetime]]] = {}
     for mr_id, kind, happened_at in connection.execute(
         "SELECT mr_id, kind, happened_at FROM mr_events ORDER BY mr_id, seq"
@@ -352,12 +359,14 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
         }
         if opened_at and merged_at:
             events = events_by_mr.get(mr_id, [])
-            entry["review_hours"] = ready_hours(opened_at, merged_at, events)
+            # A failing pipeline blocks the merge whoever reviews it, so it is not review time.
+            reds = red_spans(pipelines_by_mr.get(mr_id, []), opened_at, merged_at)
+            entry["review_hours"] = ready_hours(opened_at, merged_at, events, reds)
             author_is_merger = (not merged_by) or merged_by == author_account_id
             review_at = first_review_at(events, merged_at, author_is_merger)
             if review_at is not None:
                 entry["first_review_hours"] = ready_hours(
-                    opened_at, min(review_at, merged_at), events)
+                    opened_at, min(review_at, merged_at), events, reds)
         mr_signals[ref] = entry
         # A branch is generated from a convention; a title is typed by a person. They are recorded
         # separately so the weaker one can be reported as weaker, per Adam's ranking.

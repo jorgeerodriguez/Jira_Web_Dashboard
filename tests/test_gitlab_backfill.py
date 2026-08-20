@@ -133,3 +133,41 @@ def test_the_ingest_stores_the_branch_gitlab_reports(monkeypatch):
     stored = conn.execute("SELECT title, source_branch FROM merge_requests WHERE id = 501").fetchone()
     assert stored is not None, "the MR should have been ingested at all"
     assert stored[1] == "DEVOPS-9426-rotate-certs", "the branch GitLab reported must be stored"
+
+
+def test_the_ingest_stores_pipeline_results(monkeypatch):
+    """Without them no red time is ever excluded, and every panel still looks plausible.
+
+    Nothing else in the suite reaches _sync_scopes, so the pipeline fetch could be dropped entirely
+    and the only symptom would be turnaround figures quietly inflated by time nobody was waiting on.
+    """
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    api_mr = {
+        "id": 601, "iid": 4, "title": "DEVOPS-1 thing", "source_branch": "DEVOPS-1",
+        "description": "", "labels": [], "web_url": "u",
+        "created_at": "2026-08-03T15:00:00.000Z", "merged_at": "2026-08-04T17:00:00.000Z",
+        "author": {"username": "audacy-ben.bonora"}, "merged_by": {"username": "x"},
+        "project_id": 99, "references": {"full": "audacy-inc/devops/x!4"},
+    }
+    pipelines = [
+        {"status": "failed", "updated_at": "2026-08-03T17:00:00.000Z"},
+        {"status": "success", "updated_at": "2026-08-04T16:00:00.000Z"},
+    ]
+    monkeypatch.setattr(gitlab_ingest, "_token", lambda: "t")
+    monkeypatch.setattr(gitlab_ingest, "_merged_mrs", lambda session, scope, iso: [api_mr])
+    monkeypatch.setattr(gitlab_ingest, "_changed_paths", lambda session, pid, iid: [])
+    monkeypatch.setattr(gitlab_ingest, "_mr_notes", lambda session, pid, iid: [])
+    monkeypatch.setattr(gitlab_ingest, "_project_path", lambda mr: "audacy-inc/devops/x")
+
+    class _Response:
+        def raise_for_status(self): pass
+        def json(self): return pipelines
+
+    monkeypatch.setattr(gitlab_ingest.requests.Session, "get",
+                        lambda self, url, **kw: _Response())
+    gitlab_ingest._sync_scopes(conn, datetime(2026, 7, 1), (1,), (), {})
+
+    stored = conn.execute(
+        "SELECT status FROM mr_pipelines WHERE mr_id = 601 ORDER BY seq").fetchall()
+    assert [row[0] for row in stored] == ["failed", "success"], "both results must be stored"
