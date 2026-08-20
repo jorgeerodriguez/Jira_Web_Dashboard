@@ -39,7 +39,12 @@ from datetime import datetime
 
 import duckdb
 
-from darkstar.gitlab_domains import MIXED_ENVIRONMENT, OTHER_ENVIRONMENT, environment_of
+from darkstar.gitlab_domains import (
+    MIXED_ENVIRONMENT,
+    OTHER_ENVIRONMENT,
+    environment_of,
+    is_self_service_mr,
+)
 from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
@@ -210,15 +215,24 @@ def mr_turnaround_report(
     by_source: dict[str, int] = {}
     mixed = 0
     slowest: list[dict] = []
+    not_self_service = 0
     for (mr_id, account_id, project_path, opened_at, merged_at, merged_by, iid, title,
-         web_url) in connection.execute(
+         web_url, description, mr_labels) in connection.execute(
         "SELECT id, author_account_id, project_path, opened_at, merged_at, merged_by, iid, title, "
-        "web_url FROM merge_requests WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) "
-        "AND opened_at IS NOT NULL",
+        "web_url, description, labels FROM merge_requests "
+        "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
         [since, until, until],
     ).fetchall():
         name = names.get(account_id)
         if name is None or name in hidden or not _matches(name, name_filter):
+            continue
+        # This page exists to score how well self-service is working, so ordinary PE work is out of
+        # scope. Unscoped, the panel was 71% unrelated merge requests -- only 29% of 1,571 carried an
+        # agent footer and 20% a pe:* label -- and engineers with no access to the skills at all
+        # showed turnaround figures on it. Counted rather than silently dropped, so a thin panel reads
+        # as "scoped" and not as "the team delivered little".
+        if not is_self_service_mr(description, mr_labels):
+            not_self_service += 1
             continue
         env = environment_of(project_path, paths_by_mr.get(mr_id, []))
         if env == MIXED_ENVIRONMENT:
@@ -319,6 +333,9 @@ def mr_turnaround_report(
         "environment": environment,
         "crawl": crawl_state(connection, roster),
         "mixed": mixed,
+        # Merge requests by tracked authors carrying neither an agent footer nor a pe:* label, so
+        # excluded from this page by scope. Reported for the same reason every other omission is.
+        "not_self_service": not_self_service,
         "incomplete": int(incomplete or 0),
         # Slowest first, because the question this list answers is always about an outlier. Each row
         # carries both clocks: open_hours is the whole span, ready_hours only the ready spells, so

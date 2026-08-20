@@ -43,6 +43,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 
+from darkstar.gitlab_domains import has_agent_footer as _domain_footer
 from darkstar.mrflow import first_review_at
 from darkstar.metrics import (
     BUSINESS_HOURS_PER_DAY,
@@ -77,10 +78,6 @@ _SELF_SERVICE_JIRA_LABELS: frozenset[str] = frozenset({"ai-generated", "self-ser
 # The MR-description footer. Present on 521 of 2477 crawled MRs against 288 for the pe:* label, and
 # it predates the labels by two months. Matches the emoji and :robot: variants alike, plus the
 # trailing Anthropic co-author trailer.
-_AGENT_FOOTER_RE = re.compile(
-    r"generated\s+with\s+\[?claude\s+code|authored-by:\s*claude|claude\.com/claude-code",
-    re.IGNORECASE,
-)
 # The same footer usually names the originating skill: "Generated with Claude Code via
 # /iac-request" or "... via /audacy-platform-engineering:iac-request".
 _FOOTER_SKILL_RE = re.compile(
@@ -239,8 +236,12 @@ def _is_self_service_issue(labels: list[str]) -> bool:
 
 
 def has_agent_footer(description: str) -> bool:
-    """True iff an MR description carries the skills' "Generated with Claude Code" footer."""
-    return bool(_AGENT_FOOTER_RE.search(description or ""))
+    """True iff an MR description carries the skills' "Generated with Claude Code" footer.
+
+    Delegates to gitlab_domains so one regex serves the whole codebase: mrflow needs the same test
+    and slas already imports mrflow, so the pattern cannot live here.
+    """
+    return _domain_footer(description)
 
 
 def _footer_bucket(description: str) -> str | None:

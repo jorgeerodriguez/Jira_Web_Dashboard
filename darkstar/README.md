@@ -133,6 +133,29 @@ The other dashboards were checked and do not have this problem: `intake`'s `.key
 7.99:1 and `delivery-forecast`'s `.k`/`.skey` are `--muted` at 4.78:1. Both pass, though the forecast
 links are dim enough to be worth revisiting.
 
+## MR turnaround is scoped to self-service
+
+This page scores how well self-service is working, so the MR panels count only merge requests carrying
+an **agent footer** or a **`pe:*` label**. Two independent signals, because each alone misses a slice:
+the footer predates the labels by two months, and the labels catch skill work whose description was
+rewritten.
+
+Unscoped the panel was **71% unrelated work** — of 1,571 merge requests merged since June 2026 only 29%
+carried a footer and 20% a label — and engineers with no access to the skills at all appeared in it with
+turnaround figures, 70 and 51 merge requests each. That is what gave it away.
+
+The excluded count is reported under the table, so a thin panel reads as *scoped* rather than as "the
+team delivered little". On the current store that is 382 measured against 324 excluded.
+
+The exclusions are genuine misses of the signal, not detection failures: **zero** excluded merge
+requests contain "generated with" or "co-authored" in any form. 56% have no description at all, which
+cannot carry a footer — and a skill-produced MR always has one, because the skill writes it. 36% carry a
+`DEVOPS-` key in the title or branch: real ticket work, just not skill-produced, and correctly out of
+scope here.
+
+The residual risk is a skill-written MR whose description was squashed or rewritten and which never got
+a label. There is no third signal to measure that against, so it is stated rather than estimated.
+
 ## The ready clock excludes red pipelines
 
 `ready → merged` counts the hours an MR was **offered for review and mergeable**. Two spans are cut

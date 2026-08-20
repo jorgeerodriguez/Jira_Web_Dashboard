@@ -361,6 +361,11 @@
   <section class="panel wide">
   <h2>MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
+  <p><b>Scoped to self-service.</b> Only merge requests carrying an agent footer or a
+  <b>pe:*</b> label are counted here, because this page scores how well self-service is working.
+  Unscoped it was 71% ordinary PE work — of 1,571 merged since June only 29% carried a footer and 20%
+  a label — and engineers with no access to the skills appeared in it with turnaround figures. The
+  count excluded by scope is shown below the table.</p>
   <p><b>Ready → merged</b> counts only time an MR was offered for review <i>and</i> mergeable. Two
   spans are excluded: <b>draft</b>, where the author has not asked yet, and <b>red CI</b>, where a
   failing pipeline blocks the merge whoever reviews it. Measured across the slowest merge requests,
@@ -410,6 +415,7 @@
   </div>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <p class="filter-hint" id="scopeNote"></p>
   <p class="filter-hint" id="hiddenNote"></p>
   <p class="filter-hint" id="crawlNote"></p>
   <p class="filter-hint" id="reviewNote"></p>
@@ -763,6 +769,12 @@ async function reload(){
   renderSlowest(mrData);
   renderHidden();
   document.getElementById("windowNote").textContent = mrData.window_start;
+  const scoped = mrData.not_self_service
+    ? `<b>${mrData.not_self_service}</b> merge request${mrData.not_self_service === 1 ? "" : "s"} `+
+      `by these authors carried no agent footer and no <b>pe:*</b> label, so they are out of scope `+
+      `for this page and excluded above.`
+    : "";
+  document.getElementById("scopeNote").innerHTML = scoped;
   const crawl = mrData.crawl || {};
   document.getElementById("crawlNote").innerHTML = crawl.pending
     ? `<b>A GitLab crawl is still owed.</b> An author you added is not in the table yet because `+
