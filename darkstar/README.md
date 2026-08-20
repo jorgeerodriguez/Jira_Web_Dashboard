@@ -164,6 +164,14 @@ This costs one API call per merge request and roughly doubles a full crawl, whic
 about 0.75s/MR. `mr_pipelines` stores the raw results rather than a computed red total, so the clock
 can be retuned without re-crawling — the same reasoning as keeping MR descriptions verbatim.
 
+`pipelines_fetched_at` on `merge_requests` is what makes the history fill at all. `_needs_backfill`
+keys on it, so a store whose merge requests predate the table forces one full re-crawl; without it the
+five other markers were already satisfied, the crawl stayed incremental forever, and the 2,649 stored
+merge requests would never have been read for pipelines — the Red CI column permanently empty and red
+time excluded from nothing. It has to be a **column**, not "has rows in `mr_pipelines`": an MR can
+legitimately have zero pipelines (two of a 20-MR sample did), so absence of rows cannot mean "not yet
+crawled" or the backfill never terminates. Exactly why `events_fetched_at` exists.
+
 ## Inspecting an outlier
 
 **Slowest merge requests** under the MR turnaround chart is the drill-down behind the aggregates —

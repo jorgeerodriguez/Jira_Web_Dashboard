@@ -128,6 +128,10 @@ class MergeRequestRow:
     # branch DEVOPS-10117 is the only reliable link. Measured across 5,878 merged MRs, adding the
     # branch as a linking signal lifted the share of requests reachable from an MR by ~16% relative.
     source_branch: str
+    # When this MR's pipelines were last read. Distinct from having any pipeline rows: an MR can
+    # legitimately have none (two in a 20-MR sample had zero), so absence of rows cannot mean "not yet
+    # crawled" or the backfill would never terminate. Exactly the reason events_fetched_at exists.
+    pipelines_fetched_at: datetime | None
 
 
 # Column order shared by the issues DDL and the upsert statement; keep in sync with IssueRow.
@@ -142,7 +146,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 _MR_COLUMNS: tuple[str, ...] = (
     "id", "project_path", "iid", "author_account_id", "title",
     "opened_at", "merged_at", "labels", "web_url", "merged_by", "fetched_at", "events_fetched_at",
-    "description", "source_branch",
+    "description", "source_branch", "pipelines_fetched_at",
 )
 
 _SCHEMA_SQL: str = """
@@ -203,7 +207,8 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     fetched_at        TIMESTAMP NOT NULL,
     events_fetched_at TIMESTAMP,
     description       VARCHAR,
-    source_branch     VARCHAR
+    source_branch     VARCHAR,
+    pipelines_fetched_at TIMESTAMP
 );
 
 -- Pipeline results over an MR's life. Stored as events rather than as a computed red total so the
@@ -258,6 +263,8 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
+    connection.execute(
+        "ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS pipelines_fetched_at TIMESTAMP")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")

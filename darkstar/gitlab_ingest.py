@@ -220,7 +220,8 @@ def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> 
     missing = connection.execute(
         "SELECT count(*) FROM merge_requests "
         "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
-        "  OR events_fetched_at IS NULL OR merged_by IS NULL OR source_branch IS NULL)", [cutoff]
+        "  OR events_fetched_at IS NULL OR merged_by IS NULL OR source_branch IS NULL "
+        "  OR pipelines_fetched_at IS NULL)", [cutoff]
     ).fetchone()[0]
     if missing:
         logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
@@ -341,6 +342,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 events_fetched_at=fetched_at,
                 description=mr.get("description") or "",
                 source_branch=mr.get("source_branch") or "",
+                pipelines_fetched_at=fetched_at,
             ))
             file_rows.extend((mr_id, path) for path in paths)
 

@@ -32,7 +32,7 @@ def _mr(id, key, labels, opened, merged, description="", branch=""):
         title=f"{key} do a thing", opened_at=opened, merged_at=merged, labels=labels,
         web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0),
         events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description=description,
-        source_branch=branch)
+        source_branch=branch, pipelines_fetched_at=datetime(2026, 7, 28, 0, 0, 0))
 
 
 def _seed():
@@ -577,7 +577,8 @@ def test_a_branch_name_links_a_request_whose_title_omits_the_prefix():
         merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=["pe:iac-request"], web_url="u",
         merged_by="", fetched_at=datetime(2026, 8, 6, 0, 0, 0),
         events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="",
-        source_branch="DEVOPS-10117-flux-reader")])
+        source_branch="DEVOPS-10117-flux-reader",
+        pipelines_fetched_at=datetime(2026, 8, 6, 0, 0, 0))])
     row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
     assert row["agent"] == 1, "the branch is the only signal, and it must count"
     assert row["human"] == 0
@@ -656,7 +657,8 @@ def test_a_humanised_branch_title_still_links():
             title=title, opened_at=datetime(2026, 8, 5, 16, 0, 0),
             merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=["pe:iac-request"], web_url="u",
             merged_by="", fetched_at=datetime(2026, 8, 6, 0, 0, 0),
-            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch="")])
+            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch="",
+            pipelines_fetched_at=datetime(2026, 8, 6, 0, 0, 0))])
     row = _report(conn, datetime(2026, 8, 18, 12, 0, 0))["origin"][0]
     assert (row["agent"], row["human"]) == (2, 0), "both humanised titles must link"
 
@@ -679,7 +681,8 @@ def test_the_merge_request_field_outranks_a_branch_pointing_elsewhere():
             author_account_id="a", title="unrelated title", opened_at=datetime(2026, 8, 5, 16, 0, 0),
             merged_at=datetime(2026, 8, 5, 17, 0, 0), labels=[], web_url="u", merged_by="",
             fetched_at=datetime(2026, 8, 6, 0, 0, 0),
-            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch=""),
+            events_fetched_at=datetime(2026, 8, 6, 0, 0, 0), description="", source_branch="",
+            pipelines_fetched_at=datetime(2026, 8, 6, 0, 0, 0)),
         # a different MR whose branch names the same request, and which IS labelled
         _mr(2, "other", ["pe:iac-request"], datetime(2026, 8, 5, 16, 0, 0),
             datetime(2026, 8, 5, 17, 0, 0), branch="DEVOPS-500-something"),

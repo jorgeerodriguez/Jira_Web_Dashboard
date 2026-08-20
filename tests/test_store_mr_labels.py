@@ -11,6 +11,7 @@ def test_mr_labels_round_trip():
         title="DEVOPS-1 add module", opened_at=datetime(2026, 7, 20, 9, 0, 0),
         merged_at=datetime(2026, 7, 21, 9, 0, 0), labels=["pe:k8s-request"],
         web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0),
-        events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description="", source_branch="")])
+        events_fetched_at=datetime(2026, 7, 28, 0, 0, 0), description="", source_branch="",
+        pipelines_fetched_at=datetime(2026, 7, 28, 0, 0, 0))])
     labels = conn.execute("SELECT labels FROM merge_requests WHERE id = 1").fetchone()[0]
     assert labels == ["pe:k8s-request"]
