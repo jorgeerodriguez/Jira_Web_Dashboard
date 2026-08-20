@@ -475,14 +475,14 @@ function durText(hours){
   const mins = Math.round(hours * 60);
   if(mins === 0) return hours > 0 ? "<1m" : "0m";
   if(mins < 60) return `${mins}m`;
+  // Minutes are carried at every tier, so the columns reconcile EXACTLY rather than approximately.
+  // Dropping them cost up to 59 minutes a cell and made a decomposition that balances perfectly look
+  // an hour out: 43.9h + 3.2h really is 47.1h, but "4d 7h" + "3h 12m" beside "5d 2h" does not read
+  // that way. Full precision is verbose and unambiguous, and unambiguous was the point.
   const h = Math.floor(mins / 60), m = mins % 60;
   if(h < HOURS_PER_DAY) return m ? `${h}h ${m}m` : `${h}h`;
-  // Round to the nearest hour past a working day rather than flooring. Flooring lost up to 59
-  // minutes per cell, which made a decomposition that balances exactly look ~an hour out: 43.9h
-  // rendered "4d 7h" beside a 3h 12m draft and a 47.1h total.
-  const rounded = Math.round(mins / 60);
-  const d = Math.floor(rounded / HOURS_PER_DAY), rh = rounded % HOURS_PER_DAY;
-  return rh ? `${d}d ${rh}h` : `${d}d`;
+  const d = Math.floor(h / HOURS_PER_DAY), rh = h % HOURS_PER_DAY;
+  return [`${d}d`, rh ? `${rh}h` : "", m ? `${m}m` : ""].filter(Boolean).join(" ");
 }
 
 /* Renders a duration with the decimal-hour figure kept on hover, so nothing is lost. */
@@ -861,7 +861,9 @@ function renderSlowest(d){
   // Read right to left this is a decomposition: Open, less the time it sat in Draft, less the time
   // a red pipeline blocked it, leaves the Turnaround. Read left to right it is the answer first and
   // then what was taken out to get there. The three right-hand spans sum to Open.
-  const head = `<thead><tr><th>MR</th><th>Author</th><th>Turnaround</th>`+
+  const head = `<thead><tr><th>MR</th><th>Author</th>`+
+               `<th title="Business hours the MR was approvable — marked ready with a green `+
+               `pipeline — and therefore waiting on PE to merge it">Mergeable&nbsp;&rarr;&nbsp;merged</th>`+
                `<th>Red CI</th><th>Draft</th><th>Open</th>`+
                `<th>To review</th><th>Merged</th></tr></thead>`;
   const body = page.map((r, i) => {
@@ -883,13 +885,15 @@ function renderSlowest(d){
   }).join("");
   document.getElementById("slowestTbl").innerHTML = head +
     `<tbody>${body || '<tr><td colspan="8" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
-    `<caption><b>Turnaround + Red CI + Draft = Open.</b> Read right to left: <b>Open</b> is the whole `+
+    `<caption><b>Mergeable&nbsp;&rarr;&nbsp;merged + Red CI + Draft = Open</b>, exactly. `+
+    `<b>Mergeable&nbsp;&rarr;&nbsp;merged</b> is the one number to read: the business hours this MR `+
+    `was approvable — marked ready, pipeline green — and so waiting on PE to merge it. `+
+    `Read right to left: <b>Open</b> is the whole `+
     `span, less the <b>Draft</b> time the author had not offered it for review, less the <b>Red CI</b> `+
-    `time a failing pipeline blocked the merge whoever looked at it, leaves the <b>Turnaround</b> — `+
-    `the figure the table and chart above are built from. A large number in either middle column `+
-    `means the wait was never on review. A working day is <b>9 hours</b>, so a day here is not 24; `+
-    `hover any cell for the exact decimal figure. Same author and environment filters as above.`+
-    `</caption>`;
+    `time a failing pipeline blocked the merge whoever looked at it, leaves the time that was `+
+    `genuinely on PE. A large number in either middle column means the wait was never on review. `+
+    `A working day is <b>9 hours</b>, so a day here is not 24; hover any cell for the exact decimal. `+
+    `Same author and environment filters as above.</caption>`;
 
   const shownFrom = rows.length ? from + 1 : 0;
   const shownTo = Math.min(from + SLOWEST_PER_PAGE, rows.length);

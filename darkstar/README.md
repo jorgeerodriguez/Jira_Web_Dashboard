@@ -106,7 +106,12 @@ tiers because the values span four orders of magnitude:
 | under a minute | `<1m` | 0.001h |
 | under an hour | minutes | 0.1h → `6m` |
 | under a working day | hours and minutes | 2.9h → `2h 54m` |
-| a working day or more | working days and hours | 174.8h → `19d 3h` |
+| a working day or more | days, hours **and minutes** | 43.9h → `4d 7h 54m` |
+
+Minutes are carried at **every** tier. Dropping them past a day looked tidier and cost up to 59
+minutes a cell, which made a decomposition that balances perfectly look an hour out — `4d 7h` beside a
+`3h 12m` draft and a `5d 2h` total does not read as arithmetic even though `43.9 + 3.2 = 47.1` exactly.
+Verbose and unambiguous beats tidy here, because the columns are meant to be checked.
 
 **A day here is nine hours, not twenty-four**, because that is what the clock counts — so 45h renders
 as `5d`, a working week, and rendering it as `1d 21h` would be a different kind of wrong. The decimal
@@ -185,23 +190,28 @@ to be honest about. It is also what let the server cap rise from 25 to 100 — a
 unreachable rather than merely unlisted. New data resets to page one, so a narrower filter cannot
 leave you on a page that no longer exists.
 
-The duration columns are a **decomposition**, not a list:
+The duration columns are a **decomposition**, not a list, and they reconcile exactly:
 
 ```
-Turnaround  +  Red CI  +  Draft  =  Open
+Mergeable → merged  +  Red CI  +  Draft  =  Open
+      4d 7h 54m     +   0m     + 3h 12m  =  5d 2h 6m
 ```
+
+**`Mergeable → merged` is the one number to read.** It is the business hours the merge request was
+approvable — marked ready, pipeline green — and therefore waiting on PE to merge it. The header says so
+rather than making the reader infer it from a word like "turnaround".
 
 Read right to left that is the whole span less the time the author had not offered it for review, less
-the time a failing pipeline blocked the merge whoever looked at it, leaving the turnaround. Read left
-to right it is the answer first and then what was taken out to reach it. A large number in either
+the time a failing pipeline blocked the merge whoever looked at it, leaving the time that was
+genuinely on PE. Read left to right it is the answer first and then what was taken out to reach it. A large number in either
 middle column means the wait was never on review, which is the question this panel gets asked.
 
-The order was originally Turnaround, Open, Draft, Red CI — a flat list that hid the arithmetic
+The order was originally Ready→merged, Open, Draft, Red CI — a flat list that hid the arithmetic
 entirely. Adam spotted it on `gitops-k8s-team-a2!2109`: 5d 2h open, 3h 12m draft, 4d 7h turnaround,
 which does not look like it subtracts. It did (47.1 = 43.9 + 3.2 + 0) and two things made it
 unreadable: a **day here is nine hours**, not 24, and the formatter *floored* the remainder, losing up
-to 59 minutes a cell. The day tier now rounds, the identity is stated in the caption, the nine-hour day
-is stated with it, and every cell keeps its exact decimal figure on hover.
+to 59 minutes a cell. Minutes are now carried at every tier so the identity holds exactly, it is stated in the caption, the
+nine-hour day is stated with it, and every cell keeps its exact decimal figure on hover.
 
 `To review` sits outside the sum: it is the wait for the first human comment, on the same clock.
 
