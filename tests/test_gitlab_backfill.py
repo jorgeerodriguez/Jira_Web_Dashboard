@@ -55,7 +55,7 @@ def _mr_row(id, opened, merged):
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="")
+        source_branch="", pipelines_fetched_at=_NOW)
 
 
 def test_in_window_row_missing_opened_at_forces_a_full_crawl():
@@ -100,8 +100,11 @@ def test_rows_missing_a_source_branch_force_one_full_recrawl(tmp_path):
     assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True
 
     conn.execute("UPDATE merge_requests SET source_branch = 'DEVOPS-1-thing'")
+    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True, \
+        "still owed: pipelines_fetched_at is its own marker and remains NULL"
+    conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
     assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
-        "and the forcing has to stop once the column is filled, or every crawl is a full one"
+        "and the forcing has to stop once every marker is filled, or every crawl is a full one"
 
 
 def test_the_ingest_stores_the_branch_gitlab_reports(monkeypatch):
@@ -171,3 +174,35 @@ def test_the_ingest_stores_pipeline_results(monkeypatch):
     stored = conn.execute(
         "SELECT status FROM mr_pipelines WHERE mr_id = 601 ORDER BY seq").fetchall()
     assert [row[0] for row in stored] == ["failed", "success"], "both results must be stored"
+    # And the marker must be stamped, or _needs_backfill forces a full crawl on every cycle forever.
+    marker = conn.execute(
+        "SELECT pipelines_fetched_at FROM merge_requests WHERE id = 601").fetchone()[0]
+    assert marker is not None, "reading pipelines must record that they were read"
+    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
+        "a crawled MR must not still look owed"
+
+
+def test_rows_with_no_pipeline_history_force_one_full_recrawl():
+    """The Red CI clock is dead data without this, and nothing would ever say so.
+
+    !17 added mr_pipelines but not a marker, so `_needs_backfill` stayed False once the other five
+    columns were filled and the crawl remained incremental forever. The 2,649 merge requests already
+    stored would never have been read for pipelines, so red time would have been excluded for nothing
+    and the Red CI column would have sat empty permanently.
+
+    The marker is a column, not "has rows": an MR can legitimately have zero pipelines — two of a
+    20-MR sample did — so absence of rows cannot mean "not yet crawled".
+    """
+    conn = duckdb.connect(":memory:")
+    store.initialize_schema(conn)
+    conn.execute(
+        "INSERT INTO merge_requests (id, project_path, iid, author_account_id, title, opened_at, "
+        "merged_at, labels, web_url, merged_by, fetched_at, events_fetched_at, description, "
+        "source_branch) VALUES (1, 'p', 1, 'a', 'DEVOPS-1 x', '2026-08-01 16:00:00', "
+        "'2026-08-02 17:00:00', [], 'u', '', '2026-08-03 00:00:00', '2026-08-03 00:00:00', '', 'b')")
+    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True
+
+    # marked as read, with no pipeline rows at all — a legitimate outcome
+    conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
+    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
+        "an MR with genuinely no pipelines must not re-trigger the crawl forever"
