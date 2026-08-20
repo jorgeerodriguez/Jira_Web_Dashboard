@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -36,6 +37,10 @@ logger = logging.getLogger("darkstar.ingest")
 # not ours, so a watermark used as an exact floor can miss an issue updated in the same minute the
 # previous sync finished.
 _WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
+
+# Splits a JQL statement from its trailing ORDER BY, which cannot appear inside
+# parentheses when the statement is wrapped as a sub-clause.
+_ORDER_BY_RE: re.Pattern[str] = re.compile(r"\s+ORDER\s+BY\s+", re.IGNORECASE)
 
 _FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
 _PAGE_SIZE: int = 100
@@ -203,11 +208,16 @@ def fetch_dev_panel_keys(jira: JIRA, scope_jql: str, predicate: str) -> set[str]
     index agreed with the panel, and one query is cheaper than a field nobody can trust.
 
     Jira rejects two development[] clauses OR'd together, so each predicate is asked separately.
+
+    The scope's ORDER BY is stripped before wrapping. Every JQL this module builds ends with one, and
+    `(... ORDER BY updated ASC) AND development[...]` is a 400 -- an ORDER BY cannot sit inside
+    parentheses. Ordering is meaningless here anyway; only the set of keys is wanted.
     """
+    scope = _ORDER_BY_RE.split(scope_jql)[0].strip()
     keys: set[str] = set()
     next_token: str | None = None
     while True:
-        kwargs = {"jql_str": f"({scope_jql}) AND {predicate}", "maxResults": _PAGE_SIZE,
+        kwargs = {"jql_str": f"({scope}) AND {predicate}", "maxResults": _PAGE_SIZE,
                   "fields": "key"}
         if next_token:
             kwargs["nextPageToken"] = next_token

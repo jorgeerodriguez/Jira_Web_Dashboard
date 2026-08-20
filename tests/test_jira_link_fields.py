@@ -7,6 +7,7 @@ what these tests pin.
 """
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import duckdb
 
@@ -229,3 +230,49 @@ def test_the_watermark_margin_overlaps_rather_than_butting_up():
     exact = datetime(2026, 8, 19, 21, 21)
     jql = ingest.build_incremental_jql(exact, ZoneInfo("UTC"))
     assert '"2026-08-19 21:19"' in jql, "two minutes of overlap"
+
+
+class _RecordingJira:
+    """Captures the JQL actually sent, which is the thing that was wrong in production."""
+
+    def __init__(self):
+        self.jql: list[str] = []
+
+    def enhanced_search_issues(self, jql_str, **kwargs):
+        self.jql.append(jql_str)
+        return []
+
+
+def test_the_dev_panel_query_strips_the_scopes_order_by():
+    """Jira rejects an ORDER BY inside parentheses, and every JQL this module builds ends with one.
+
+    Shipped broken: `(project = DEVOPS AND updated >= "..." ORDER BY updated ASC) AND
+    development[pullrequests].all > 0` returned HTTP 400 "Expecting ')' but got 'ORDER'", which killed
+    the whole sync. Every test that touched the sync had stubbed fetch_dev_panel_keys, so none of them
+    ever built this string.
+    """
+    jira = _RecordingJira()
+    scope = ingest.build_incremental_jql(datetime(2026, 8, 19, 21, 21), ZoneInfo("UTC"))
+    assert "ORDER BY" in scope, "the scope really does carry one"
+
+    ingest.fetch_dev_panel_keys(jira, scope, "development[pullrequests].all > 0")
+
+    sent = jira.jql[0]
+    assert "ORDER BY" not in sent, f"ORDER BY must not survive into the sub-clause: {sent}"
+    assert sent == ('(project = DEVOPS AND updated >= "2026-08-19 21:19") '
+                    'AND development[pullrequests].all > 0')
+
+
+def test_every_scope_this_module_builds_survives_being_wrapped():
+    """The full crawl, the incremental slice and the backfill all end with ORDER BY."""
+    scopes = [
+        ingest._FULL_JQL,
+        ingest.build_incremental_jql(datetime(2026, 8, 19, 21, 21), ZoneInfo("UTC")),
+        'project = DEVOPS AND created >= "2026-03-01" ORDER BY created ASC',
+    ]
+    for scope in scopes:
+        jira = _RecordingJira()
+        ingest.fetch_dev_panel_keys(jira, scope, "development[commits].all > 0")
+        sent = jira.jql[0]
+        assert "ORDER BY" not in sent, sent
+        assert sent.startswith("(project = DEVOPS") and sent.endswith("development[commits].all > 0")
