@@ -37,6 +37,11 @@ logger = logging.getLogger("darkstar.ingest")
 # previous sync finished.
 _WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
 
+_FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
+_PAGE_SIZE: int = 100
+_RETRY_ATTEMPTS: int = 3
+_RETRY_BACKOFF_SECONDS: float = 2.0
+
 # Only the fields the dashboards need (keeps the payload small).
 _ISSUE_FIELDS: str = (
     "summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,"
