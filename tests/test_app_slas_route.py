@@ -4,7 +4,6 @@ from datetime import datetime
 import duckdb
 from fastapi.testclient import TestClient
 from darkstar import app as app_module, store
-from darkstar.roster import TRACKED_MR_AUTHORS
 
 
 def test_api_slas_returns_report(monkeypatch, tmp_path):
@@ -63,13 +62,15 @@ def test_a_malformed_since_is_rejected_not_ignored(monkeypatch, tmp_path):
     assert res.status_code == 400 and "YYYY-MM-DD" in res.json()["detail"]
 
 
-def test_adding_an_author_bumps_the_roster_version(monkeypatch, tmp_path):
-    """The version, not the watermark, is what forces the next crawl to cover the full window."""
+def test_adding_an_author_records_them_without_promising_a_crawl(monkeypatch, tmp_path):
+    """The version still moves, but it no longer means "a full crawl is owed"."""
     client, conn = _client(monkeypatch, tmp_path, "a.duckdb")
     monkeypatch.setattr(app_module, "_run_gitlab_cycle", lambda: None)
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person",
                                                "display_name": "New Person"})
-    assert res.status_code == 200 and res.json()["recrawl_queued"] is True
+    assert res.status_code == 200
+    assert res.json()["recrawl_queued"] is False, \
+        "the page must not tell the user to wait for data that is already there"
     assert client.get("/api/mr-authors").json()["version"] == 1
 
 
@@ -131,11 +132,13 @@ def test_user_search_says_so_when_it_cannot_reach_gitlab(monkeypatch, tmp_path):
     assert "GITLAB_TOKEN" in res.json()["detail"]
 
 
-def test_adding_an_author_starts_the_crawl_immediately(monkeypatch, tmp_path):
-    """Clearing the watermark alone left the author invisible for up to a poll interval.
+def test_adding_an_author_does_not_start_a_crawl(monkeypatch, tmp_path):
+    """Adding an author is a labelling change now, and must not cost a six-month re-read.
 
-    The GitLab poller runs every 86400s by default, so "queued a full re-crawl" meant the added
-    author's merge requests might not appear for a day - indistinguishable from the add failing.
+    This used to start a full crawl on the spot, because the ingest filtered to a known author list
+    and a new name genuinely had no history in the store. The ingest now keeps every author, so the
+    merge requests are already there and the only thing an add changes is who this table names.
+    Thousands of API calls to change a label is the kind of cost nobody sees and everybody pays.
     """
     client, conn = _client(monkeypatch, tmp_path, "r.duckdb")
     store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
@@ -144,8 +147,9 @@ def test_adding_an_author_starts_the_crawl_immediately(monkeypatch, tmp_path):
 
     res = client.post("/api/mr-authors", json={"op": "add", "username": "audacy-new.person",
                                                "display_name": "New Person"})
-    assert res.status_code == 200 and res.json()["recrawl_queued"] is True
-    assert calls == ["crawled"]                          # the crawl already ran
+    assert res.status_code == 200
+    assert calls == [], "an add must not trigger a crawl"
+    assert store.get_gitlab_watermark(conn) is not None, "nor invalidate the watermark"
 
 
 def test_hiding_an_author_does_not_start_a_crawl(monkeypatch, tmp_path):
@@ -334,7 +338,7 @@ def test_api_adoption_returns_report(monkeypatch, tmp_path):
     res = client.get("/api/adoption")
     assert res.status_code == 200
     body = res.json()
-    assert {"share", "periods", "pe", "non_pe", "tracked_non_pe_authors"} <= set(body)
+    assert {"share", "periods", "pe", "non_pe", "by_author", "robots"} <= set(body)
 
 
 def test_api_adoption_rejects_an_unknown_grain(monkeypatch, tmp_path):
@@ -362,11 +366,11 @@ def test_api_adoption_ignores_the_author_filter_the_table_below_uses(monkeypatch
     store.initialize_schema(conn)
     store.upsert_merge_requests(conn, [store.MergeRequestRow(
         id=1, project_path="audacy-inc/devops/x", iid=1,
-        author_account_id=TRACKED_MR_AUTHORS["audacy-ben.bonora"], title="MR",
+        author_account_id="audacy-ben.bonora", title="MR",
         opened_at=datetime(2026, 8, 10, 16, 0), merged_at=datetime(2026, 8, 10, 17, 0),
         labels=["pe:iac-request"], web_url="u", merged_by="", fetched_at=datetime(2026, 8, 10, 17, 0),
         events_fetched_at=None, description="", source_branch="",
-        pipelines_fetched_at=None)])
+        pipelines_fetched_at=None, author_name=None)])
     monkeypatch.setenv("DARKSTAR_DB_PATH", str(tmp_path / "t5.duckdb"))
     monkeypatch.setattr(app_module, "_db_handle", conn, raising=False)
     client = TestClient(app_module.app)

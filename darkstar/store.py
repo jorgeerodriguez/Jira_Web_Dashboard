@@ -132,6 +132,9 @@ class MergeRequestRow:
     # legitimately have none (two in a 20-MR sample had zero), so absence of rows cannot mean "not yet
     # crawled" or the backfill would never terminate. Exactly the reason events_fetched_at exists.
     pipelines_fetched_at: datetime | None
+    # GitLab's display name for the author. The ingest no longer filters to a known roster, so most
+    # authors arrive with no entry anywhere to name them; without this the only label is a username.
+    author_name: str | None
 
 
 # Column order shared by the issues DDL and the upsert statement; keep in sync with IssueRow.
@@ -146,7 +149,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
 _MR_COLUMNS: tuple[str, ...] = (
     "id", "project_path", "iid", "author_account_id", "title",
     "opened_at", "merged_at", "labels", "web_url", "merged_by", "fetched_at", "events_fetched_at",
-    "description", "source_branch", "pipelines_fetched_at",
+    "description", "source_branch", "pipelines_fetched_at", "author_name",
 )
 
 _SCHEMA_SQL: str = """
@@ -208,7 +211,8 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     events_fetched_at TIMESTAMP,
     description       VARCHAR,
     source_branch     VARCHAR,
-    pipelines_fetched_at TIMESTAMP
+    pipelines_fetched_at TIMESTAMP,
+    author_name      VARCHAR
 );
 
 -- Pipeline results over an MR's life. Stored as events rather than as a computed red total so the
@@ -265,6 +269,7 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
     connection.execute(
         "ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS pipelines_fetched_at TIMESTAMP")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS author_name VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")

@@ -353,9 +353,6 @@ def set_mr_authors(payload: dict, background: BackgroundTasks) -> JSONResponse:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if needs_recrawl:
-        # mr_authors.apply already bumped the roster version, which is what forces the next crawl
-        # to be a full one — including the crawl started here, and any crawl that follows it if a
-        # second author is added while this one runs. The watermark is deliberately left alone.
-        background.add_task(_recrawl_now)
-        logger.info("mr-author %s added; roster version bumped and a full re-crawl started", username)
-    return JSONResponse({**roster, "recrawl_queued": needs_recrawl})
+        logger.info("mr-author %s added; no crawl needed, their merge requests are already ingested",
+                    username)
+    return JSONResponse({**roster, "recrawl_queued": False})

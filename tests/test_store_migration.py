@@ -41,7 +41,7 @@ def test_initialize_schema_migrates_existing_merge_requests_table():
         opened_at=datetime(2026, 7, 20, 9, 0, 0), merged_at=datetime(2026, 7, 21, 9, 0, 0),
         labels=["pe:iac-request"], web_url="u", merged_by="", fetched_at=datetime(2026, 7, 28, 0, 0, 0), events_fetched_at=datetime(2026, 7, 28, 0, 0, 0),
         description="", source_branch="",
-        pipelines_fetched_at=datetime(2026, 7, 28, 0, 0, 0))])
+        pipelines_fetched_at=datetime(2026, 7, 28, 0, 0, 0), author_name=None)])
     assert conn.execute("SELECT labels FROM merge_requests WHERE id = 2").fetchone()[0] == ["pe:iac-request"]
 
 

@@ -38,17 +38,23 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   Engineering, as one number plus a stacked chart per period. This is the adoption question: not how
   fast PE is, but whether authoring has moved off PE at all. PE means a member of `roster.ROSTER`;
   every other attributed author counts as outside it, tested on the Jira accountId rather than the
-  GitLab username, because `TRACKED_MR_AUTHORS` carry the same `audacy-` prefix roster members do and
-  a username test would put them on the wrong side of the only comparison the panel makes.
+  GitLab username: outside contributors carry the same `audacy-` prefix roster members do, so a
+  username test would put them on the wrong side of the only comparison the panel makes.
 
-  **Every non-PE figure on the page is a floor, not a count.** The GitLab crawl attributes a fixed
-  author list (`MR_AUTHORS` plus whatever the lead added at runtime) and discards everyone else
-  before they reach the store, so self-service work by an unlisted author cannot appear. A hand audit
-  of 2026-07-21 → 2026-08-20 found 10 non-PE authors where the ingest attributes 2, and 26% non-PE
-  authorship where this panel would show roughly 15%. The panel states that bound itself, in the
-  hero sub-caption and again in the author panel, so a narrow number is not read as a small one.
-  Widening it is an ingest change — drop the `attributable` filter in `gitlab_ingest._sync_scopes` —
-  not a query change.
+  **This is a census.** The ingest attributes every author it finds rather than a curated list, so an
+  author appears because they merged self-service work — not because somebody remembered to add them.
+
+  It was not always so, and the old behaviour is worth recording because it was invisible: the crawl
+  used to keep only authors in a hardcoded list plus whatever the lead had added at runtime, and
+  *discarded everyone else at crawl time*. A contributor nobody had listed could not appear on any
+  panel at any lookback, and nothing anywhere said so. A hand audit of 2026-07-21 → 2026-08-20 found
+  10 non-PE authors where the store held 2. Widening the lookback was the natural thing to try and it
+  could never have worked.
+
+  The one exclusion is `roster.NON_HUMAN_GROUP_MEMBERS`, applied at **report** time so the decision is
+  reversible without a re-crawl, and reported on the panel rather than applied quietly. Service
+  accounts carry agent footers by their nature, so `DevOps-agent` would otherwise top an adoption
+  chart.
 
   Unlike everything below it, this panel **ignores the author and environment filters and the roster's
   `hidden` list**. Those curate a table; an author hidden from a table has not stopped adopting, and
@@ -74,16 +80,18 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   the comparison that makes the non-PE bars legible: how much of this tooling PE runs itself. Beside
   it, median and p90 open→merged for the non-PE population.
 
-  Paged five at a time once there are more than five authors, using the same pager as the slowest-MR
+  Paged **twenty at a time**, using the same pager as the slowest-MR
   list (selectable size, remembered in `localStorage`, anchor preserved when the size changes). Bars
   are scaled to the tallest across **all** pages, never the tallest on the current page — rescaling
   per page would draw a 3-MR author the same height as a 96-MR one and make the pager actively
   misleading.
 
-  Capped at the **top 20 authors by volume**, because past twenty columns the chart stops having a
-  readable shape. Whoever falls off is counted, not dropped: the caption names how many more merged
-  self-service work in the window. A truncated chart with no caption reads as the whole population,
-  and "nobody else is self-serving" is the opposite of what it actually means.
+  The payload is capped at the top 100 authors by volume. Readability is the page size's job now
+  that the chart pages, so the cap only bounds the payload over an open population — holding it at
+  the page size would put everyone past the twentieth author permanently out of reach, since no page
+  could scroll to them. Whoever still falls off is counted, not dropped: the caption names how many
+  more merged self-service work in the window, because a truncated chart with no caption reads as
+  the whole population.
 
   The scorecard's distinct-author count stays non-PE only, because it sits beside the non-PE
   headline and would stop matching it otherwise.
@@ -214,6 +222,38 @@ still describe real members, so a stale entry cannot quietly write off a real pe
 
 The live checks skip without `GITLAB_TOKEN`; two structural checks (no overlap between the lists,
 every username resolvable to a `ROSTER` name) need no network and always run.
+
+## The MR-turnaround table is opt-in
+
+It lists **only authors added to the view**, and starts empty. The adoption panels above already
+answer "who is using this" for everyone; this table is a focused comparison you populate on purpose.
+Defaulting it to the whole population stopped making sense once the ingest became a census — it
+would tip the entire organisation into a table meant for a handful of people.
+
+`hidden` (the row `×`) is a **view control and nothing else**. It removes the row and leaves every
+number where it was. It used to drop hidden work from the team total too, reasoning that a total
+should describe what is on screen; the opposite is more defensible, because tidying a table is not a
+claim about the world, and a total that shrinks when you hide a row cannot be safely read twice.
+
+**Team (all authors)** therefore means all authors: every self-service author in the window,
+regardless of who is in the view, who is hidden, or what the search box says.
+
+One trap worth knowing: `added` is keyed by GitLab **username**, while a roster member's merge
+requests are stored under their Jira **accountId**. The view membership test maps one to the other,
+because comparing them directly would silently never match and adding a PE member would look like a
+dead button with no error anywhere.
+
+## Adding an author is a labelling change
+
+Adding a name through the MR-turnaround panel decides who **that table** lists. It no longer fetches
+anything: the crawl keeps every author, so their merge requests are already in the store, and the
+add path deliberately starts no crawl and leaves the watermark alone.
+
+A roster edit also no longer forces the next crawl to be a full one. It used to, because a new name
+genuinely had no history — and a crawl started on every add, which is thousands of API calls to
+change a label. `_needs_backfill` is now the only thing that forces a full crawl, which is why
+`tests/test_recrawl_race.py` asserts that trigger still fires: dropping the roster trigger must not
+disarm the one beside it.
 
 ## The author table pages at five
 
@@ -755,9 +795,10 @@ Jira fallback cannot separate k8s from iac (`pe-tf-module` issues also carry `pe
 whatever sets it, tolerated in `_MR_BUCKET_BY_LABEL` but still worth fixing at the source.
 
 MR turnaround needs `merge_requests.opened_at` and `description` on every in-window row. Because
-the GitLab crawl is incremental, rows written before those columns existed — and MRs by an author added to `MR_AUTHORS`
-later — cannot be repaired by an incremental pull, so `gitlab_ingest._needs_backfill` forces **one**
-full-window re-crawl while any in-window row is missing either, then returns to incremental.
+the GitLab crawl is incremental, rows written before those columns existed cannot be repaired by an
+incremental pull, so `gitlab_ingest._needs_backfill` forces **one** full-window re-crawl while any
+in-window row is missing any marker, then returns to incremental. `author_name` is a marker for the
+same reason, and it is what makes the census crawl happen at all on the release that introduced it.
 Descriptions are stored verbatim (~1.3 MiB for the whole corpus) so the footer heuristics can be
 retuned without another crawl.
 
@@ -774,10 +815,15 @@ retuned without another crawl.
   **incremental** pulls of only the MRs updated since the last sync (watermark in `gitlab_sync_meta`,
   minus a small margin), from the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few
   tracked repos that live outside those groups (`_PE_PROJECT_IDS`, e.g. `tf-org`/`tf-org-v2` under
-  secops). Each MR is
-  attributed to a tracked author (`roster.MR_AUTHORS` = the PE roster plus `TRACKED_MR_AUTHORS`,
-  non-roster contributors whose MR turnaround is measured but who must stay out of the roster-gated
-  velocity/capacity/SME views) and its changed file paths stored;
+  secops).
+
+  **Every author is ingested**; nobody is filtered out at crawl time. A roster member is keyed by
+  their Jira accountId so their history stays one series, and everyone else by their GitLab username
+  — which is what keeps them out of the roster-gated velocity/capacity/SME views, since those look
+  `ROSTER` up by accountId and a username never matches. `author_name` carries GitLab's display name
+  so a contributor no list has heard of can still be labelled on a chart, and doubles as the backfill
+  marker that makes the widened crawl actually take effect on deploy. Changed file paths are stored
+  alongside;
   `gitlab_domains.py` tags each MR to expertise domains from its **repo + changed file paths**
   (not the diff contents or the MR description) — a far denser signal than Jira titles.
 - **App** (`app.py`) — read-only `/api/*` endpoints, `/health`, and the one write path,

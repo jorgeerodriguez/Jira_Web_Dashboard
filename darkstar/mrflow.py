@@ -1,8 +1,8 @@
 """Merge-request turnaround per author: opened -> merged.
 
 Reads only from the store. Answers "how fast does an author's work actually land" for every
-author the GitLab ingest attributes (roster.MR_AUTHORS = the PE roster plus the non-roster
-contributors in roster.TRACKED_MR_AUTHORS), over the trailing window of MRs *merged* in it.
+author added to the view, over the trailing window of MRs *merged* in it. The ingest attributes
+every author it finds; this view lists only the ones somebody asked for.
 
 Reported in business hours only (Mon-Fri 08:00-17:00 US/Pacific, holidays excluded) -- one
 standard clock shared with the SLA view, because Audacy's users are overwhelmingly North American
@@ -59,7 +59,7 @@ from darkstar.metrics import (
     window_start,
 )
 from darkstar import store
-from darkstar.roster import MR_AUTHOR_NAMES, ROSTER, TRACKED_MR_AUTHORS
+from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, ROSTER
 
 _WINDOW_MONTHS: int = 6
 # The drill-down list is for inspecting outliers, not for browsing the whole window: a 6-month
@@ -67,11 +67,12 @@ _WINDOW_MONTHS: int = 6
 # than the list quietly ending. The page flips through it ten at a time, which is why the cap can be
 # this generous -- at 25 the tail was unreachable rather than merely unlisted.
 _SLOWEST_LIMIT: int = 100
-# The author chart is read by shape, and past twenty columns it stops having one. Whoever falls off
-# is counted rather than dropped, so a truncated chart cannot read as the whole population.
-_AUTHOR_LIMIT: int = 20
+# Readability is the page size's job now that the chart pages; this cap only bounds the payload over
+# an open population. Keeping it equal to the page size would put every author past the twentieth
+# permanently out of reach, since no page could ever scroll to them. Whoever still falls off is
+# counted rather than dropped, so a truncated chart cannot read as the whole population.
+_AUTHOR_LIMIT: int = 100
 _ALL_ENVIRONMENTS: str = "all"
-_TRACKED_ACCOUNTS: frozenset[str] = frozenset(TRACKED_MR_AUTHORS.values())
 
 
 def _stats(business: list[float]) -> dict:
@@ -170,8 +171,14 @@ def mr_turnaround_report(
     so the totals always describe what is actually on screen. `name_filter` is a list of lowercase
     substrings; empty means no filtering.
     """
-    names = {**MR_AUTHOR_NAMES, **{username: name for username, name in (roster.get("added") or {}).items()}}
+    names = {**ROSTER, **{username: name for username, name in (roster.get("added") or {}).items()}}
     hidden = set(roster.get("hidden") or [])
+    # This table is an opt-in comparison, not a census -- the adoption panels above answer "who is
+    # using this". Nobody is listed until somebody is added, so the table starts empty rather than
+    # dumping every author the crawl found. `in_view` is who has been asked for; `hidden` then takes
+    # names back out of the display WITHOUT touching any total, because the x button is a view
+    # control and a number that moves when you tidy a table cannot be quoted.
+    in_view = {GITLAB_USERNAMES.get(username, username) for username in (roster.get("added") or {})}
     # One pass, two cuts: keep (account, merged-day, hours) per MR so the per-author and per-day
     # views are guaranteed to describe exactly the same population.
     # Changed paths are only needed where the repo name says nothing, so fetch them for that
@@ -214,6 +221,7 @@ def mr_turnaround_report(
     ).fetchone()
 
     business_by_account: dict[str, list[float]] = {}
+    team_business: list[float] = []
     by_day: dict[str, list[float]] = {}
     by_author_day: dict[str, dict[str, list[float]]] = {}
     review_waits: list[float] = []
@@ -229,9 +237,11 @@ def mr_turnaround_report(
         "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
         [since, until, until],
     ).fetchall():
-        name = names.get(account_id)
-        if name is None or name in hidden or not _matches(name, name_filter):
-            continue
+        name = names.get(account_id) or account_id
+        # Every in-window MR reaches the accumulators; only the per-author view is narrowed, so the
+        # team totals below describe the whole self-service population however the view is curated.
+        in_this_view = (account_id in in_view and name not in hidden
+                        and _matches(name, name_filter))
         # This page exists to score how well self-service is working, so ordinary PE work is out of
         # scope. Unscoped, the panel was 71% unrelated merge requests -- only 29% of 1,571 carried an
         # agent footer and 20% a pe:* label -- and engineers with no access to the skills at all
@@ -291,6 +301,9 @@ def mr_turnaround_report(
             "environment": env,
         })
         day = business_date(merged_at).isoformat()
+        team_business.append(hours)
+        if not in_this_view:
+            continue
         business_by_account.setdefault(account_id, []).append(hours)
         by_day.setdefault(day, []).append(hours)
         by_author_day.setdefault(name, {}).setdefault(day, []).append(hours)
@@ -299,13 +312,13 @@ def mr_turnaround_report(
     slowest_rows = slowest[:_SLOWEST_LIMIT]
 
     authors: list[dict] = []
-    shown_business: list[float] = []
     for account_id, business in business_by_account.items():
-        name = names[account_id]   # unmapped/hidden/filtered-out accounts never got this far
-        shown_business.extend(business)
+        name = names.get(account_id) or account_id
         authors.append({
             "name": name,
-            "tracked": account_id in _TRACKED_ACCOUNTS or account_id in (roster.get("added") or {}),
+            # Marks a row as coming from outside PE. Derived from roster membership rather than a
+            # hand-kept list of "known outsiders", which is the thing this page stopped needing.
+            "tracked": not is_pe_author(account_id),
             **_stats(business),
         })
     # Slowest first on the standard clock, matching the lead-time dashboard; no median sorts last.
@@ -330,7 +343,9 @@ def mr_turnaround_report(
         "daily": daily,
         "series": series,
         "days": sorted(by_day),
-        "team": _stats(shown_business),
+        # Every self-service author in the window, not just the ones in view. "Team (all authors)"
+        # has to mean that, or hiding a name silently rewrites the figure beside it.
+        "team": _stats(team_business),
         "window_months": _WINDOW_MONTHS,
         "window_start": since.date().isoformat(),
         "added": roster.get("added") or {},
@@ -366,10 +381,10 @@ def is_pe_author(account_id: str) -> bool:
     """True when this MR author is a Platform Engineering roster member.
 
     ROSTER is keyed by Jira accountId and holds PE only. Everyone else the ingest attributes is by
-    construction outside PE: TRACKED_MR_AUTHORS carries non-roster accountIds, and authors added
-    through the dashboard are keyed by their GitLab username precisely so they cannot collide with
-    a roster accountId. So one membership test splits all three populations, and it splits them on
-    identity rather than on a username spelling that varies between `audacy-` and bare accounts.
+    construction outside PE: the ingest keys anyone who is not a roster member by their GitLab
+    username, which can never collide with a Jira accountId. So one membership test splits the two
+    populations, on identity rather than on a username spelling that varies between `audacy-` and
+    bare accounts.
     """
     return account_id in ROSTER
 
@@ -384,6 +399,10 @@ def adoption_report(
     the population is the same self-service MRs the turnaround panel measures, cut by author
     affiliation instead of by person.
 
+    This is a census, not a sample. The ingest attributes every author it finds rather than a curated
+    list, so an author appears here because they merged self-service work -- not because somebody
+    remembered to add them. Service accounts are the one exclusion, counted and reported.
+
     Deliberately ignores the editable roster's "hidden" list and the author/environment filters that
     shape the table further down the page. Those curate a table; an author hidden from a table has
     not stopped adopting the tooling. The two therefore disagree on totals by design, and the panel
@@ -395,7 +414,7 @@ def adoption_report(
     mr_events does not store (it records that an independent approval happened, not by whom).
     """
     grain = grain or choose_grain(since, until, now)
-    names = {**MR_AUTHOR_NAMES,
+    names = {**ROSTER,
              **{username: name for username, name in (roster.get("added") or {}).items()}}
 
     approved: set[int] = set()
@@ -409,27 +428,32 @@ def adoption_report(
     counts: dict[str, int] = {"pe": 0, "non_pe": 0}
     independent: dict[str, int] = {"pe": 0, "non_pe": 0}
     by_author: dict[str, dict] = {}
-    unattributed = 0
-    for mr_id, account_id, opened_at, merged_at, description, mr_labels in connection.execute(
-        "SELECT id, author_account_id, opened_at, merged_at, description, labels "
+    robots = 0
+    for (mr_id, account_id, author_name, opened_at, merged_at, description,
+         mr_labels) in connection.execute(
+        "SELECT id, author_account_id, author_name, opened_at, merged_at, description, labels "
         "FROM merge_requests "
         "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
         [since, until, until],
     ).fetchall():
         if not is_self_service_mr(description, mr_labels):
             continue
-        name = names.get(account_id)
-        if name is None:
-            # Attributed to nobody the roster knows. Counted, never folded into either side: a
-            # nameless author cannot be called PE or non-PE without inventing an affiliation.
-            unattributed += 1
+        if account_id in NON_HUMAN_GROUP_MEMBERS:
+            # Service accounts carry agent footers by their nature, so they would otherwise dominate
+            # the very population this panel measures. Counted and stated, never silently dropped --
+            # and excluded at report time, so the decision stays reversible without a re-crawl.
+            robots += 1
             continue
+        # Keyed on the account, never the display name: two people can share a name, and merging
+        # them was harmless only while the roster was a curated list of sixteen.
+        name = names.get(account_id) or author_name or account_id
         side = "pe" if is_pe_author(account_id) else "non_pe"
         counts[side] += 1
         per_side[side].append(business_hours_between(opened_at, merged_at))
         if mr_id in approved:
             independent[side] += 1
-        author = by_author.setdefault(name, {"name": name, "mrs": 0, "pe": side == "pe"})
+        author = by_author.setdefault(
+            account_id, {"name": name, "mrs": 0, "pe": side == "pe"})
         author["mrs"] += 1
         bucket = buckets.setdefault(period_start(merged_at, grain), {"pe": 0, "non_pe": 0})
         bucket[side] += 1
@@ -464,12 +488,9 @@ def adoption_report(
         "authors_omitted": max(0, len(_ranked_authors) - _AUTHOR_LIMIT),
         "authors_total": len(_ranked_authors),
         "turnaround": {"pe": _stats(per_side["pe"]), "non_pe": _stats(per_side["non_pe"])},
-        # Authorship outside PE is only visible for authors the ingest attributes, and it attributes
-        # a fixed list. Every non-PE figure above is therefore a floor: real adoption by anyone not
-        # on this list is discarded at crawl time and cannot be counted here. Reported as a number
-        # so the panel can state the bound instead of implying completeness.
-        "tracked_non_pe_authors": len(set(TRACKED_MR_AUTHORS) | set(roster.get("added") or {})),
-        "unattributed": unattributed,
+        # Service accounts in the PE group, excluded from the population above. Stated rather than
+        # dropped: these carry agent footers by their nature and would otherwise read as adoption.
+        "robots": robots,
         # Named, not silently missing: both need an ingest change, not a query change.
         "unmeasurable": {
             "merge_rate": "the GitLab crawl fetches state=merged only, so MRs that never merged "

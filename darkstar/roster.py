@@ -59,24 +59,3 @@ NON_HUMAN_GROUP_MEMBERS: frozenset[str] = frozenset({
 
 # The GitLab group ROSTER is expected to mirror: audacy-inc/devops.
 PE_GROUP_ID: int = 115211004
-
-
-# GitLab contributors OUTSIDE the PE roster whose merge-request flow is still tracked.
-# Deliberately absent from ROSTER: velocity, capacity and the SME matrix count roster members
-# only, so adding them there would silently change those dashboards. This map exists purely so
-# the GitLab ingest stops discarding their MRs and the MR-turnaround view can name them.
-TRACKED_MR_AUTHORS: dict[str, str] = {
-    "audacy-ben.bonora":      "557058:db636519-8345-40f2-a3d6-ac816608b5e8",
-    "audacy-jeremy.williams": "61d4662c7aa7ac007029587f",
-}
-
-_TRACKED_MR_AUTHOR_NAMES: dict[str, str] = {
-    "557058:db636519-8345-40f2-a3d6-ac816608b5e8": "Ben Bonora",
-    "61d4662c7aa7ac007029587f":                    "Jeremy Williams",
-}
-
-# GitLab username -> Jira accountId for every author the MR ingest attributes (roster + tracked).
-MR_AUTHORS: dict[str, str] = {**GITLAB_USERNAMES, **TRACKED_MR_AUTHORS}
-
-# Jira accountId -> display name for every attributed MR author.
-MR_AUTHOR_NAMES: dict[str, str] = {**ROSTER, **_TRACKED_MR_AUTHOR_NAMES}
