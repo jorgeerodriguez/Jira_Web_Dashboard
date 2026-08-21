@@ -13,23 +13,25 @@ from datetime import datetime
 import duckdb
 
 from darkstar import mrflow, store
-from darkstar.roster import ROSTER, TRACKED_MR_AUTHORS
+from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, ROSTER
 
 _ADAM = "600ece193b1af000697f339d"
 _OMAR = "712020:58e4121c-dadd-4c34-99a9-92dc31ee039b"
-_BEN = TRACKED_MR_AUTHORS["audacy-ben.bonora"]
-_JEREMY = TRACKED_MR_AUTHORS["audacy-jeremy.williams"]
+# Two ordinary non-PE contributors. Nothing special about them any more: with the ingest keeping
+# every author, an outside contributor is just a GitLab username the store has never been told about.
+_BEN = "audacy-ben.bonora"
+_JEREMY = "audacy-jeremy.williams"
 _NOW = datetime(2026, 8, 19, 12, 0, 0)
 _SINCE = datetime(2026, 8, 3, 7, 0)
 
 
-def _mr(id, account_id, opened, merged, self_service=True):
+def _mr(id, account_id, opened, merged, self_service=True, author_name=None):
     return store.MergeRequestRow(
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged,
         labels=["pe:iac-request"] if self_service else [],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW)
+        source_branch="", pipelines_fetched_at=_NOW, author_name=author_name)
 
 
 def _seed(rows, events=None):
@@ -55,8 +57,10 @@ def test_the_pe_test_is_roster_membership_not_a_username_spelling():
     assert mrflow.is_pe_author(_ADAM) is True
     assert mrflow.is_pe_author(_BEN) is False
     assert mrflow.is_pe_author(_JEREMY) is False
-    for account_id in TRACKED_MR_AUTHORS.values():
-        assert account_id not in ROSTER
+    # And the test is structural, not a list of known outsiders: every PE username maps to an
+    # accountId in ROSTER, and a bare GitLab username can never be one.
+    for account_id in GITLAB_USERNAMES.values():
+        assert account_id in ROSTER
 
 
 def test_a_runtime_added_author_counts_as_non_pe():
@@ -166,18 +170,6 @@ def test_an_independent_approval_is_counted_per_side():
     assert report["non_pe"]["independent_approvals"] == 1
 
 
-def test_the_non_pe_figure_is_published_as_a_floor():
-    """Only attributed authors are visible, so the panel must be able to state its own bound.
-
-    A hand audit of the same window found 10 non-PE authors where the ingest attributes 2. Without
-    this number the panel cannot say which it is, and a reader compares 15% against a known 26% and
-    concludes the dashboard is broken rather than narrow.
-    """
-    conn = _seed([_mr(1, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0))])
-    report = _report(conn, roster={"added": {"audacy-marc.polidor": "Marc Polidor"}})
-    assert report["tracked_non_pe_authors"] == len(TRACKED_MR_AUTHORS) + 1
-
-
 def test_figures_the_store_cannot_support_are_named_not_approximated():
     """Merge rate and approver identity both need an ingest change; neither may be guessed at.
 
@@ -190,138 +182,59 @@ def test_figures_the_store_cannot_support_are_named_not_approximated():
     assert "not who" in report["unmeasurable"]["approver_identity"]
 
 
-def test_an_unattributable_author_joins_neither_side():
-    """An author the roster cannot name has no affiliation, and inventing one moves the headline."""
-    conn = _seed([_mr(1, "unknown-account-id", datetime(2026, 8, 10, 16, 0),
-                      datetime(2026, 8, 10, 17, 0))])
+def test_an_author_the_roster_has_never_heard_of_is_counted_and_named():
+    """The census case. Before, an unrostered author was set aside as unattributable; now they are
+    simply a non-PE author, named from the display name GitLab reported on their merge request.
+
+    This is the whole point of the change: adoption cannot be read off a list of people somebody
+    remembered to add, because the people worth discovering are exactly the ones not on it.
+    """
+    conn = _seed([_mr(1, "audacy-marc.polidor", datetime(2026, 8, 10, 16, 0),
+                      datetime(2026, 8, 10, 17, 0), author_name="Marc Polidor")])
     report = _report(conn)
-    assert report["total"] == 0
-    assert report["unattributed"] == 1
-    assert report["share"] is None
+    assert report["total"] == 1
+    assert report["non_pe"]["mrs"] == 1
+    assert report["by_author"] == [{"name": "Marc Polidor", "mrs": 1, "pe": False}]
 
 
-def test_the_share_is_computed_over_the_selected_window_only():
-    """The headline percentage must answer "in the window you picked", not "since records began".
-
-    A share that silently spans a fixed window while the chart beside it obeys the lookback is the
-    worst of both: the number looks responsive because the periods below it move, and it is not.
-    Here the two halves of the store have opposite authorship, so any window that leaked would show.
-    """
-    conn = _seed(
-        [_mr(i, _ADAM, datetime(2026, 8, 4, 16, 0), datetime(2026, 8, 4, 17, 0)) for i in range(1, 10)]
-        + [_mr(i, _BEN, datetime(2026, 8, 18, 16, 0), datetime(2026, 8, 18, 17, 0))
-           for i in range(10, 19)])
-    whole = mrflow.adoption_report(conn, datetime(2026, 8, 1, 7, 0), None, _NOW, None, {})
-    assert whole["total"] == 18 and whole["share"] == 0.5
-
-    # The same store, read through a lookback that starts after the PE-authored half.
-    recent = mrflow.adoption_report(conn, datetime(2026, 8, 17, 7, 0), None, _NOW, None, {})
-    assert recent["total"] == 9 and recent["share"] == 1.0
-    # A three-day lookback also coarsens differently: the grain follows the window, as everywhere
-    # else on the page, so the row is the merge day rather than the week containing it.
-    assert recent["grain"] == "day"
-    assert [p["period"] for p in recent["periods"]] == ["2026-08-18"]
-    assert whole["grain"] == "week"
-
-
-def test_an_mr_merged_exactly_at_the_upper_bound_is_excluded():
-    """`until` is exclusive everywhere else on the page, so two adjacent lookbacks cannot both claim
-    the same merge request. Tested ON the boundary: an MR merged a day later is excluded either way.
-    """
-    boundary = datetime(2026, 8, 17, 7, 0)
-    conn = _seed(
-        [_mr(1, _ADAM, datetime(2026, 8, 4, 16, 0), datetime(2026, 8, 4, 17, 0)),
-         _mr(2, _BEN, datetime(2026, 8, 17, 6, 0), boundary)])
-    bounded = mrflow.adoption_report(conn, datetime(2026, 8, 1, 7, 0), boundary, _NOW, None, {})
-    assert bounded["total"] == 1, "the MR merged at the bound belongs to the next window, not this one"
-    assert bounded["share"] == 0.0, "the only MR in range is PE's, so the non-PE share is a real zero"
-
-    # ...and the adjacent window does claim it, so no merge request falls between the two.
-    following = mrflow.adoption_report(conn, boundary, None, _NOW, None, {})
-    assert following["total"] == 1 and following["share"] == 1.0
-
-
-def test_the_author_breakdown_covers_everyone_flagged_by_side():
-    """"Who is self-serving" is not "who outside PE is self-serving" — PE's own use is most of it.
-
-    Restricting the breakdown to non-PE authors answered a narrower question than the panel asks,
-    and hid the comparison that makes the non-PE bars legible: how much of this tooling PE runs
-    itself. The flag is what lets one chart carry both without merging them into a single total.
+def test_two_authors_sharing_a_display_name_stay_separate():
+    """Keyed on the account, not the name. Merging them was harmless only while the population was
+    a curated list of sixteen; over an open population it silently fuses two people into one bar.
     """
     conn = _seed([
-        _mr(1, _ADAM, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
-        _mr(2, _ADAM, datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0)),
-        _mr(3, _ADAM, datetime(2026, 8, 12, 16, 0), datetime(2026, 8, 12, 17, 0)),
-        _mr(4, _OMAR, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
-        _mr(5, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
-        _mr(6, _BEN, datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0)),
+        _mr(1, "user-a", datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0), author_name="Alex Kim"),
+        _mr(2, "user-a", datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0), author_name="Alex Kim"),
+        _mr(3, "user-b", datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0), author_name="Alex Kim"),
     ])
     report = _report(conn)
-    assert report["by_author"] == [
-        {"name": "Adam", "mrs": 3, "pe": True},
-        {"name": "Ben Bonora", "mrs": 2, "pe": False},
-        {"name": "Omar", "mrs": 1, "pe": True},
-    ], "ordered by volume, and each row says which side it is on"
-    # The scorecard's distinct-author count still means non-PE only, or it would stop matching
-    # the non-PE headline it sits beside.
-    assert report["non_pe"]["authors"] == 1
+    assert len(report["by_author"]) == 2, "one bar per person, not one per name"
+    assert sorted(a["mrs"] for a in report["by_author"]) == [1, 2]
 
 
-def test_authors_are_ordered_by_volume_then_name():
-    """Tallest bar first, ties broken by name so the chart does not reshuffle between refreshes.
-
-    Omar sorts last alphabetically and first by volume, so this ordering holds under exactly one of
-    the two rules.
+def test_service_accounts_are_excluded_and_counted():
+    """Bots carry agent footers by their nature, so they enter the self-service population the
+    moment the ingest stops filtering authors -- and `DevOps-agent` topping an adoption chart is
+    both wrong and embarrassing. Excluded at report time so the call stays reversible, and reported
+    rather than silently dropped.
     """
-    conn = _seed(
-        [_mr(i, _OMAR, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)) for i in (1, 2, 3)]
-        + [_mr(4, _ADAM, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
-           _mr(5, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0))])
-    ordered = _report(conn)["by_author"]
-    assert [a["name"] for a in ordered] == ["Omar", "Adam", "Ben Bonora"]
-    assert [a["mrs"] for a in ordered] == [3, 1, 1]
-
-
-def test_the_floor_count_does_not_double_count_a_re_added_author():
-    """An author can sit in TRACKED_MR_AUTHORS and also be re-added through the dashboard.
-
-    Summing the two lists claims a wider net than is actually cast, which overstates the very bound
-    the panel exists to be honest about. Seen live: the roster carried `audacy-jeremy.williams` in
-    `added` while he was already tracked statically, and the panel reported 4 tracked non-PE authors
-    when only 3 distinct people were attributable.
-    """
-    roster = {"added": {"audacy-jeremy.williams": "Jeremy Williams",   # already in TRACKED
-                        "audacy-marc.polidor": "Marc Polidor"}}        # genuinely new
-    report = _report(_seed([]), roster=roster)
-    assert report["tracked_non_pe_authors"] == 3
-
-
-def test_the_author_chart_is_capped_and_says_who_fell_off():
-    """Past twenty columns the chart stops having a readable shape, so it truncates — and says so.
-
-    Silently showing the top twenty is the failure mode: a chart captioned nothing reads as the whole
-    population, and "nobody else is self-serving" is the opposite of what a truncated chart means.
-    """
-    added = {f"user-{i:02d}": f"User {i:02d}" for i in range(1, 31)}
-    rows, mr_id = [], 0
-    for author in range(1, 31):
-        for _ in range(author):
-            mr_id += 1
-            rows.append(_mr(mr_id, f"user-{author:02d}", datetime(2026, 8, 10, 16, 0),
-                            datetime(2026, 8, 10, 17, 0)))
-    report = _report(_seed(rows), roster={"added": added})
-    assert len(report["by_author"]) == 20
-    assert report["authors_total"] == 30
-    assert report["authors_omitted"] == 10
-    # The twenty kept are the twenty biggest: authors 30 down to 11, never 1-20 by name.
-    assert [a["name"] for a in report["by_author"]] == [f"User {i:02d}" for i in range(30, 10, -1)]
-    assert min(a["mrs"] for a in report["by_author"]) == 11
-
-
-def test_nothing_is_reported_as_omitted_when_everyone_fits():
-    """A count of zero omissions must be a real zero, or the caption cries wolf on every small window."""
-    conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
-                  _mr(2, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0))])
+    bot = sorted(NON_HUMAN_GROUP_MEMBERS)[0]
+    conn = _seed([
+        _mr(1, bot, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0), author_name="a bot"),
+        _mr(2, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0),
+            author_name="Ben Bonora"),
+    ])
     report = _report(conn)
-    assert report["authors_omitted"] == 0
-    assert report["authors_total"] == len(report["by_author"]) == 2
+    assert report["total"] == 1
+    assert report["robots"] == 1
+    assert [a["name"] for a in report["by_author"]] == ["Ben Bonora"]
+
+
+def test_an_author_with_no_display_name_anywhere_is_labelled_by_username():
+    """Better a username on the chart than a blank bar or a crash.
+
+    Some GitLab accounts have no display name set — two PE members are like this today — so the
+    fallback is a real case, not defensive padding.
+    """
+    conn = _seed([_mr(1, "audacy-zack.amadi", datetime(2026, 8, 10, 16, 0),
+                      datetime(2026, 8, 10, 17, 0), author_name=None)])
+    assert [a["name"] for a in _report(conn)["by_author"]] == ["audacy-zack.amadi"]

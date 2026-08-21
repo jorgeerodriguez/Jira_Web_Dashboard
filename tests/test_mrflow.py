@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 import duckdb
 
 from darkstar import mrflow, store
-from darkstar.roster import MR_AUTHORS, ROSTER, TRACKED_MR_AUTHORS
+from darkstar.roster import GITLAB_USERNAMES, ROSTER
 
 _ADAM = "600ece193b1af000697f339d"
-_BEN = TRACKED_MR_AUTHORS["audacy-ben.bonora"]
+_BEN = "audacy-ben.bonora"
 _NOW = datetime(2026, 8, 18, 12, 0, 0)
 
 
@@ -28,13 +28,25 @@ def _mr(id, account_id, opened, merged, self_service=True):
         title=f"MR {id}", opened_at=opened, merged_at=merged,
         labels=["pe:iac-request"] if self_service else [],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW)
+        source_branch="", pipelines_fetched_at=_NOW, author_name=None)
+
+
+_IN_VIEW: dict = {"audacy-adam.shero": "Adam", "audacy-ben.bonora": "Ben Bonora",
+                  "omar.saundersholiday": "Omar"}
 
 
 def _report(conn, roster=None, name_filter=None, environment="all"):
-    """mr_turnaround_report with the view's default window, empty roster, no filters."""
+    """mr_turnaround_report with the view's default window and the test authors opted in.
+
+    The table lists only authors added to the view, so a roster that opts nobody in yields no rows
+    at all -- correct, and useless for testing turnaround arithmetic. Curation itself is covered by
+    the tests at the end of this file.
+    """
+    merged = {"added": dict(_IN_VIEW), **(roster or {})}
+    if roster and "added" in roster:
+        merged["added"] = {**_IN_VIEW, **roster["added"]}
     return mrflow.mr_turnaround_report(
-        conn, mrflow.default_window_start(_NOW), roster or {}, name_filter or [], environment)
+        conn, mrflow.default_window_start(_NOW), merged, name_filter or [], environment)
 
 
 def _seed(rows):
@@ -44,11 +56,18 @@ def _seed(rows):
     return conn
 
 
-def test_tracked_authors_are_attributed_but_stay_off_the_roster():
-    """Ben and Jeremy must be ingestible without silently entering velocity/capacity/SME counts."""
-    for username, account_id in TRACKED_MR_AUTHORS.items():
-        assert MR_AUTHORS[username] == account_id   # the ingest will now attribute their MRs
-        assert account_id not in ROSTER             # ...but roster-gated views are unchanged
+def test_a_non_roster_author_cannot_reach_the_roster_gated_views():
+    """An outside contributor is keyed by GitLab username, which is never a Jira accountId.
+
+    That is the whole guard: velocity, capacity and the SME matrix look ROSTER up by accountId, so
+    a username simply misses. It used to depend on a hand-kept list of known outside contributors;
+    now it holds for anyone the crawl finds, which is everyone.
+    """
+    assert "audacy-ben.bonora" not in ROSTER
+    assert "brand-new-person" not in ROSTER
+    for username, account_id in GITLAB_USERNAMES.items():
+        assert account_id in ROSTER, f"{username} is PE and must be nameable"
+        assert username not in ROSTER, "a username must never double as an accountId"
 
 
 def test_overnight_wait_is_not_charged():
@@ -94,12 +113,17 @@ def test_authors_sort_slowest_first():
     assert [a["name"] for a in _report(conn)["authors"]] == ["Ben Bonora", "Adam"]
 
 
-def test_unmapped_author_is_dropped_from_rows_and_from_the_team_total():
-    """The team row must describe the rows on screen, or the two disagree and neither is trusted."""
-    conn = _seed([_mr(1, "someone-not-in-any-map", datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 17, 0))])
+def test_an_author_nobody_added_is_absent_from_the_rows_but_present_in_the_total():
+    """The table is opt-in; the team total is not.
+
+    "Team (all authors)" has to mean all authors, or the figure changes meaning depending on who
+    happens to be in the view — and a number that moves when you curate a table cannot be quoted
+    anywhere. So an author nobody has added contributes to the total while having no row.
+    """
+    conn = _seed([_mr(1, "someone-nobody-added", datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 17, 0))])
     report = _report(conn)
     assert report["authors"] == []
-    assert report["team"]["merged"] == 0
+    assert report["team"]["merged"] == 1
 
 
 def test_eet_work_scores_near_zero_on_the_business_clock():
@@ -123,15 +147,23 @@ def test_roster_can_add_an_author_the_static_map_does_not_know():
     assert row["tracked"] is True          # flagged as non-roster in the table
 
 
-def test_hiding_an_author_removes_them_from_the_rows_and_the_total():
-    """Hiding is not just a visual filter — the team total must not describe hidden work."""
+def test_hiding_an_author_removes_their_row_and_nothing_else():
+    """The x button is a view control. It must not move a number.
+
+    This used to drop hidden work from the team total too, on the reasoning that a total should
+    describe what is on screen. The opposite is more defensible: tidying a table is not a claim
+    about the world, and a total that quietly shrinks when you hide a row is a figure nobody can
+    safely read twice.
+    """
     conn = _seed([
         _mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0)),   # 1h
         _mr(2, _BEN, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 21, 0)),    # 6h
     ])
+    before = _report(conn)
     report = _report(conn, {"hidden": ["Ben Bonora"]})
-    assert [a["name"] for a in report["authors"]] == ["Adam"]
-    assert report["team"]["merged"] == 1 and report["team"]["biz_hours_median"] == 1.0
+    assert [a["name"] for a in report["authors"]] == ["Adam"], "the row goes"
+    assert report["team"] == before["team"], "and the total stays exactly where it was"
+    assert report["team"]["merged"] == 2 and report["team"]["biz_hours_median"] == 3.5
     assert report["hidden"] == ["Ben Bonora"]
 
 
@@ -193,7 +225,9 @@ def test_author_filter_narrows_every_cut_together():
     filtered = _report(conn, name_filter=["ben"])
     assert [a["name"] for a in filtered["authors"]] == ["Ben Bonora"]
     assert filtered["daily"][0]["merged"] == 1 and filtered["daily"][0]["biz_hours_median"] == 6.0
-    assert filtered["team"]["merged"] == 1
+    # The filter narrows the view, so it narrows the per-author and per-day cuts with it -- but the
+    # team total describes the population, not the view, and a search box must not restate it.
+    assert filtered["team"]["merged"] == 2
     assert filtered["filter"] == ["ben"]
 
 
@@ -266,7 +300,7 @@ def _mr_in(id, account_id, project_path, opened, merged):
         id=id, project_path=project_path, iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=["pe:iac-request"],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW)
+        source_branch="", pipelines_fetched_at=_NOW, author_name=None)
 
 
 def test_environment_filter_splits_prod_from_nonprod():
@@ -376,11 +410,10 @@ def test_crawl_state_says_when_an_added_author_is_still_owed_a_crawl():
 
 
 def test_a_roster_member_re_added_is_not_split_into_two_rows():
-    """`added` must not override MR_AUTHORS, or one person becomes two rows with the same name."""
-    from darkstar.roster import MR_AUTHORS
+    """`added` must not override the roster, or one person becomes two rows with the same name."""
     added = {"audacy-adam.shero": "Adam Shero"}
-    attributable = {**{u: u for u in added}, **MR_AUTHORS}
-    assert attributable["audacy-adam.shero"] == MR_AUTHORS["audacy-adam.shero"]  # accountId wins
+    attributable = {**{u: u for u in added}, **GITLAB_USERNAMES}
+    assert attributable["audacy-adam.shero"] == GITLAB_USERNAMES["audacy-adam.shero"]
 
 
 # --- environment from changed paths ------------------------------------------------------------
@@ -605,3 +638,47 @@ def test_an_author_with_no_self_service_work_disappears_entirely():
     report = _report(conn)
     assert [a["name"] for a in report["authors"] if a["merged"]] == ["Ben Bonora"]
     assert report["not_self_service"] == 2
+
+
+# --- the view is opt-in ------------------------------------------------------------------------
+
+def test_the_table_starts_empty():
+    """Nobody is listed until somebody is added. The census lives in the adoption panels above.
+
+    The crawl now keeps every author it finds, so defaulting this table to "everyone" would dump the
+    whole organisation into a comparison meant for a handful of people.
+    """
+    conn = _seed([
+        _mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0)),
+        _mr(2, "audacy-marc.polidor", datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 17, 0)),
+    ])
+    report = mrflow.mr_turnaround_report(
+        conn, mrflow.default_window_start(_NOW), {}, [], "all")
+    assert report["authors"] == []
+    assert report["series"] == [] and report["daily"] == []
+    assert report["team"]["merged"] == 2, "the population is still measured, just not itemised"
+
+
+def test_adding_an_author_puts_exactly_them_in_the_view():
+    conn = _seed([
+        _mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0)),
+        _mr(2, "audacy-marc.polidor", datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 17, 0)),
+    ])
+    report = mrflow.mr_turnaround_report(
+        conn, mrflow.default_window_start(_NOW),
+        {"added": {"audacy-marc.polidor": "Marc Polidor"}}, [], "all")
+    assert [a["name"] for a in report["authors"]] == ["Marc Polidor"]
+    assert report["team"]["merged"] == 2
+
+
+def test_adding_a_roster_member_works_despite_the_two_key_spaces():
+    """`added` is keyed by GitLab username; a roster member's MRs are stored under their accountId.
+
+    Comparing the two directly would silently never match, so adding a PE member to the view would
+    appear to do nothing at all — a dead control with no error anywhere.
+    """
+    conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0))])
+    report = mrflow.mr_turnaround_report(
+        conn, mrflow.default_window_start(_NOW),
+        {"added": {"audacy-adam.shero": "Adam"}}, [], "all")
+    assert [a["name"] for a in report["authors"]] == ["Adam"]

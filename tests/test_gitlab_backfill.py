@@ -1,7 +1,7 @@
 """A store carrying incomplete MR rows must re-crawl in full, exactly once.
 
 Incremental crawls re-fetch only MRs *updated* since the watermark, so rows written before
-opened_at existed — and MRs by an author added to MR_AUTHORS afterwards — would never be
+opened_at existed would never be
 repaired, leaving the MR-turnaround view permanently near-empty on a long-lived store.
 """
 from datetime import datetime, timedelta
@@ -55,7 +55,7 @@ def _mr_row(id, opened, merged):
         id=id, project_path="audacy-inc/devops/x", iid=id, author_account_id="a",
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=[],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW)
+        source_branch="", pipelines_fetched_at=_NOW, author_name="A")
 
 
 def test_in_window_row_missing_opened_at_forces_a_full_crawl():
@@ -103,6 +103,9 @@ def test_rows_missing_a_source_branch_force_one_full_recrawl(tmp_path):
     assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True, \
         "still owed: pipelines_fetched_at is its own marker and remains NULL"
     conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
+    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True, \
+        "still owed: author_name is its own marker and remains NULL"
+    conn.execute("UPDATE merge_requests SET author_name = 'A'")
     assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
         "and the forcing has to stop once every marker is filled, or every crawl is a full one"
 
@@ -204,5 +207,116 @@ def test_rows_with_no_pipeline_history_force_one_full_recrawl():
 
     # marked as read, with no pipeline rows at all — a legitimate outcome
     conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
+    conn.execute("UPDATE merge_requests SET author_name = 'A'")   # the other marker on this row
     assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
         "an MR with genuinely no pipelines must not re-trigger the crawl forever"
+
+
+def test_rows_without_an_author_name_force_one_full_recrawl():
+    """This marker is the only thing that makes the census release take effect.
+
+    Dropping the ingest-time author filter changes nothing by itself: no roster edit fires when the
+    new image rolls, so the pod would crawl incrementally and every author the old filter discarded
+    would stay discarded — the feature would ship looking exactly like the bug it fixes. Every
+    pre-existing row has a NULL author_name, so the first crawl after deploy is a full one.
+
+    Same failure this file already guards for source_branch and pipelines: a new column with no
+    backfill marker never fills, and nothing anywhere reports that it is empty.
+    """
+    conn = _conn()
+    store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+    conn.execute("UPDATE merge_requests SET author_name = NULL WHERE id = 1")
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True, \
+        "a row with no author_name predates the census crawl and cannot be repaired incrementally"
+
+    # ...and it terminates: once the full crawl has named the author, no further crawl is forced.
+    conn.execute("UPDATE merge_requests SET author_name = 'Marc Polidor' WHERE id = 1")
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+
+def test_an_out_of_window_row_without_an_author_name_is_left_alone():
+    """The marker must not pin a long-lived store into re-crawling forever over ancient rows."""
+    conn = _conn()
+    store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=400), _NOW - timedelta(days=399))])
+    conn.execute("UPDATE merge_requests SET author_name = NULL WHERE id = 1")
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+
+def _api_mr(mr_id, username, name, **over):
+    mr = {
+        "id": mr_id, "iid": mr_id, "title": "Do a thing", "source_branch": "feat/x",
+        "description": "", "labels": ["pe:iac-request"], "web_url": "u",
+        "created_at": "2026-08-03T15:00:00.000Z", "merged_at": "2026-08-04T17:00:00.000Z",
+        "author": {"username": username, "name": name}, "merged_by": {"username": "someone-else"},
+        "project_id": 99, "references": {"full": "audacy-inc/devops/x!%d" % mr_id},
+        "target_project_id": 99,
+    }
+    mr.update(over)
+    return mr
+
+
+def _run_sync(monkeypatch, conn, api_mrs, roster=None):
+    """Drive the real _sync_scopes with only the HTTP layer stubbed.
+
+    Stubbing _sync_scopes itself is what let four defects reach production: every test passed while
+    the function they all depended on was never executed. The seam belongs at the network edge.
+    """
+    monkeypatch.setattr(gitlab_ingest, "_token", lambda: "t")
+    monkeypatch.setattr(gitlab_ingest, "_merged_mrs",
+                        lambda session, scope, iso: api_mrs if scope.endswith("115211004") else [])
+    monkeypatch.setattr(gitlab_ingest, "_changed_paths", lambda session, pid, iid: [])
+    monkeypatch.setattr(gitlab_ingest, "_mr_notes", lambda session, pid, iid: [])
+    monkeypatch.setattr(gitlab_ingest, "_mr_pipelines", lambda session, pid, iid, mr_id: [])
+    return gitlab_ingest._sync_scopes(
+        conn, datetime(2026, 7, 1), gitlab_ingest._PE_GROUP_IDS, gitlab_ingest._PE_PROJECT_IDS,
+        roster or {})
+
+
+def test_the_ingest_keeps_authors_nobody_has_listed(monkeypatch):
+    """The census property, asserted where it is actually implemented.
+
+    The ingest used to drop any author outside a curated list, so a contributor nobody had added was
+    discarded at crawl time and could never appear on any panel at any lookback. That made the store
+    a function of who somebody had remembered, which is not something a dashboard can be honest about.
+    """
+    conn = _conn()
+    _run_sync(monkeypatch, conn, [
+        _api_mr(1, "audacy-adam.shero", "Adam Shero"),      # roster member
+        _api_mr(2, "audacy-marc.polidor", "Marc Polidor"),  # on no list anywhere
+        _api_mr(3, "brand-new-person", "Brand New"),        # never seen before
+    ])
+    stored = dict(conn.execute(
+        "SELECT author_account_id, author_name FROM merge_requests ORDER BY id").fetchall())
+    assert len(stored) == 3, "an unlisted author must not be discarded at crawl time"
+    # Roster members keep their Jira accountId so their history stays one series...
+    assert "600ece193b1af000697f339d" in stored
+    # ...everyone else is keyed by GitLab username, which no roster-gated view can match.
+    assert stored["audacy-marc.polidor"] == "Marc Polidor"
+    assert stored["brand-new-person"] == "Brand New"
+
+
+def test_a_roster_member_is_never_split_across_two_keys(monkeypatch):
+    """The roster accountId must win over the username, or one person becomes two rows."""
+    conn = _conn()
+    _run_sync(monkeypatch, conn, [_api_mr(1, "audacy-adam.shero", "Adam Shero")],
+              roster={"added": {"audacy-adam.shero": "Adam Shero"}})
+    keys = [r[0] for r in conn.execute("SELECT author_account_id FROM merge_requests").fetchall()]
+    assert keys == ["600ece193b1af000697f339d"], "the accountId must win over the username"
+
+
+def test_an_mr_with_no_author_is_skipped_rather_than_stored_blank(monkeypatch):
+    """GitLab can report a null author on a deleted account; a blank key would collide with itself."""
+    conn = _conn()
+    _run_sync(monkeypatch, conn, [_api_mr(1, "", "", author={}),
+                                  _api_mr(2, "audacy-marc.polidor", "Marc Polidor")])
+    keys = [r[0] for r in conn.execute("SELECT author_account_id FROM merge_requests").fetchall()]
+    assert keys == ["audacy-marc.polidor"]
+
+
+def test_the_author_display_name_falls_back_to_the_username(monkeypatch):
+    """Some accounts have no display name set in GitLab; a chart still needs a label."""
+    conn = _conn()
+    _run_sync(monkeypatch, conn, [_api_mr(1, "audacy-zack.amadi", "")])
+    assert conn.execute("SELECT author_name FROM merge_requests").fetchone()[0] == "audacy-zack.amadi"

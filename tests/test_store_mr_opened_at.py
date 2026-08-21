@@ -12,7 +12,7 @@ def _row(**over):
                 web_url="https://gitlab.com/x/-/merge_requests/7",
                 merged_by="", fetched_at=datetime(2026, 7, 22, 16, 0, 0), events_fetched_at=datetime(2026, 7, 22, 16, 0, 0),
                 description="", source_branch="",
-                pipelines_fetched_at=datetime(2026, 7, 22, 16, 0, 0))
+                pipelines_fetched_at=datetime(2026, 7, 22, 16, 0, 0), author_name=None)
     base.update(over)
     return store.MergeRequestRow(**base)
 

@@ -398,10 +398,10 @@
   <div class="panels">
   <section class="panel wide adopt">
   <h2>Self-service authorship</h2>
-  <p class="filter-hint">Has authoring moved off Platform Engineering at all? Same self-service merge
-  requests the turnaround panel measures, split by whether the author is on the PE roster. Ignores the
-  author and environment filters below: those curate a table, and an author hidden from a table has not
-  stopped adopting.</p>
+  <p class="filter-hint">Has authoring moved off Platform Engineering at all? Every author who merged
+  a self-service merge request in the window, split by whether they are on the PE roster &mdash; a
+  census, not a tracked list. Ignores the author and environment filters below: those curate a table,
+  and an author hidden from a table has not stopped adopting.</p>
   <div class="adopt-hero">
     <div>
       <div class="adopt-big" id="adoptShare">—</div>
@@ -492,7 +492,8 @@
         <select id="authorPerPage">
           <option value="5">5</option>
           <option value="10">10</option>
-          <option value="20">20</option>
+          <option value="20" selected>20</option>
+          <option value="50">50</option>
         </select>
       </label>
       <button class="btn" type="button" data-apg="prev" aria-label="Previous page">&lsaquo; Prev</button>
@@ -785,12 +786,18 @@ function renderMrTable(d){
   // The team row describes every author the filter admits, not the five on this page. Paging is a
   // view, not a population: a total that changed as you clicked Next would mean nothing at all.
   const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
+  // Three different empties, and telling a person "no merged MRs" when they simply have not picked
+  // anyone yet sends them looking for a data problem that does not exist.
   const empty = terms.length
-    ? '<tr><td colspan="5" class="na">No author matches that filter.</td></tr>'
-    : '<tr><td colspan="5" class="na">No merged MRs in the window.</td></tr>';
+    ? '<tr><td colspan="5" class="na">No author in this view matches that filter.</td></tr>'
+    : (d.added && Object.keys(d.added).length)
+      ? '<tr><td colspan="5" class="na">Nobody in this view merged a self-service MR in the window.</td></tr>'
+      : '<tr><td colspan="5" class="na">This view is empty. Search for someone above and add them '
+        + 'to compare their turnaround &mdash; the adoption panels higher up already count everyone.</td></tr>';
   document.getElementById("mrTbl").innerHTML = head +
     `<tbody>${rows || empty}${d.authors.length?team:''}</tbody>` +
-    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
+    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors in this view`:''}. `+
+    `<b>Team (all authors)</b> covers every self-service author in the window, not just this view.</caption>`;
 
   const pager = document.getElementById("mrPager");
   pager.hidden = shown.length <= 5;
@@ -881,7 +888,7 @@ async function getJSON(path, withAuthors){
 function renderHidden(){
   const hidden = (mrData && mrData.hidden) || [];
   document.getElementById("hiddenNote").innerHTML = hidden.length
-    ? `Hidden from this table: ` + hidden.map(n =>
+    ? `Hidden from this view (totals unaffected): ` + hidden.map(n =>
         `<button type="button" class="linkish" data-show="${esc(n)}" title="Show ${esc(n)} again">${esc(n)}</button>`
       ).join(", ") + `. Click a name to show it again.`
     : "";
@@ -897,10 +904,7 @@ async function editAuthors(body){
     return;
   }
   const saved = await res.json();
-  document.getElementById("authorHint").textContent = saved.recrawl_queued
-    ? "Added. Fetching their merge requests from GitLab now — this takes a few minutes for a full "
-      + "crawl. Reload the page once it finishes; they will not appear before then."
-    : "Saved.";
+  document.getElementById("authorHint").textContent = "Saved.";
   await reload();
 }
 
@@ -1007,10 +1011,10 @@ function periodLabel(iso, grain){
 }
 
 /* ---------- adoption ----------
-   One number, one chart, one stat grid, one author breakdown. Every figure here is a floor rather
-   than a count: the GitLab crawl attributes a fixed author list, so self-service work by anyone
-   outside it is discarded before it reaches the store and cannot appear. The panel states that
-   bound itself instead of letting a reader mistake a narrow number for a small one. */
+   One number, one chart, one stat grid, one author breakdown, over every author who merged
+   self-service work in the window. This was a floor while the ingest filtered to a curated author
+   list; it is now a census, so the copy must not keep hedging about who might be missing. The one
+   exclusion is PE service accounts, which is stated on the panel rather than applied quietly. */
 const ADOPT_CHART_H = 200;
 /* Headroom for the count sitting above the tallest bar. The plot lives inside .tbl-wrap, whose
    overflow-x:auto makes overflow-y compute to auto as well, so anything drawn above the box is
@@ -1132,7 +1136,7 @@ function renderAdoptWho(a){
   const shown = authors.slice(from, from + authorPerPage);
 
   const apager = document.getElementById("authorPager");
-  apager.hidden = authors.length <= 5;
+  apager.hidden = authors.length <= authorPerPage;
   document.getElementById("authorCount").textContent = authors.length
     ? `${from + 1}\u2013${Math.min(from + authorPerPage, authors.length)} of ${authors.length} authors`
     : "";
@@ -1154,24 +1158,27 @@ function renderAdoptWho(a){
       `<b>${omitted}</b> more merged self-service work in this window and are not charted.`
     : "";
 
-  const tracked = a.tracked_non_pe_authors || 0;
+  const robots = a.robots || 0;
   document.getElementById("adoptWhoNote").innerHTML =
-    `<b>This is a floor, not a count.</b> The GitLab crawl attributes merge requests from a fixed `+
-    `list of authors &mdash; ${tracked} outside PE right now &mdash; and discards everyone else `+
-    `before they reach the store. Self-service work by an unlisted author is invisible here, so the `+
-    `real share outside PE is at least this and probably higher. Add an author in the MR-turnaround `+
-    `panel below to bring their history in.`;
+    `<b>Every author who merged self-service work is here.</b> The crawl no longer filters to a list `+
+    `of known contributors, so nobody has to be added for their work to count &mdash; an author `+
+    `appears because they merged, not because someone remembered them.`+
+    (robots
+      ? ` ${robots} merge request${robots === 1 ? "" : "s"} from PE service accounts `+
+        `${robots === 1 ? "is" : "are"} excluded: those carry agent footers by their nature and `+
+        `would read as adoption.`
+      : "");
 }
 
 function renderAdoption(a){
   document.getElementById("adoptShare").textContent = pctText(a.share);
   const nonPe = a.non_pe || {};
-  const unattributed = a.unattributed
-    ? `<br>${a.unattributed} MR${a.unattributed === 1 ? "" : "s"} by an unrecognised author, counted on neither side`
+  const robots = a.robots
+    ? `<br>${a.robots} from PE service accounts, excluded`
     : "";
   document.getElementById("adoptShareSub").innerHTML = a.total
     ? `${nonPe.mrs} of ${a.total} &middot; ${nonPe.authors} distinct author`+
-      `${nonPe.authors === 1 ? "" : "s"}<br>a floor: only attributed authors are visible${unattributed}`
+      `${nonPe.authors === 1 ? "" : "s"}${robots}`
     : `no self-service merge requests in this window`;
   document.getElementById("adoptFloor").innerHTML = a.total
     ? `Grouped by ${GRAIN_NOUN[a.grain] || a.grain}. PE means a member of the Platform Engineering `+
@@ -1256,7 +1263,7 @@ const MR_SIZE_KEY = "darkstar.slas.mrPerPage";
 let mrPerPage = 5;
 let mrPage = 0;
 const AUTHOR_SIZE_KEY = "darkstar.slas.authorPerPage";
-let authorPerPage = 5;
+let authorPerPage = 20;
 let authorPage = 0;
 
 /* Time to first review, with the zero explained rather than left bare.

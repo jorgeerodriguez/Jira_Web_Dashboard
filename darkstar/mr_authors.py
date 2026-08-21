@@ -1,19 +1,23 @@
 """Shared, editable MR-author roster persisted as JSON on the PVC.
 
-Which GitLab authors appear in the MR-turnaround table. The static roster (roster.MR_AUTHORS)
-covers the PE team plus the contributors hardcoded in TRACKED_MR_AUTHORS; this file lets the lead
-add a contributor or hide one from the table without a deploy, the same way overrides.py handles
-the SME matrix. darkstar's second write path.
+Which GitLab authors appear in the MR-turnaround table. That table is opt-in and starts empty, so
+this file IS its contents: the lead adds whoever they want to compare, and hides rows they want out
+of the way, without a deploy -- the same way overrides.py handles the SME matrix. darkstar's second
+write path.
+
+It no longer decides what gets crawled. The ingest keeps every author it finds, so adding a name
+here fetches nothing; it only decides who this one table lists.
 
 Shape: {"added": {gitlab_username: display_name}, "hidden": [...], "version": int}
-  - added:  extra GitLab usernames the ingest should attribute. They are keyed in the store by
-            their *username*, not a Jira accountId, precisely so they cannot leak into the
+  - added:  GitLab usernames to list in the MR-turnaround table. Non-roster authors are keyed in the
+            store by their *username*, not a Jira accountId, so they cannot leak into the
             roster-gated views (velocity/capacity/SME all look up ROSTER by accountId and miss).
-  - hidden: display names dropped from the table AND from the team totals, so the totals always
-            describe the rows actually shown.
+  - hidden: display names dropped from the table only. The team totals describe every self-service
+            author in the window regardless, because a figure that moves when you tidy a table
+            cannot be quoted.
 
-Adding an author cannot be served from the store — the ingest never fetched their MRs — so the
-caller clears the GitLab watermark to force one full-window re-crawl (see app.set_mr_authors).
+Adding an author is served entirely from the store: their merge requests are already there, so no
+crawl is triggered and the watermark is left alone.
 """
 from __future__ import annotations
 

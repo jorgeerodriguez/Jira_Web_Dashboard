@@ -2,7 +2,7 @@
 
 Parallel to the Jira poller. Pulls merged MRs from the PE groups (audacy-inc/devops and
 audacy-inc/gcp) over a trailing window, attributes each to a tracked author via
-roster.MR_AUTHORS (the PE roster plus TRACKED_MR_AUTHORS, plus anyone added at runtime through
+every author it finds; roster.GITLAB_USERNAMES only decides which key their merge requests are
 mr_authors.py), and
 stores the MR plus its changed file paths. The SME matrix is then tagged from real authorship
 (see gitlab_domains), which fills the gaps sparse Jira titles leave; it keys on ROSTER, so
@@ -21,7 +21,7 @@ import duckdb
 import requests
 
 from darkstar import config, mr_authors, store
-from darkstar.roster import MR_AUTHORS
+from darkstar.roster import GITLAB_USERNAMES
 
 logger = logging.getLogger("darkstar.gitlab_ingest")
 
@@ -213,15 +213,20 @@ def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> 
     """True if in-window MRs lack opened_at/description/events, which an incremental crawl cannot fix.
 
     Incremental crawls only re-fetch MRs *updated* since the watermark, so rows written before
-    opened_at/labels existed (and MRs by an author added to MR_AUTHORS later) would stay incomplete
+    opened_at/labels existed would stay incomplete
     forever. One full re-crawl fixes both. Self-terminating: once every in-window row has an
     opened_at this is False again, and rows older than the window are never revisited.
+
+    author_name is what makes the census release actually take effect. Dropping the ingest-time
+    author filter changes nothing on its own: no roster edit fires on deploy, so the pod would crawl
+    incrementally and every author the old filter discarded would stay discarded. Every pre-existing
+    row has a NULL author_name, so this forces exactly one full re-crawl, which ingests everyone.
     """
     missing = connection.execute(
         "SELECT count(*) FROM merge_requests "
         "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
         "  OR events_fetched_at IS NULL OR merged_by IS NULL OR source_branch IS NULL "
-        "  OR pipelines_fetched_at IS NULL)", [cutoff]
+        "  OR pipelines_fetched_at IS NULL OR author_name IS NULL)", [cutoff]
     ).fetchone()[0]
     if missing:
         logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
@@ -246,12 +251,8 @@ def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window
     version = int(roster.get("version", 0))
     watermark = store.get_gitlab_watermark(connection)
     window_cutoff = now - timedelta(days=window_days)
-    roster_changed = version != store.get_roster_version(connection)
-    if watermark is None or roster_changed or _needs_backfill(connection, window_cutoff):
+    if watermark is None or _needs_backfill(connection, window_cutoff):
         cutoff = window_cutoff
-        if roster_changed:
-            logger.info("gitlab sync: roster version %s != crawled %s, forcing a full crawl",
-                        version, store.get_roster_version(connection))
     else:
         cutoff = watermark - _WATERMARK_MARGIN
     written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS, roster)
@@ -280,22 +281,26 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
     pipeline_rows: list[store.MergeRequestPipelineRow] = []
     seen_ids: set[int] = set()
 
-    # Static roster + whatever the lead added through the dashboard. Added authors are keyed by
-    # their GitLab username rather than a Jira accountId, so they cannot reach the roster-gated
-    # views (velocity/capacity/SME look up ROSTER by accountId and simply miss).
-    # Added authors are keyed by their GitLab username, but MR_AUTHORS wins on a collision. If a
-    # roster member were re-added through the UI, letting `added` override would attribute their
-    # future MRs to the username while their history sits under their Jira accountId — splitting
-    # one person into two rows with the same name and a count that appears to reset.
-    added = roster.get("added") or {}
-    attributable = {**{username: username for username in added}, **MR_AUTHORS}
+    # Every author is ingested. This used to filter to a known list, which made the store a function
+    # of who somebody had remembered to add: a contributor nobody listed was discarded at crawl time
+    # and could never appear on any panel, no matter the lookback. Adoption is a census question --
+    # "who is using the self-service tooling" -- and a census cannot be answered from a curated list.
+    #
+    # Roster-gated views are unaffected, by the same mechanism that already protected them from
+    # dashboard-added authors: an author outside the PE roster is keyed by GitLab username, and
+    # velocity/capacity/SME look ROSTER up by Jira accountId, which a username never matches.
 
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
     for scope in scopes:
         for mr in _merged_mrs(session, scope, updated_after_iso):
-            account_id = attributable.get((mr.get("author") or {}).get("username", ""))
-            if account_id is None:
+            author = mr.get("author") or {}
+            username = author.get("username") or ""
+            if not username:
                 continue
+            # Roster members keep their Jira accountId so their history stays one series; everyone
+            # else is keyed by username. The roster wins on a collision, so re-adding a member
+            # through the dashboard cannot split one person into two rows with the same name.
+            account_id = GITLAB_USERNAMES.get(username, username)
             merged_at = mr.get("merged_at")
             if not merged_at:
                 continue
@@ -318,7 +323,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 logger.warning("MR %s!%s notes fetch failed, no draft/review events: %s",
                                mr["project_id"], mr["iid"], exc)
                 notes = []
-            event_rows.extend(_mr_events(mr_id, (mr.get("author") or {}).get("username", ""), notes))
+            event_rows.extend(_mr_events(mr_id, username, notes))
             try:
                 pipeline_rows.extend(_mr_pipelines(session, mr["project_id"], mr["iid"], mr_id))
             except requests.RequestException as exc:
@@ -343,6 +348,7 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
                 description=mr.get("description") or "",
                 source_branch=mr.get("source_branch") or "",
                 pipelines_fetched_at=fetched_at,
+                author_name=author.get("name") or username,
             ))
             file_rows.extend((mr_id, path) for path in paths)
 
