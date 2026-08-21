@@ -34,6 +34,66 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
 
 ### What the self-service page shows
 
+- **Self-service authorship** — the share of self-service merge requests authored *outside* Platform
+  Engineering, as one number plus a stacked chart per period. This is the adoption question: not how
+  fast PE is, but whether authoring has moved off PE at all. PE means a member of `roster.ROSTER`;
+  every other attributed author counts as outside it, tested on the Jira accountId rather than the
+  GitLab username, because `TRACKED_MR_AUTHORS` carry the same `audacy-` prefix roster members do and
+  a username test would put them on the wrong side of the only comparison the panel makes.
+
+  **Every non-PE figure on the page is a floor, not a count.** The GitLab crawl attributes a fixed
+  author list (`MR_AUTHORS` plus whatever the lead added at runtime) and discards everyone else
+  before they reach the store, so self-service work by an unlisted author cannot appear. A hand audit
+  of 2026-07-21 → 2026-08-20 found 10 non-PE authors where the ingest attributes 2, and 26% non-PE
+  authorship where this panel would show roughly 15%. The panel states that bound itself, in the
+  hero sub-caption and again in the author panel, so a narrow number is not read as a small one.
+  Widening it is an ingest change — drop the `attributable` filter in `gitlab_ingest._sync_scopes` —
+  not a query change.
+
+  Unlike everything below it, this panel **ignores the author and environment filters and the roster's
+  `hidden` list**. Those curate a table; an author hidden from a table has not stopped adopting, and
+  inheriting `hidden` would let a lead change the adoption score by tidying a table. The two therefore
+  disagree on totals by design.
+- **Adoption scorecard** — non-PE volume and distinct authors, and the share of those merge requests
+  carrying an approval from someone other than the author, against PE's own rate.
+
+  The grid distinguishes **two kinds of absence**, and they are styled so they cannot be mistaken for
+  each other. An `empty` cell has a working metric and no rows in the window; a `blocked` cell —
+  hatched, dashed outline, tagged *needs ingest change* — cannot be computed at all and will still be
+  blank on the busiest week. Conflating them is what misleads: a reader who takes "blocked" for "quiet
+  week" waits for a number that is never coming. Each blocked cell names what would unblock it.
+
+  Two cells are blocked today. A merge *rate* needs merge requests that never merged and the crawl
+  fetches `state=merged` only, so there is no denominator; attributing approvals back to PE needs
+  approver identity, which `mr_events` does not store — it records *that* an independent approval
+  happened, not by whom. Both are ingest changes. A plausible lookalike in either cell is how this
+  page would end up quietly disagreeing with a hand audit of the same window.
+- **Who is self-serving** — per-author volume as vertical columns across the page rather than a list
+  down it, **every author who merged self-service work**, coloured by whether they are on the PE
+  roster. Restricting it to non-PE answered a narrower question than the panel's title asks, and hid
+  the comparison that makes the non-PE bars legible: how much of this tooling PE runs itself. Beside
+  it, median and p90 open→merged for the non-PE population.
+
+  Paged five at a time once there are more than five authors, using the same pager as the slowest-MR
+  list (selectable size, remembered in `localStorage`, anchor preserved when the size changes). Bars
+  are scaled to the tallest across **all** pages, never the tallest on the current page — rescaling
+  per page would draw a 3-MR author the same height as a 96-MR one and make the pager actively
+  misleading.
+
+  Capped at the **top 20 authors by volume**, because past twenty columns the chart stops having a
+  readable shape. Whoever falls off is counted, not dropped: the caption names how many more merged
+  self-service work in the window. A truncated chart with no caption reads as the whole population,
+  and "nobody else is self-serving" is the opposite of what it actually means.
+
+  The scorecard's distinct-author count stays non-PE only, because it sits beside the non-PE
+  headline and would stop matching it otherwise.
+
+  These durations are business hours, but **not the same clock as the MR turnaround panel below**.
+  This one is the whole open→merged span; that one is `ready_hours`, which excludes draft time and
+  red-CI time. The same merge requests therefore carry two different medians one scroll apart, which
+  is a discrepancy report waiting to happen, so both panels name their clock. The split is deliberate:
+  adoption asks how long the requester waited, and a requester waits through a red pipeline; the
+  turnaround panel asks how responsive PE was, and red time is not PE being slow.
 - **Impact cards** — share of all delivered PE work that came through a skill (with the share whose
   code was AI-written beside it), requests this month vs last, self-service delivery speed against
   the rest of PE delivery, and time to first review. That speed card carries the same significance
@@ -132,6 +192,40 @@ with a part-strength underline that would otherwise turn a column of them into a
 The other dashboards were checked and do not have this problem: `intake`'s `.key` is `#7db0ff` at
 7.99:1 and `delivery-forecast`'s `.k`/`.skey` are `--muted` at 4.78:1. Both pass, though the forecast
 links are dim enough to be worth revisiting.
+
+## Who counts as PE
+
+`roster.ROSTER` is a hand-maintained list of 14 Jira accountIds, ported from the audacy-jira-reports
+pipeline. Nothing derives or refreshes it at runtime, and it is load-bearing well beyond one panel:
+`velocity`, `capacity`, `intake` and the SME matrix all count roster members only, and `/slas` uses it
+to split PE from non-PE authorship (`mrflow.is_pe_author` is `account_id in ROSTER`).
+
+Drift is silent **and biased toward flattering the metric**. A new PE hire appears in no list, so
+their merge requests are attributed to "outside PE" and the self-service adoption headline goes up —
+and nobody investigates a number that improves.
+
+`tests/test_roster_membership.py` closes that by asserting the roster against live GitLab group
+membership: every human direct member of `audacy-inc/devops` must be on the roster, and no roster
+entry may have left the group. Non-people are handled by an explicit exclusion list
+(`roster.NON_HUMAN_GROUP_MEMBERS`) rather than a name heuristic — "looks like a bot" silently
+reclassifies a person whose account happens to match, whereas an unknown account is in neither list
+and fails the test, which is the behaviour worth having. The exclusion list is itself asserted to
+still describe real members, so a stale entry cannot quietly write off a real person.
+
+The live checks skip without `GITLAB_TOKEN`; two structural checks (no overlap between the lists,
+every username resolvable to a `ROSTER` name) need no network and always run.
+
+## The author table pages at five
+
+More than five authors and the MR-turnaround table pages, using the same control as the slowest-MR
+list below it: selectable size, remembered in `localStorage`, and the first visible row kept visible
+when the size changes rather than jumping back to the top.
+
+The **Team (all authors)** row is pinned to every page and always describes every author the filter
+admits, never the five currently rendered. Paging is a view, not a population — a total that changed
+as you clicked Next would mean nothing. This is deliberately different from `hidden`, which removes
+an author from the rows *and* the totals, because hiding changes who is being measured and paging
+does not.
 
 ## MR turnaround is scoped to self-service
 
@@ -459,8 +553,9 @@ failure: it covers dev/qa/shd repos and shared env-less ones like `gitops-k8s-te
 Two controls on `/slas`, both server-backed rather than cosmetic:
 
 - **Lookback** — a preset that overrides the window on *every* panel, sent as
-  `?since=YYYY-MM-DD&until=YYYY-MM-DD` to both `/api/slas` and `/api/mr-turnaround`. Presets are
-  yesterday, last week, month to date, last month, last 30/60/90 days, and a custom from/to pair;
+  `?since=YYYY-MM-DD&until=YYYY-MM-DD` to `/api/slas`, `/api/mr-turnaround` and `/api/adoption`.
+  Presets are yesterday, last week, month to date, last month, last 30/60/90 days, and a custom
+  from/to pair;
   "Panel defaults" means each panel keeps its own window (SLA 3 months, MR turnaround 6). Held in
   `localStorage` so it survives a refresh, and a stored bare date from before the presets is carried
   over as a custom range rather than dropped.

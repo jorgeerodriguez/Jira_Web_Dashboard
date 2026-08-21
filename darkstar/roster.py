@@ -41,6 +41,26 @@ GITLAB_USERNAMES: dict[str, str] = {
     "audacy-denys.naumenko":   "712020:f53bb9ec-b2b5-4a5a-8811-e3c0a197732b",
 }
 
+# Direct members of the audacy-inc/devops GitLab group that are NOT people. Maintained by hand and
+# asserted against the live group by tests/test_roster_membership.py, so the roster cannot drift
+# unnoticed: a human who joins or leaves PE appears in neither this list nor GITLAB_USERNAMES and
+# fails the test, which is the point. An exclusion list rather than a name heuristic because
+# "looks like a bot" silently reclassifies a person whose account happens to match.
+#
+# Drift matters beyond this page. ROSTER gates velocity, capacity, intake and the SME matrix, and on
+# /slas it decides PE vs non-PE authorship — where a missing member counts as OUTSIDE PE and
+# inflates the adoption headline, the direction that flatters the metric.
+NON_HUMAN_GROUP_MEMBERS: frozenset[str] = frozenset({
+    "DevOps-agent",                                          # AWS-DevOps-agent
+    "agentcore-pe",                                          # agentcore-pe
+    "group_115211004_bot_6ce1b4bd899ad9f4f9b50d83b5273302",  # semantic-release
+    "group_115211004_bot_bbc6b7e533b3a58af41a516bd3a2d55a",  # PlatformProvisionerBot
+})
+
+# The GitLab group ROSTER is expected to mirror: audacy-inc/devops.
+PE_GROUP_ID: int = 115211004
+
+
 # GitLab contributors OUTSIDE the PE roster whose merge-request flow is still tracked.
 # Deliberately absent from ROSTER: velocity, capacity and the SME matrix count roster members
 # only, so adding them there would silently change those dashboards. This map exists purely so

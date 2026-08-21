@@ -35,7 +35,7 @@ nothing about why.
 from __future__ import annotations
 
 import statistics
-from datetime import datetime
+from datetime import date, datetime
 
 import duckdb
 
@@ -49,14 +49,17 @@ from darkstar.metrics import (
     SELF_SERVICE_EPOCH,
     business_date,
     business_hours_between,
+    choose_grain,
+    is_partial_period,
     pctile,
+    period_start,
     ready_hours,
     ready_spans,
     red_spans,
     window_start,
 )
 from darkstar import store
-from darkstar.roster import MR_AUTHOR_NAMES, TRACKED_MR_AUTHORS
+from darkstar.roster import MR_AUTHOR_NAMES, ROSTER, TRACKED_MR_AUTHORS
 
 _WINDOW_MONTHS: int = 6
 # The drill-down list is for inspecting outliers, not for browsing the whole window: a 6-month
@@ -64,6 +67,9 @@ _WINDOW_MONTHS: int = 6
 # than the list quietly ending. The page flips through it ten at a time, which is why the cap can be
 # this generous -- at 25 the tail was unreachable rather than merely unlisted.
 _SLOWEST_LIMIT: int = 100
+# The author chart is read by shape, and past twenty columns it stops having one. Whoever falls off
+# is counted rather than dropped, so a truncated chart cannot read as the whole population.
+_AUTHOR_LIMIT: int = 20
 _ALL_ENVIRONMENTS: str = "all"
 _TRACKED_ACCOUNTS: frozenset[str] = frozenset(TRACKED_MR_AUTHORS.values())
 
@@ -354,3 +360,130 @@ def mr_turnaround_report(
             "hours_p90": pctile(review_waits, 0.9),
         },
     }
+
+
+def is_pe_author(account_id: str) -> bool:
+    """True when this MR author is a Platform Engineering roster member.
+
+    ROSTER is keyed by Jira accountId and holds PE only. Everyone else the ingest attributes is by
+    construction outside PE: TRACKED_MR_AUTHORS carries non-roster accountIds, and authors added
+    through the dashboard are keyed by their GitLab username precisely so they cannot collide with
+    a roster accountId. So one membership test splits all three populations, and it splits them on
+    identity rather than on a username spelling that varies between `audacy-` and bare accounts.
+    """
+    return account_id in ROSTER
+
+
+def adoption_report(
+    connection: duckdb.DuckDBPyConnection, since: datetime, until: datetime | None,
+    now: datetime, grain: str | None, roster: dict,
+) -> dict:
+    """Who authors self-service merge requests: the PE roster, or the teams PE built the tools for.
+
+    The question this answers is not "how fast is PE" but "has authorship moved off PE at all", so
+    the population is the same self-service MRs the turnaround panel measures, cut by author
+    affiliation instead of by person.
+
+    Deliberately ignores the editable roster's "hidden" list and the author/environment filters that
+    shape the table further down the page. Those curate a table; an author hidden from a table has
+    not stopped adopting the tooling. The two therefore disagree on totals by design, and the panel
+    says so rather than quietly reconciling them.
+
+    Two figures the artifact version of this scorecard carries are absent here and reported as
+    absent rather than approximated: the merge RATE needs merge requests that never merged, and the
+    GitLab crawl fetches `state=merged` only; and "who approved" needs approver identity, which
+    mr_events does not store (it records that an independent approval happened, not by whom).
+    """
+    grain = grain or choose_grain(since, until, now)
+    names = {**MR_AUTHOR_NAMES,
+             **{username: name for username, name in (roster.get("added") or {}).items()}}
+
+    approved: set[int] = set()
+    for (mr_id,) in connection.execute(
+        "SELECT DISTINCT mr_id FROM mr_events WHERE kind = 'approval'"
+    ).fetchall():
+        approved.add(mr_id)
+
+    buckets: dict[date, dict[str, int]] = {}
+    per_side: dict[str, list[float]] = {"pe": [], "non_pe": []}
+    counts: dict[str, int] = {"pe": 0, "non_pe": 0}
+    independent: dict[str, int] = {"pe": 0, "non_pe": 0}
+    by_author: dict[str, dict] = {}
+    unattributed = 0
+    for mr_id, account_id, opened_at, merged_at, description, mr_labels in connection.execute(
+        "SELECT id, author_account_id, opened_at, merged_at, description, labels "
+        "FROM merge_requests "
+        "WHERE merged_at >= ? AND (? IS NULL OR merged_at < ?) AND opened_at IS NOT NULL",
+        [since, until, until],
+    ).fetchall():
+        if not is_self_service_mr(description, mr_labels):
+            continue
+        name = names.get(account_id)
+        if name is None:
+            # Attributed to nobody the roster knows. Counted, never folded into either side: a
+            # nameless author cannot be called PE or non-PE without inventing an affiliation.
+            unattributed += 1
+            continue
+        side = "pe" if is_pe_author(account_id) else "non_pe"
+        counts[side] += 1
+        per_side[side].append(business_hours_between(opened_at, merged_at))
+        if mr_id in approved:
+            independent[side] += 1
+        author = by_author.setdefault(name, {"name": name, "mrs": 0, "pe": side == "pe"})
+        author["mrs"] += 1
+        bucket = buckets.setdefault(period_start(merged_at, grain), {"pe": 0, "non_pe": 0})
+        bucket[side] += 1
+
+    total = counts["pe"] + counts["non_pe"]
+    _ranked_authors = sorted(by_author.values(), key=lambda a: (-a["mrs"], a["name"]))
+    return {
+        "grain": grain,
+        "periods": [
+            {
+                "period": start.isoformat(),
+                "pe": side["pe"],
+                "non_pe": side["non_pe"],
+                "total": side["pe"] + side["non_pe"],
+                "share": _share(side["non_pe"], side["pe"] + side["non_pe"]),
+                "partial": is_partial_period(start, grain, since, until, now),
+            }
+            for start, side in sorted(buckets.items())
+        ],
+        "pe": {"mrs": counts["pe"], "independent_approvals": independent["pe"]},
+        "non_pe": {
+            "mrs": counts["non_pe"],
+            "authors": sum(1 for a in by_author.values() if not a["pe"]),
+            "independent_approvals": independent["non_pe"],
+        },
+        "total": total,
+        "share": _share(counts["non_pe"], total),
+        # Everyone who merged self-service work, PE and not, each flagged with which side they are
+        # on. Restricting this to non-PE answered "who outside PE self-serves" when the question the
+        # panel asks is "who self-serves" -- and PE members using their own tooling are most of it.
+        "by_author": _ranked_authors[:_AUTHOR_LIMIT],
+        "authors_omitted": max(0, len(_ranked_authors) - _AUTHOR_LIMIT),
+        "authors_total": len(_ranked_authors),
+        "turnaround": {"pe": _stats(per_side["pe"]), "non_pe": _stats(per_side["non_pe"])},
+        # Authorship outside PE is only visible for authors the ingest attributes, and it attributes
+        # a fixed list. Every non-PE figure above is therefore a floor: real adoption by anyone not
+        # on this list is discarded at crawl time and cannot be counted here. Reported as a number
+        # so the panel can state the bound instead of implying completeness.
+        "tracked_non_pe_authors": len(set(TRACKED_MR_AUTHORS) | set(roster.get("added") or {})),
+        "unattributed": unattributed,
+        # Named, not silently missing: both need an ingest change, not a query change.
+        "unmeasurable": {
+            "merge_rate": "the GitLab crawl fetches state=merged only, so MRs that never merged "
+                          "are absent and no rate has a denominator",
+            "approver_identity": "mr_events records that an independent approval happened, not who "
+                                 "gave it, so approvals cannot be attributed back to PE",
+        },
+    }
+
+
+def _share(part: int, whole: int) -> float | None:
+    """Share as a fraction, or None when there is nothing to take a share of.
+
+    Zero of zero is not zero percent; a period with no self-service MRs at all has no share, and
+    rendering it as 0% would draw a floor line through the chart that no data supports.
+    """
+    return round(part / whole, 4) if whole else None
