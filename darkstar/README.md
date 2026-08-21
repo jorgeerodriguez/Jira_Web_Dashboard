@@ -69,14 +69,20 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
   blank on the busiest week. Conflating them is what misleads: a reader who takes "blocked" for "quiet
   week" waits for a number that is never coming. Each blocked cell names what would unblock it.
 
-  Two cells are blocked today. A merge *rate* needs merge requests that never merged and the crawl
-  fetches `state=merged` only, so there is no denominator; attributing approvals back to PE needs
-  approver identity, which `mr_events` does not store — it records *that* an independent approval
-  happened, not by whom. Both are ingest changes. A plausible lookalike in either cell is how this
-  page would end up quietly disagreeing with a hand audit of the same window.
+  **Approvals on non-PE work** is the cost line: every merge request a team stops asking PE to
+  *write*, PE may still be *reviewing*. `mr_events.actor` records who gave each approval, so the card
+  reads `5 / 6 approvals on non-PE work were given by PE`. Approvals crawled before that column
+  existed name nobody and are reported as **unattributed** rather than scored as "not PE" — which
+  would understate exactly the load the card exists to show, silently, on every historical row.
+
+  One cell is still blocked: a merge *rate* needs merge requests that never merged, and the crawl
+  fetches `state=merged` only, so there is no denominator. That is an ingest change of a different
+  size — it would pull every open and closed MR into the store — and a plausible lookalike in its
+  place is how this page would end up quietly disagreeing with a hand audit of the same window.
 - **Who is self-serving** — per-author volume as vertical columns across the page rather than a list
   down it, **every author who merged self-service work**, coloured by whether they are on the PE
-  roster. Restricting it to non-PE answered a narrower question than the panel's title asks, and hid
+  roster. Explanatory text lives in an **About this panel** disclosure, as on every other panel, so
+  the chart is what you see first rather than three paragraphs about it. Restricting it to non-PE answered a narrower question than the panel's title asks, and hid
   the comparison that makes the non-PE bars legible: how much of this tooling PE runs itself. Beside
   it, median and p90 open→merged for the non-PE population.
 

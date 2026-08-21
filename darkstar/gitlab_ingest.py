@@ -170,37 +170,39 @@ def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[stor
     minutes before the merge). "review" is the first note from a human who is not the MR's author:
     a self-comment is not review, and neither is Duo's automatic reply.
     """
-    events: list[tuple[str, datetime]] = []
+    events: list[tuple[str, datetime, str | None]] = []
     review_at: datetime | None = None
+    review_by: str | None = None
     approval_at: datetime | None = None
+    approval_by: str | None = None
     for note in notes:
         username = ((note.get("author") or {}).get("username")) or ""
         created = _to_naive_utc(note["created_at"])
         if note.get("system"):
             body = note.get("body") or ""
             if _READY_NOTE in body:
-                events.append(("ready", created))
+                events.append(("ready", created, None))
             elif _DRAFT_NOTE in body:
-                events.append(("draft", created))
+                events.append(("draft", created, None))
             elif (_APPROVAL_NOTE in body and username != author_username
                   and not _is_bot(username)):
                 # An approval IS the review. PE merges its own work once a colleague approves, so
                 # counting comments alone measured conversation, not review: on the crawled sample
                 # 111 of 124 MRs carried an approval and only 23 drew a comment.
                 if approval_at is None or created < approval_at:
-                    approval_at = created
+                    approval_at, approval_by = created, username
             continue
         if _is_bot(username) or username == author_username:
             continue
         if review_at is None or created < review_at:
-            review_at = created
+            review_at, review_by = created, username
     if review_at is not None:
-        events.append(("review", review_at))
+        events.append(("review", review_at, review_by))
     if approval_at is not None:
-        events.append(("approval", approval_at))
-    events.sort(key=lambda pair: pair[1])
-    return [store.MergeRequestEventRow(mr_id=mr_id, kind=kind, happened_at=when, seq=i)
-            for i, (kind, when) in enumerate(events)]
+        events.append(("approval", approval_at, approval_by))
+    events.sort(key=lambda event: event[1])
+    return [store.MergeRequestEventRow(mr_id=mr_id, kind=kind, happened_at=when, seq=i, actor=actor)
+            for i, (kind, when, actor) in enumerate(events)]
 
 
 def _project_path(mr: dict) -> str:
@@ -227,6 +229,13 @@ def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> 
         "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
         "  OR events_fetched_at IS NULL OR merged_by IS NULL OR source_branch IS NULL "
         "  OR pipelines_fetched_at IS NULL OR author_name IS NULL)", [cutoff]
+    ).fetchone()[0]
+    # Approval events written before `actor` existed name nobody, and an incremental crawl only
+    # revisits MRs updated since the watermark -- so without this the approver stays unknown on every
+    # historical row and the panel that needs it can never fill.
+    missing += connection.execute(
+        "SELECT count(*) FROM mr_events e JOIN merge_requests m ON m.id = e.mr_id "
+        "WHERE m.merged_at >= ? AND e.kind = 'approval' AND e.actor IS NULL", [cutoff]
     ).fetchone()[0]
     if missing:
         logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)

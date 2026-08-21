@@ -417,16 +417,24 @@ def adoption_report(
     names = {**ROSTER,
              **{username: name for username, name in (roster.get("added") or {}).items()}}
 
-    approved: set[int] = set()
-    for (mr_id,) in connection.execute(
-        "SELECT DISTINCT mr_id FROM mr_events WHERE kind = 'approval'"
+    # Who approved, not just that somebody did. The approver is a GitLab username, so roster
+    # membership is a direct lookup -- and "authoring moved but reviewing did not" is only sayable
+    # with this. Rows crawled before the actor column existed name nobody and are counted as
+    # unattributed rather than guessed at.
+    approved: dict[int, str | None] = {}
+    for mr_id, actor in connection.execute(
+        "SELECT mr_id, actor FROM mr_events WHERE kind = 'approval'"
     ).fetchall():
-        approved.add(mr_id)
+        approved[mr_id] = actor
 
     buckets: dict[date, dict[str, int]] = {}
     per_side: dict[str, list[float]] = {"pe": [], "non_pe": []}
     counts: dict[str, int] = {"pe": 0, "non_pe": 0}
     independent: dict[str, int] = {"pe": 0, "non_pe": 0}
+    # Approvals ON non-PE work, split by whether a PE member gave them. The cost line: every merge
+    # request a team stops asking PE to write, PE may still be reviewing.
+    approvals_on_non_pe: dict[str, int] = {"pe": 0, "other": 0, "unknown": 0}
+    approvers: dict[str, int] = {}
     by_author: dict[str, dict] = {}
     robots = 0
     for (mr_id, account_id, author_name, opened_at, merged_at, description,
@@ -452,6 +460,13 @@ def adoption_report(
         per_side[side].append(business_hours_between(opened_at, merged_at))
         if mr_id in approved:
             independent[side] += 1
+            approver = approved[mr_id]
+            if side == "non_pe":
+                bucket = ("unknown" if approver is None
+                          else "pe" if approver in GITLAB_USERNAMES else "other")
+                approvals_on_non_pe[bucket] += 1
+            if approver is not None:
+                approvers[approver] = approvers.get(approver, 0) + 1
         author = by_author.setdefault(
             account_id, {"name": name, "mrs": 0, "pe": side == "pe"})
         author["mrs"] += 1
@@ -491,12 +506,16 @@ def adoption_report(
         # Service accounts in the PE group, excluded from the population above. Stated rather than
         # dropped: these carry agent footers by their nature and would otherwise read as adoption.
         "robots": robots,
-        # Named, not silently missing: both need an ingest change, not a query change.
+        # Who reviews the work PE no longer writes. Split three ways rather than two: an approval
+        # crawled before the actor column existed names nobody, and calling that "not PE" would
+        # understate the very load this figure exists to show.
+        "approvals_on_non_pe": approvals_on_non_pe,
+        "top_approvers": [{"actor": actor, "approvals": n} for actor, n
+                          in sorted(approvers.items(), key=lambda kv: (-kv[1], kv[0]))[:10]],
+        # Named, not silently missing: needs an ingest change, not a query change.
         "unmeasurable": {
             "merge_rate": "the GitLab crawl fetches state=merged only, so MRs that never merged "
                           "are absent and no rate has a denominator",
-            "approver_identity": "mr_events records that an independent approval happened, not who "
-                                 "gave it, so approvals cannot be attributed back to PE",
         },
     }
 

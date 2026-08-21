@@ -90,12 +90,20 @@ class MergeRequestEventRow:
     without a re-crawl, and so an MR that toggles draft->ready more than once is representable.
     kind is "ready", "draft", "review" (first human non-bot comment by someone other than the
     author) or "approval" (first approval by someone other than the author).
+
+    actor is the GitLab username behind the event, where the note names one -- so a review or an
+    approval can be attributed to a person, and not merely counted. Recording only that an
+    independent approval happened made "who is actually reviewing this work" unanswerable, which is
+    the whole question when authoring shifts off the team doing the reviewing. NULL on the
+    draft/ready transitions, which are the author's own doing, and on rows written before the column
+    existed.
     """
 
     mr_id: int
     kind: str
     happened_at: datetime
     seq: int
+    actor: str | None
 
 
 @dataclass(frozen=True)
@@ -230,6 +238,7 @@ CREATE TABLE IF NOT EXISTS mr_events (
     kind        VARCHAR NOT NULL,
     happened_at TIMESTAMP NOT NULL,
     seq         INTEGER NOT NULL,
+    actor       VARCHAR,
     PRIMARY KEY (mr_id, seq)
 );
 
@@ -270,6 +279,7 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         "ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS pipelines_fetched_at TIMESTAMP")
     connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS author_name VARCHAR")
+    connection.execute("ALTER TABLE mr_events ADD COLUMN IF NOT EXISTS actor VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
@@ -377,8 +387,8 @@ def replace_mr_events(connection: duckdb.DuckDBPyConnection, mr_id: int,
     connection.execute("DELETE FROM mr_events WHERE mr_id = ?", [mr_id])
     if events:
         connection.executemany(
-            "INSERT INTO mr_events (mr_id, kind, happened_at, seq) VALUES (?, ?, ?, ?)",
-            [[e.mr_id, e.kind, e.happened_at, e.seq] for e in events],
+            "INSERT INTO mr_events (mr_id, kind, happened_at, seq, actor) VALUES (?, ?, ?, ?, ?)",
+            [[e.mr_id, e.kind, e.happened_at, e.seq, e.actor] for e in events],
         )
 
 

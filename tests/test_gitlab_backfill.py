@@ -320,3 +320,57 @@ def test_the_author_display_name_falls_back_to_the_username(monkeypatch):
     conn = _conn()
     _run_sync(monkeypatch, conn, [_api_mr(1, "audacy-zack.amadi", "")])
     assert conn.execute("SELECT author_name FROM merge_requests").fetchone()[0] == "audacy-zack.amadi"
+
+
+def test_approval_events_without_an_actor_force_one_full_recrawl():
+    """The actor column is useless until the historical approvals are re-read.
+
+    An incremental crawl only revisits MRs updated since the watermark, so every approval already in
+    the store would keep naming nobody and the panel that needs it would sit permanently at
+    "unknown" — looking like a code bug rather than an un-run crawl.
+    """
+    conn = _conn()
+    store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
+    store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
+        mr_id=1, kind="approval", happened_at=_NOW - timedelta(days=1), seq=0, actor="someone")])
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+    conn.execute("UPDATE mr_events SET actor = NULL WHERE kind = 'approval'")
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True
+
+    conn.execute("UPDATE mr_events SET actor = 'audacy-adam.shero' WHERE kind = 'approval'")
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+
+def test_a_draft_event_without_an_actor_does_not_force_a_crawl():
+    """Draft/ready transitions are the author's own doing and name nobody by design.
+
+    Keying the marker on every event kind would pin the store into re-crawling forever.
+    """
+    conn = _conn()
+    store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
+    store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
+        mr_id=1, kind="draft", happened_at=_NOW - timedelta(days=1), seq=0, actor=None)])
+    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+
+
+def test_the_ingest_records_who_approved(monkeypatch):
+    """Asserted through the real _sync_scopes with only the HTTP layer stubbed."""
+    conn = _conn()
+    monkeypatch.setattr(gitlab_ingest, "_mr_notes", lambda session, pid, iid: [
+        {"system": True, "body": "approved this merge request",
+         "author": {"username": "audacy-adam.shero"}, "created_at": "2026-08-04T16:00:00.000Z"},
+        {"system": False, "body": "looks good",
+         "author": {"username": "omar.saundersholiday"}, "created_at": "2026-08-04T16:30:00.000Z"},
+    ])
+    monkeypatch.setattr(gitlab_ingest, "_token", lambda: "t")
+    monkeypatch.setattr(gitlab_ingest, "_merged_mrs",
+                        lambda session, scope, iso: [_api_mr(1, "audacy-marc.polidor", "Marc")]
+                        if scope.endswith("115211004") else [])
+    monkeypatch.setattr(gitlab_ingest, "_changed_paths", lambda session, pid, iid: [])
+    monkeypatch.setattr(gitlab_ingest, "_mr_pipelines", lambda session, pid, iid, mr_id: [])
+    gitlab_ingest._sync_scopes(conn, datetime(2026, 7, 1), gitlab_ingest._PE_GROUP_IDS,
+                               gitlab_ingest._PE_PROJECT_IDS, {})
+    rows = dict(conn.execute("SELECT kind, actor FROM mr_events").fetchall())
+    assert rows["approval"] == "audacy-adam.shero"
+    assert rows["review"] == "omar.saundersholiday", "review is attributed too, same mechanism"
