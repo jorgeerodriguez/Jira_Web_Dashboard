@@ -103,6 +103,21 @@ def period_end(start: date, grain: str) -> date:
     raise ValueError(f"grain must be one of {GRAINS}, got {grain!r}")
 
 
+def is_partial_period(start: date, grain: str, since: datetime, until: datetime | None,
+                      now: datetime) -> bool:
+    """True when the window or the clock cuts this period short, so its counts are not a full one.
+
+    Three ways a period is truncated, and all three read as a real dip if unflagged: the first period
+    of a lookback that began mid-period ("last 30 days" almost never starts on a Monday, and a
+    monthly window almost never starts on the 1st), the last period of a bounded window, and the
+    period in progress right now.
+
+    Comparison is on business-tz calendar dates, because that is what a period label means.
+    """
+    ceiling = min(until, now) if until is not None else now
+    return start < business_date(since) or period_end(start, grain) > business_date(ceiling)
+
+
 def business_week(when: datetime) -> date:
     """The Monday of the week containing a naive-UTC timestamp, in the business timezone.
 

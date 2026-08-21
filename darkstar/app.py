@@ -284,6 +284,25 @@ def api_mr_turnaround(since: str | None = None, until: str | None = None,
         _db().cursor(), start, roster, terms, environment, _until(until, start)))
 
 
+@app.get("/api/adoption")
+def api_adoption(since: str | None = None, until: str | None = None,
+                 grain: str | None = None) -> JSONResponse:
+    """Self-service authorship split between the PE roster and the teams PE serves.
+
+    Takes no `authors`/`env` filter on purpose: those curate the MR-turnaround table, and adoption
+    is not a property of whichever rows that table is currently showing.
+    """
+    now = _utcnow()
+    if grain is not None and grain not in metrics.GRAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"grain must be one of {', '.join(metrics.GRAINS)}, got {grain!r}")
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    start = _since(since, mrflow.default_window_start(now))
+    return JSONResponse(mrflow.adoption_report(
+        _db().cursor(), start, _until(until, start), now, grain, roster))
+
+
 @app.get("/api/gitlab-users")
 def api_gitlab_users(q: str = "") -> JSONResponse:
     """Search GitLab for users to add to the MR-turnaround table.

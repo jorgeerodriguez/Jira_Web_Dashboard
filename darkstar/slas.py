@@ -55,6 +55,7 @@ from darkstar.metrics import (
     business_date,
     business_month,
     choose_grain,
+    is_partial_period,
     pctile,
     period_end,
     period_start,
@@ -276,21 +277,6 @@ def _earliest_done(transitions: list[tuple[str, datetime]]) -> datetime | None:
 def default_window_start(now: datetime) -> datetime:
     """The window this view uses unless the page overrides it: three months, floored at the epoch."""
     return window_start(now, _WINDOW_MONTHS, SELF_SERVICE_EPOCH)
-
-
-def _is_partial(start: date, grain: str, since: datetime, until: datetime | None,
-                now: datetime) -> bool:
-    """True when the window or the clock cuts this period short, so its counts are not a full one.
-
-    Three ways a period is truncated, and all three read as a real dip if unflagged: the first period
-    of a lookback that began mid-period ("last 30 days" almost never starts on a Monday, and a
-    monthly window almost never starts on the 1st), the last period of a bounded window, and the
-    period in progress right now.
-
-    Comparison is on business-tz calendar dates, because that is what a period label means.
-    """
-    ceiling = min(until, now) if until is not None else now
-    return start < business_date(since) or period_end(start, grain) > business_date(ceiling)
 
 
 def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: datetime,
@@ -561,7 +547,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             "p90_hours": pctile(hours, 0.9),
             "within_day_pct": (round(sum(1 for h in hours if h <= BUSINESS_HOURS_PER_DAY) / len(hours) * 100)
                                if hours else None),
-            "partial": _is_partial(start, grain, since, until, now),
+            "partial": is_partial_period(start, grain, since, until, now),
         })
 
     # Origin: what share of the requests PE takes on arrive through a skill rather than a person
@@ -583,7 +569,7 @@ def slas_report(connection: duckdb.DuckDBPyConnection, now: datetime, since: dat
             "human": slot["human"],
             "total": total,
             "agent_share_pct": round(slot["agent"] / total * 100),
-            "partial": _is_partial(start, grain, since, until, now),
+            "partial": is_partial_period(start, grain, since, until, now),
         })
 
     agent_success = {

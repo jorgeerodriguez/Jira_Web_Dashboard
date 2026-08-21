@@ -220,6 +220,92 @@
   .panel{min-width:0; display:flex; flex-direction:column}
   .panel > .tbl-wrap:last-child{flex:1}
   .panel.wide{grid-column:1 / -1}
+
+  /* ---------- adoption panels ----------
+     Structure borrowed from the hand-built scorecard: one headline number carrying the whole
+     finding, a stacked share chart beside it, then a rule-separated stat grid. Rendered in this
+     page's dark tokens rather than that page's light ones -- the layout was the useful part.
+     --s-non is the only new colour: PE work is the page accent, and the teams PE serves need to be
+     legible against it at a glance, so they get its complement rather than another blue. */
+  .adopt{--s-pe:var(--accent); --s-non:#e8834a}
+  .adopt-hero{display:grid; grid-template-columns:minmax(190px,270px) 1fr; gap:30px; align-items:end}
+  @media (max-width:820px){ .adopt-hero{grid-template-columns:1fr; align-items:start} }
+  .adopt-big{font-size:clamp(48px,7vw,74px); font-weight:700; letter-spacing:-.04em; line-height:.92;
+        color:var(--s-non); font-variant-numeric:tabular-nums}
+  .adopt-big-l{font-size:14.5px; line-height:1.4; color:var(--ink2); margin-top:11px; max-width:26ch}
+  .adopt-big-sub{font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:11px; line-height:1.5}
+  .adopt-legend{display:flex; gap:15px; margin-bottom:15px; font-size:12px; color:var(--ink2); flex-wrap:wrap}
+  .adopt-legend i{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px}
+  .adopt-plot{position:relative; padding-left:28px}
+  .adopt-gl{position:absolute; left:28px; right:0; border-top:1px solid var(--grid)}
+  .adopt-gl span{position:absolute; left:-28px; top:-7px; font-family:var(--mono); font-size:10px;
+        color:var(--muted); font-variant-numeric:tabular-nums}
+  .adopt-cols{display:flex; gap:clamp(6px,2vw,24px); align-items:flex-end; position:relative}
+  .adopt-col{flex:1; min-width:0}
+  .adopt-stack{display:flex; flex-direction:column; justify-content:flex-end}
+  .adopt-seg{position:relative}
+  .adopt-seg-pe{background:var(--s-pe); border-radius:0 0 2px 2px}
+  .adopt-seg-non{background:var(--s-non); border-radius:3px 3px 0 0; margin-bottom:2px}
+  /* A truncated period is a shorter bar for a reason that is not a dip in the work. */
+  .adopt-col.partial .adopt-seg{background-image:repeating-linear-gradient(135deg,
+        rgba(255,255,255,.30) 0 3px, transparent 3px 7px)}
+  .adopt-dl{position:absolute; top:-18px; left:0; right:0; text-align:center; font-size:12px;
+        font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums}
+  .adopt-xl{margin-top:9px; text-align:center; font-size:12px; color:var(--ink)}
+  .adopt-xs{text-align:center; font-size:10.5px; color:var(--muted); font-family:var(--mono)}
+  .adopt-col.partial .adopt-xs{color:#e0a445}
+
+  /* Rule-separated cells: the 1px gap on a --line background IS the rule, so no per-cell borders. */
+  .adopt-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1px;
+        background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .adopt-cell{background:var(--well); padding:17px 19px}
+  .adopt-n{font-size:28px; font-weight:700; letter-spacing:-.025em; line-height:1;
+        font-variant-numeric:tabular-nums; display:block}
+  .adopt-l{font-size:12.5px; line-height:1.4; color:var(--ink2); margin-top:7px; display:block}
+  .adopt-cell.ok .adopt-n{color:var(--pos)} .adopt-cell.non .adopt-n{color:var(--s-non)}
+  .adopt-cell.warn .adopt-n{color:#e0a445}
+
+  /* Two different absences, and conflating them is what misleads. A cell that is EMPTY has a
+     working metric and nothing in the window; a cell that is BLOCKED cannot be computed at all
+     until the ingest changes, and will still be blank on a busy week. They must not look alike:
+     a reader who reads "blocked" as "quiet week" waits for a number that is never coming. */
+  .adopt-cell.empty .adopt-n{color:var(--muted)}
+  .adopt-cell.blocked{background:repeating-linear-gradient(135deg,
+        var(--well) 0 8px, rgba(255,255,255,.014) 8px 16px);
+        outline:1px dashed var(--line2); outline-offset:-5px}
+  .adopt-cell.blocked .adopt-n{color:var(--muted); font-size:15px; font-weight:600;
+        letter-spacing:.01em; line-height:1.3}
+  .adopt-cell.blocked .adopt-l{color:var(--muted)}
+  .adopt-tag{display:inline-block; font-family:var(--mono); font-size:9px; font-weight:700;
+        letter-spacing:.11em; text-transform:uppercase; color:#e0a445; margin-bottom:9px;
+        border:1px solid rgba(224,164,69,.4); border-radius:3px; padding:2px 6px}
+
+  .panel.edge-ok{border-left:3px solid var(--pos)}
+  .panel.edge-warn{border-left:3px solid #e0a445}
+  .adopt-sev{font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.12em;
+        text-transform:uppercase; padding:3px 8px; border-radius:3px; white-space:nowrap}
+  .adopt-sev.ok{background:rgba(65,201,138,.14); color:var(--pos)}
+  .adopt-sev.warn{background:rgba(224,164,69,.14); color:#e0a445}
+  .adopt-prose{max-width:70ch; color:var(--ink2); font-size:14.5px}
+  .adopt-prose b{color:var(--ink); font-weight:600}
+  .adopt-note{background:var(--well); border:1px solid var(--line); border-radius:9px;
+        padding:13px 16px; font-size:13.5px; color:var(--ink2); margin-top:14px}
+  .adopt-note b{color:var(--ink); font-weight:600}
+
+  /* Author volume runs ACROSS the page, not down it: one column per author, so the shape of who is
+     adopting is read in one glance instead of scanned as a list. */
+  /* Same clipping applies to the counts above these bars: padding, not margin, so the bar heights
+     stay measured from the same baseline. */
+  .adopt-authors{display:flex; align-items:flex-end; gap:clamp(6px,1.8vw,20px); padding-top:24px;
+        overflow-x:auto}
+  .adopt-abar{flex:1 1 0; min-width:56px; display:flex; flex-direction:column; align-items:center}
+  .adopt-abar .bar{width:100%; max-width:74px; background:var(--s-non); border-radius:3px 3px 0 0;
+        position:relative}
+  .adopt-abar .bar.pe{background:var(--s-pe)}
+  .adopt-abar .bn{position:absolute; top:-19px; left:0; right:0; text-align:center; font-size:12px;
+        font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums}
+  .adopt-abar .an{margin-top:9px; font-size:11.5px; color:var(--ink2); text-align:center;
+        line-height:1.3; word-break:break-word}
   @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
   /* Must outrank .filter's display, or the hidden attribute is ignored and a control the code
      thinks is put away stays on screen. */
@@ -310,6 +396,35 @@
   </div>
 
   <div class="panels">
+  <section class="panel wide adopt">
+  <h2>Self-service authorship</h2>
+  <p class="filter-hint">Has authoring moved off Platform Engineering at all? Same self-service merge
+  requests the turnaround panel measures, split by whether the author is on the PE roster. Ignores the
+  author and environment filters below: those curate a table, and an author hidden from a table has not
+  stopped adopting.</p>
+  <div class="adopt-hero">
+    <div>
+      <div class="adopt-big" id="adoptShare">—</div>
+      <div class="adopt-big-l">of self-service merge requests were authored outside PE</div>
+      <div class="adopt-big-sub" id="adoptShareSub"></div>
+    </div>
+    <div>
+      <div class="adopt-legend">
+        <span><i style="background:var(--s-pe)"></i>PE roster</span>
+        <span><i style="background:var(--s-non)"></i>Outside PE</span>
+        <span style="color:var(--muted)">hatched = partial period</span>
+      </div>
+      <div class="tbl-wrap"><div id="adoptChart"></div></div>
+    </div>
+  </div>
+  <p class="filter-hint" id="adoptFloor"></p>
+  </section>
+
+  <section class="panel wide adopt">
+  <h2>Adoption scorecard</h2>
+  <div class="adopt-grid" id="adoptCards"></div>
+  </section>
+
   <section class="panel wide">
   <h2>Self-service impact</h2>
   <details class="note"><summary>About this panel</summary>
@@ -358,6 +473,37 @@
   </details>
   <div class="tbl-wrap"><table id="originTbl"></table></div>
   </section>
+  <section class="panel wide adopt" id="adoptWhoPanel">
+  <h2>Who is self-serving</h2>
+  <div class="p-head" style="display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+    <span class="adopt-sev ok" id="adoptWhoSev">—</span>
+    <span class="filter-hint" style="margin:0" id="adoptWhoLede"></span>
+  </div>
+  <div class="adopt-prose" id="adoptWhoProse"></div>
+  <div class="adopt-legend" style="margin-top:16px">
+    <span><i style="background:var(--s-pe)"></i>PE roster</span>
+    <span><i style="background:var(--s-non)"></i>Outside PE</span>
+  </div>
+  <div class="tbl-wrap"><div class="adopt-authors" id="adoptAuthors"></div></div>
+  <div class="pager" id="authorPager">
+    <span class="pg-count" id="authorCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Authors
+        <select id="authorPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-apg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="authorAt"></span>
+      <button class="btn" type="button" data-apg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
+  <p class="filter-hint" id="adoptAuthorsNote" style="margin-top:12px"></p>
+  <div class="adopt-note" id="adoptWhoNote"></div>
+  </section>
+
   <section class="panel wide">
   <h2>MR turnaround</h2>
   <details class="note"><summary>About this panel</summary>
@@ -415,6 +561,22 @@
   </div>
   <span class="filter-hint" id="authorHint"></span>
   <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <div class="pager" id="mrPager">
+    <span class="pg-count" id="mrCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Authors
+        <select id="mrPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-mpg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="mrAt"></span>
+      <button class="btn" type="button" data-mpg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
   <p class="filter-hint" id="scopeNote"></p>
   <p class="filter-hint" id="hiddenNote"></p>
   <p class="filter-hint" id="crawlNote"></p>
@@ -615,7 +777,13 @@ function renderMrTable(d){
      <td class="num">${cls==="sum" ? "" :
        `<button class="rowx" type="button" data-hide="${esc(a.name)}" title="Hide ${esc(a.name)}">×</button>`}</td>
    </tr>`;
-  const rows = shown.map(a=>row(a,"")).join("");
+  const pages = Math.max(1, Math.ceil(shown.length / mrPerPage));
+  if(mrPage > pages - 1) mrPage = pages - 1;     // a narrower filter can shorten the list
+  if(mrPage < 0) mrPage = 0;
+  const from = mrPage * mrPerPage;
+  const rows = shown.slice(from, from + mrPerPage).map(a=>row(a,"")).join("");
+  // The team row describes every author the filter admits, not the five on this page. Paging is a
+  // view, not a population: a total that changed as you clicked Next would mean nothing at all.
   const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
   const empty = terms.length
     ? '<tr><td colspan="5" class="na">No author matches that filter.</td></tr>'
@@ -623,6 +791,15 @@ function renderMrTable(d){
   document.getElementById("mrTbl").innerHTML = head +
     `<tbody>${rows || empty}${d.authors.length?team:''}</tbody>` +
     `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors`:''}.</caption>`;
+
+  const pager = document.getElementById("mrPager");
+  pager.hidden = shown.length <= 5;
+  document.getElementById("mrCount").textContent = shown.length
+    ? `${from + 1}\u2013${Math.min(from + mrPerPage, shown.length)} of ${shown.length} authors`
+    : "";
+  document.getElementById("mrAt").textContent = `${mrPage + 1} / ${pages}`;
+  pager.querySelector('[data-mpg="prev"]').disabled = mrPage === 0;
+  pager.querySelector('[data-mpg="next"]').disabled = mrPage >= pages - 1;
 }
 
 /* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to both
@@ -756,9 +933,16 @@ function showError(message){
     `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">${esc(message)}</div>`);
 }
 
+let adoptData = null;
+
 async function reload(){
-  [slaData, mrData] = await Promise.all([
-    getJSON("api/slas", false), getJSON("api/mr-turnaround", true)]);
+  // Adoption takes no author/env filter: it measures who is adopting, not whichever rows the table
+  // below is currently showing.
+  [slaData, mrData, adoptData] = await Promise.all([
+    getJSON("api/slas", false), getJSON("api/mr-turnaround", true), getJSON("api/adoption", false)]);
+  authorPage = 0;
+  mrPage = 0;
+  renderAdoption(adoptData);
   renderSuccess(slaData.headline);
   renderLinkage(slaData.linkage);
   renderTurnaroundTable(slaData.turnaround, slaData.grain);
@@ -820,6 +1004,182 @@ function periodLabel(iso, grain){
   if(grain !== "month") return iso;
   const [y, m] = iso.split("-");
   return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]} ${y}`;
+}
+
+/* ---------- adoption ----------
+   One number, one chart, one stat grid, one author breakdown. Every figure here is a floor rather
+   than a count: the GitLab crawl attributes a fixed author list, so self-service work by anyone
+   outside it is discarded before it reaches the store and cannot appear. The panel states that
+   bound itself instead of letting a reader mistake a narrow number for a small one. */
+const ADOPT_CHART_H = 200;
+/* Headroom for the count sitting above the tallest bar. The plot lives inside .tbl-wrap, whose
+   overflow-x:auto makes overflow-y compute to auto as well, so anything drawn above the box is
+   clipped rather than overflowing visibly — a full-height bar lost its number entirely. Reserved as
+   padding so the bar can still use the whole plot height. */
+const ADOPT_LABEL_H = 24;
+
+function pctText(share){ return share == null ? "—" : Math.round(share * 100) + "%"; }
+
+function renderAdoptChart(a){
+  const host = document.getElementById("adoptChart");
+  const periods = a.periods || [];
+  if(!periods.length){
+    host.innerHTML = `<p class="na" style="font-family:var(--mono);font-size:13px">`+
+      `No self-service merge requests merged in this window.</p>`;
+    return;
+  }
+  const top = niceCeil(Math.max(...periods.map(p => p.total), 1));
+  const px = n => (n / top) * ADOPT_CHART_H;
+  const ticks = [0, 0.5, 1].map(f => Math.round(top * f));
+  const grid = ticks.map(t =>
+    `<div class="adopt-gl" style="top:${(ADOPT_LABEL_H + ADOPT_CHART_H - px(t)).toFixed(1)}px">`+
+    `<span>${t}</span></div>`
+  ).join("");
+  const cols = periods.map(p => {
+    const label = periodLabel(p.period, a.grain);
+    // Non-PE sits on top and carries the data label: it is the series the panel is about.
+    const seg = (cls, n, who) => n
+      ? `<div class="adopt-seg adopt-seg-${cls}" style="height:${px(n).toFixed(1)}px" `+
+        `title="${who} · ${n} MR${n === 1 ? "" : "s"} · ${esc(label)}">`+
+        (cls === "non" ? `<span class="adopt-dl">${n}</span>` : "") + `</div>`
+      : "";
+    return `<div class="adopt-col${p.partial ? " partial" : ""}">`+
+      `<div class="adopt-stack" style="height:${ADOPT_CHART_H}px">`+
+        seg("non", p.non_pe, "Outside PE") + seg("pe", p.pe, "PE roster") +
+      `</div>`+
+      `<div class="adopt-xl">${esc(label)}</div>`+
+      `<div class="adopt-xs">${p.partial ? "partial" : pctText(p.share) + " outside PE"}</div>`+
+    `</div>`;
+  }).join("");
+  host.innerHTML = `<div class="adopt-plot" style="padding-top:${ADOPT_LABEL_H}px">`+
+    grid + `<div class="adopt-cols">${cols}</div></div>`;
+}
+
+function renderAdoptCards(a){
+  const cell = (cls, n, label) =>
+    `<div class="adopt-cell ${cls}"><span class="adopt-n">${n}</span><span class="adopt-l">${label}</span></div>`;
+  /* A metric the store cannot support, distinguished from one that simply has no rows this week.
+     Carries what is missing and what would unblock it, so nobody waits for a number that is not
+     coming or tries to re-derive it from the panels around it. */
+  const blocked = (what, why, needs) =>
+    `<div class="adopt-cell blocked"><span class="adopt-tag">needs ingest change</span>`+
+    `<span class="adopt-n">${what}</span>`+
+    `<span class="adopt-l">${why}<br><b>Unblocked by:</b> ${needs}</span></div>`;
+  const nonPe = a.non_pe || {}, pe = a.pe || {};
+  const peApprovalPct = pe.mrs ? Math.round((pe.independent_approvals / pe.mrs) * 100) + "%" : "—";
+  document.getElementById("adoptCards").innerHTML =
+    cell(nonPe.mrs ? "non" : "empty", nonPe.mrs ?? 0,
+         nonPe.mrs
+           ? `self-service MRs authored outside PE,<br>from ${nonPe.authors ?? 0} distinct author`+
+             `${nonPe.authors === 1 ? "" : "s"}`
+           : `self-service MRs authored outside PE<br>in this window`) +
+    (nonPe.mrs
+      ? cell("ok", Math.round((nonPe.independent_approvals / nonPe.mrs) * 100) + "%",
+             `of those carried an independent approval<br>&mdash; vs ${peApprovalPct} of PE&rsquo;s own`)
+      : cell("empty", "&mdash;",
+             `independent-approval rate &mdash; no non-PE merge<br>requests in this window to rate`)) +
+    blocked("Merge rate",
+            `The crawl fetches <b>state=merged</b> only, so merge requests that never merged are `+
+            `absent and no rate has a denominator.`,
+            `fetching all states in <b>gitlab_ingest</b>`) +
+    blocked("Approvals by PE",
+            `<b>mr_events</b> records that an independent approval happened, not who gave it, so `+
+            `approvals cannot be attributed back to PE.`,
+            `storing approver identity on the event`);
+}
+
+function renderAdoptWho(a){
+  const nonPe = a.non_pe || {}, authors = a.by_author || [];
+  const t = a.turnaround || {};
+  const adopted = (nonPe.mrs || 0) > 0;
+  const peAuthors = authors.filter(x => x.pe).length;
+  const sev = document.getElementById("adoptWhoSev");
+  sev.className = "adopt-sev " + (adopted ? "ok" : "warn");
+  sev.textContent = adopted ? "Working" : authors.length ? "PE only" : "No data";
+  document.getElementById("adoptWhoLede").textContent = authors.length
+    ? `${authors.length} author${authors.length === 1 ? "" : "s"} merged self-service work `+
+      `— ${peAuthors} on the PE roster, ${authors.length - peAuthors} outside it`
+    : "Nobody merged self-service work in this window";
+
+  const nt = t.non_pe || {}, pt = t.pe || {};
+  const compare = (nt.biz_hours_median != null && pt.biz_hours_median != null)
+    ? ` PE&rsquo;s own median on the same clock is <b>${durText(pt.biz_hours_median)}</b>.` : "";
+  document.getElementById("adoptWhoProse").innerHTML = adopted
+    ? `<p>Every author below merged self-service work in this window; the bars are coloured by `+
+      `whether they are on the PE roster. Of the <b>${nonPe.mrs}</b> authored <b>outside</b> PE, `+
+      `<b>${nonPe.independent_approvals}</b> carried an approval from someone other than the author. `+
+      `Median open&rarr;merged is <b>${durText(nt.biz_hours_median)}</b>, p90 `+
+      `<b>${durText(nt.biz_hours_p90)}</b> &mdash; business hours, not calendar, so these are smaller `+
+      `than a wall-clock figure for the same merge requests.${compare}</p>`+
+      `<p>This is the <b>whole open&rarr;merged span</b>, including draft time and time spent on a red `+
+      `pipeline. The MR turnaround panel below runs the <b>ready clock</b>, which excludes both, so its `+
+      `median for the same merge requests is smaller. Adoption asks how long the requester waited; that `+
+      `panel asks how responsive PE was.</p>`
+    : authors.length
+      ? `<p>Only the PE roster merged self-service work in this window &mdash; no attributed author `+
+        `outside it did. The bars below are PE&rsquo;s own use of the tooling.</p>`
+      : `<p>Nothing to break down: no attributed author merged a self-service merge request in this `+
+        `window.</p>`;
+
+  const host = document.getElementById("adoptAuthors");
+  // Scaled to the tallest bar across ALL pages, not this page's tallest. Rescaling per page would
+  // make page two's 3-MR author as tall as page one's 96 and turn the pager into a lie.
+  const top = Math.max(1, ...authors.map(x => x.mrs));
+  const pages = Math.max(1, Math.ceil(authors.length / authorPerPage));
+  if(authorPage > pages - 1) authorPage = pages - 1;   // a narrower window can shorten the list
+  if(authorPage < 0) authorPage = 0;
+  const from = authorPage * authorPerPage;
+  const shown = authors.slice(from, from + authorPerPage);
+
+  const apager = document.getElementById("authorPager");
+  apager.hidden = authors.length <= 5;
+  document.getElementById("authorCount").textContent = authors.length
+    ? `${from + 1}\u2013${Math.min(from + authorPerPage, authors.length)} of ${authors.length} authors`
+    : "";
+  document.getElementById("authorAt").textContent = `${authorPage + 1} / ${pages}`;
+  apager.querySelector('[data-apg="prev"]').disabled = authorPage === 0;
+  apager.querySelector('[data-apg="next"]').disabled = authorPage >= pages - 1;
+
+  host.innerHTML = shown.map(x =>
+    `<div class="adopt-abar">`+
+      `<div class="bar${x.pe ? " pe" : ""}" style="height:${Math.max(4, (x.mrs / top) * 132).toFixed(1)}px" `+
+        `title="${esc(x.name)} · ${x.mrs} MR${x.mrs === 1 ? "" : "s"} · ${x.pe ? "PE roster" : "outside PE"}">`+
+        `<span class="bn">${x.mrs}</span></div>`+
+      `<div class="an">${esc(x.name)}</div>`+
+    `</div>`).join("");
+
+  const omitted = a.authors_omitted || 0;
+  document.getElementById("adoptAuthorsNote").innerHTML = omitted
+    ? `Top <b>${(a.by_author || []).length}</b> of <b>${a.authors_total}</b> authors by volume; `+
+      `<b>${omitted}</b> more merged self-service work in this window and are not charted.`
+    : "";
+
+  const tracked = a.tracked_non_pe_authors || 0;
+  document.getElementById("adoptWhoNote").innerHTML =
+    `<b>This is a floor, not a count.</b> The GitLab crawl attributes merge requests from a fixed `+
+    `list of authors &mdash; ${tracked} outside PE right now &mdash; and discards everyone else `+
+    `before they reach the store. Self-service work by an unlisted author is invisible here, so the `+
+    `real share outside PE is at least this and probably higher. Add an author in the MR-turnaround `+
+    `panel below to bring their history in.`;
+}
+
+function renderAdoption(a){
+  document.getElementById("adoptShare").textContent = pctText(a.share);
+  const nonPe = a.non_pe || {};
+  const unattributed = a.unattributed
+    ? `<br>${a.unattributed} MR${a.unattributed === 1 ? "" : "s"} by an unrecognised author, counted on neither side`
+    : "";
+  document.getElementById("adoptShareSub").innerHTML = a.total
+    ? `${nonPe.mrs} of ${a.total} &middot; ${nonPe.authors} distinct author`+
+      `${nonPe.authors === 1 ? "" : "s"}<br>a floor: only attributed authors are visible${unattributed}`
+    : `no self-service merge requests in this window`;
+  document.getElementById("adoptFloor").innerHTML = a.total
+    ? `Grouped by ${GRAIN_NOUN[a.grain] || a.grain}. PE means a member of the Platform Engineering `+
+      `roster; every other attributed author counts as outside it.`
+    : "";
+  renderAdoptChart(a);
+  renderAdoptCards(a);
+  renderAdoptWho(a);
 }
 
 function renderTurnaroundTable(rows, grain){
@@ -892,6 +1252,12 @@ function renderOriginTable(rows, grain){
 const SLOWEST_SIZE_KEY = "darkstar.slas.slowestPerPage";
 let slowestPerPage = 5;
 let slowestPage = 0;
+const MR_SIZE_KEY = "darkstar.slas.mrPerPage";
+let mrPerPage = 5;
+let mrPage = 0;
+const AUTHOR_SIZE_KEY = "darkstar.slas.authorPerPage";
+let authorPerPage = 5;
+let authorPage = 0;
 
 /* Time to first review, with the zero explained rather than left bare.
 
@@ -1199,6 +1565,41 @@ async function init(){
     if(!dir) return;
     slowestPage += dir === "next" ? 1 : -1;
     renderSlowest(mrData);
+  });
+  const mrSize = document.getElementById("mrPerPage");
+  const storedMr = localStorage.getItem(MR_SIZE_KEY);
+  if(storedMr && [...mrSize.options].some(o => o.value === storedMr)) mrSize.value = storedMr;
+  mrPerPage = Number(mrSize.value);
+  mrSize.addEventListener("change", () => {
+    const anchor = mrPage * mrPerPage;
+    mrPerPage = Number(mrSize.value);
+    localStorage.setItem(MR_SIZE_KEY, mrSize.value);
+    mrPage = Math.floor(anchor / mrPerPage);
+    renderMrTable(mrData);
+  });
+  document.getElementById("mrPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-mpg");
+    if(!dir) return;
+    mrPage += dir === "next" ? 1 : -1;
+    renderMrTable(mrData);
+  });
+  const authorSize = document.getElementById("authorPerPage");
+  const storedAuthors = localStorage.getItem(AUTHOR_SIZE_KEY);
+  if(storedAuthors && [...authorSize.options].some(o => o.value === storedAuthors))
+    authorSize.value = storedAuthors;
+  authorPerPage = Number(authorSize.value);
+  authorSize.addEventListener("change", () => {
+    const anchor = authorPage * authorPerPage;
+    authorPerPage = Number(authorSize.value);
+    localStorage.setItem(AUTHOR_SIZE_KEY, authorSize.value);
+    authorPage = Math.floor(anchor / authorPerPage);
+    if(adoptData) renderAdoptWho(adoptData);
+  });
+  document.getElementById("authorPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-apg");
+    if(!dir) return;
+    authorPage += dir === "next" ? 1 : -1;
+    renderAdoptWho(adoptData);
   });
   document.getElementById("hiddenNote").addEventListener("click", e => {
     const name = e.target.getAttribute && e.target.getAttribute("data-show");

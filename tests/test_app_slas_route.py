@@ -1,8 +1,10 @@
+import pathlib
 from datetime import datetime
 
 import duckdb
 from fastapi.testclient import TestClient
 from darkstar import app as app_module, store
+from darkstar.roster import TRACKED_MR_AUTHORS
 
 
 def test_api_slas_returns_report(monkeypatch, tmp_path):
@@ -321,3 +323,70 @@ def test_score_cards_do_not_share_a_surface_with_the_panel_holding_them(monkeypa
         rule = re.search(selector + r"([^}]*)\}", css).group(1)
         assert "var(--well)" in rule, f"{selector} must sit on the recessed surface"
         assert "background:var(--panel)" not in rule
+
+
+def test_api_adoption_returns_report(monkeypatch, tmp_path):
+    conn = duckdb.connect(str(tmp_path / "t3.duckdb"))
+    store.initialize_schema(conn)
+    monkeypatch.setenv("DARKSTAR_DB_PATH", str(tmp_path / "t3.duckdb"))
+    monkeypatch.setattr(app_module, "_db_handle", conn, raising=False)
+    client = TestClient(app_module.app)
+    res = client.get("/api/adoption")
+    assert res.status_code == 200
+    body = res.json()
+    assert {"share", "periods", "pe", "non_pe", "tracked_non_pe_authors"} <= set(body)
+
+
+def test_api_adoption_rejects_an_unknown_grain(monkeypatch, tmp_path):
+    """A typo'd grain must 400 rather than silently falling back to the window's default.
+
+    Falling back would render a chart at a grain the caller did not ask for and give no sign of it.
+    """
+    conn = duckdb.connect(str(tmp_path / "t4.duckdb"))
+    store.initialize_schema(conn)
+    monkeypatch.setenv("DARKSTAR_DB_PATH", str(tmp_path / "t4.duckdb"))
+    monkeypatch.setattr(app_module, "_db_handle", conn, raising=False)
+    client = TestClient(app_module.app)
+    res = client.get("/api/adoption?grain=fortnight")
+    assert res.status_code == 400
+    assert "grain must be one of" in res.json()["detail"]
+
+
+def test_api_adoption_ignores_the_author_filter_the_table_below_uses(monkeypatch, tmp_path):
+    """Adoption is not a property of whichever rows the MR table is currently showing.
+
+    Accepting `authors` here would let a filter typed for the table quietly rescope the headline
+    adoption number on the same page.
+    """
+    conn = duckdb.connect(str(tmp_path / "t5.duckdb"))
+    store.initialize_schema(conn)
+    store.upsert_merge_requests(conn, [store.MergeRequestRow(
+        id=1, project_path="audacy-inc/devops/x", iid=1,
+        author_account_id=TRACKED_MR_AUTHORS["audacy-ben.bonora"], title="MR",
+        opened_at=datetime(2026, 8, 10, 16, 0), merged_at=datetime(2026, 8, 10, 17, 0),
+        labels=["pe:iac-request"], web_url="u", merged_by="", fetched_at=datetime(2026, 8, 10, 17, 0),
+        events_fetched_at=None, description="", source_branch="",
+        pipelines_fetched_at=None)])
+    monkeypatch.setenv("DARKSTAR_DB_PATH", str(tmp_path / "t5.duckdb"))
+    monkeypatch.setattr(app_module, "_db_handle", conn, raising=False)
+    client = TestClient(app_module.app)
+    plain = client.get("/api/adoption?since=2026-08-01").json()
+    filtered = client.get("/api/adoption?since=2026-08-01&authors=ben&env=prod").json()
+    assert plain["non_pe"]["mrs"] == 1, "the fixture must be non-empty or filtering cannot diverge"
+    assert plain == filtered
+
+
+def test_the_page_fetches_adoption_through_the_shared_lookback_helper():
+    """The adoption panels must inherit the lookback, and there is no JS harness to prove it here.
+
+    `getJSON` is the only path that appends `query()`, which carries since/until/grain. A bare
+    `fetch("api/adoption")` would render a headline percentage that ignores the picker while the
+    panels beside it obey it — the picker has already shipped broken on this page twice, and that
+    failure is invisible until someone compares two panels by eye.
+
+    The second argument must stay false: true would apply the MR table's author/environment filter
+    to a number that is not about the rows that table is showing.
+    """
+    page = (pathlib.Path(app_module.__file__).parent / "dashboards" / "slas.html").read_text()
+    assert page.count('getJSON("api/adoption", false)') == 1
+    assert 'fetch("api/adoption' not in page
