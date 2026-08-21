@@ -229,6 +229,26 @@ still describe real members, so a stale entry cannot quietly write off a real pe
 The live checks skip without `GITLAB_TOKEN`; two structural checks (no overlap between the lists,
 every username resolvable to a `ROSTER` name) need no network and always run.
 
+## The crawl state has to be observable
+
+Two things made the ingest unobservable in production at exactly the moment it mattered, and both
+read as "fine" rather than "unknown":
+
+**`crawl_state`'s `pending` flag compared roster versions.** Since roster edits stopped forcing a
+crawl that comparison is almost always equal, so the page reported itself current while a backfill
+was genuinely outstanding and the figures depending on it sat empty. It now reports
+`gitlab_ingest.needs_backfill` — the condition that actually forces a full crawl — so "still filling"
+is distinguishable from "this is all there is". The roster versions are still returned for diagnosis;
+they just no longer drive the flag.
+
+**Nothing configured logging.** `basicConfig` was called only in `ingest.main()`, which the deployed
+process never runs — it runs uvicorn, and uvicorn configures handlers for its own loggers while
+leaving the root logger without one. So every `darkstar` `logger.info` was dropped and the pod log
+carried four uvicorn lines and nothing else. `"forcing a full re-crawl"`, `"N in-window MRs
+incomplete"` and `"poller not started: GITLAB_TOKEN unset"` are the lines that answer "is it
+working", and none of them reached the log. `app.py` configures it now, level from
+`DARKSTAR_LOG_LEVEL` (default INFO).
+
 ## The MR-turnaround table is opt-in
 
 It lists **only authors added to the view**, and starts empty. The adoption panels above already
@@ -800,9 +820,43 @@ Jira fallback cannot separate k8s from iac (`pe-tf-module` issues also carry `pe
 15 crawled MRs carry the label as the literal string `["pe:iac-request"]` — a quoting bug in
 whatever sets it, tolerated in `_MR_BUCKET_BY_LABEL` but still worth fixing at the source.
 
+### Self-service vs AI-assisted, on the MR side
+
+The section above is the **Jira** side — how a *request* is detected. The adoption panels score
+**merge requests**, and there the two must be told apart:
+
+| | means | signal |
+|---|---|---|
+| **self-service** | a requester served themselves | a `pe:iac-request` / `pe:k8s-request` / `pe:tf-module` / `pe:tf-module-request` label, **or** a footer reading `via /<one of those>` |
+| **AI-assisted** | an agent wrote code for somebody already in the codebase | a Claude footer naming **no** workflow, or a non-self-service one (`via /troubleshoot`) |
+
+`is_self_service_mr` and `is_ai_assisted_mr` are **mutually exclusive**, so both can be reported side
+by side without double counting. Both `tf-module` spellings count, because the GitLab label is
+`pe:tf-module` while the Jira watermark is `pe-tf-module-request` — matching one scores the other as
+zero. Worth reconciling at the source.
+
+The predicate was previously `agent footer OR any pe:*-prefixed label`, and both halves leaked. Over
+the 6-month window that scored **682** merge requests as self-service where **438** name a workflow,
+putting the non-PE share at 25% instead of 16%. The prefix test also admitted `pe:troubleshoot` (17)
+and `pe:skill-introspective` (2), neither of which is a request.
+
+**A trap worth recording**, because it produced a confidently wrong conclusion. The footer names its
+workflow *after* the phrase the detector keys on:
+
+```
+Generated with Claude Code via /iac-request · Install the PE plugin: /plugin install …
+                              ^^^^^^^^^^^^^ the part that decides the answer
+```
+
+`_AGENT_FOOTER_RE.search(...).group(0)` returns only `Generated with Claude Code`, so an audit built
+on the match rather than the line "demonstrates" that footers carry no workflow identity — when 413
+of 548 name one. `_FOOTER_LINE_RE` matches the whole line for exactly this reason. Two shapes exist,
+plain `via /iac-request` (267) and plugin-qualified `via /audacy-platform-engineering:iac-request`
+(145); reading the qualifier as the workflow silently mis-scores every qualified footer.
+
 MR turnaround needs `merge_requests.opened_at` and `description` on every in-window row. Because
 the GitLab crawl is incremental, rows written before those columns existed cannot be repaired by an
-incremental pull, so `gitlab_ingest._needs_backfill` forces **one** full-window re-crawl while any
+incremental pull, so `gitlab_ingest.needs_backfill` forces **one** full-window re-crawl while any
 in-window row is missing any marker, then returns to incremental. `author_name` is a marker for the
 same reason, and it is what makes the census crawl happen at all on the release that introduced it.
 Descriptions are stored verbatim (~1.3 MiB for the whole corpus) so the footer heuristics can be

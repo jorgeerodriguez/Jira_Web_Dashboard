@@ -28,7 +28,7 @@ def _mr(id, account_id, opened, merged, self_service=True):
         title=f"MR {id}", opened_at=opened, merged_at=merged,
         labels=["pe:iac-request"] if self_service else [],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW, author_name=None)
+        source_branch="", pipelines_fetched_at=_NOW, author_name=f"Author {id}")
 
 
 _IN_VIEW: dict = {"audacy-adam.shero": "Adam", "audacy-ben.bonora": "Ben Bonora",
@@ -300,7 +300,7 @@ def _mr_in(id, account_id, project_path, opened, merged):
         id=id, project_path=project_path, iid=id, author_account_id=account_id,
         title=f"MR {id}", opened_at=opened, merged_at=merged, labels=["pe:iac-request"],
         web_url="u", merged_by="", fetched_at=_NOW, events_fetched_at=_NOW, description="",
-        source_branch="", pipelines_fetched_at=_NOW, author_name=None)
+        source_branch="", pipelines_fetched_at=_NOW, author_name=f"Author {id}")
 
 
 def test_environment_filter_splits_prod_from_nonprod():
@@ -388,25 +388,44 @@ def test_a_fully_backfilled_store_reports_nothing_incomplete():
     assert r["earliest_measurable"] == "2026-08-17"
 
 
-def test_crawl_state_says_when_an_added_author_is_still_owed_a_crawl():
-    """"I added someone and nothing happened" must be answerable from the page.
+def test_crawl_state_reports_a_backfill_that_is_still_owed():
+    """"Is this still filling, or is this all there is?" must be answerable from the page.
 
-    Until a crawl fetches their merge requests the author cannot appear, and with no signal that
-    is indistinguishable from the add having failed.
+    `pending` used to compare roster versions. Since roster edits stopped forcing a crawl that
+    comparison is almost always equal, so the page reported itself current while a backfill was
+    outstanding and the figures depending on it sat empty — the same failure the flag exists to
+    prevent, arriving from the other direction. It now tracks what actually forces a full crawl.
     """
     conn = _seed([])
-    fresh = _report(conn, {"added": {}, "hidden": [], "version": 0})["crawl"]
-    assert fresh["pending"] is False and fresh["last_crawl"] is None
+    settled = _report(conn, {"added": {}, "hidden": [], "version": 0})["crawl"]
+    assert settled["pending"] is False and settled["last_crawl"] is None
 
-    after_add = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
-    assert after_add["pending"] is True          # roster moved ahead of what was crawled
-    assert after_add["roster_version"] == 1 and after_add["crawled_version"] == 0
+    # A row missing a marker cannot be repaired incrementally, so a full crawl is owed.
+    store.upsert_merge_requests(conn, [_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0),
+                                           datetime(2026, 8, 17, 16, 0))])
+    conn.execute("UPDATE merge_requests SET author_name = NULL WHERE id = 1")
+    owed = _report(conn)["crawl"]
+    assert owed["pending"] is True, "the page must say a crawl is still owed"
 
-    store.set_roster_version(conn, 1)
+    conn.execute("UPDATE merge_requests SET author_name = 'Adam' WHERE id = 1")
     store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
-    caught_up = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 1})["crawl"]
+    caught_up = _report(conn)["crawl"]
     assert caught_up["pending"] is False
     assert caught_up["last_crawl"].startswith("2026-08-18")
+
+
+def test_a_roster_edit_alone_no_longer_reports_a_pending_crawl():
+    """Adding an author fetches nothing now, so it must not claim the page is mid-update.
+
+    Reporting "a crawl is still owed" after an add would send someone waiting for data that is
+    already there — and the wait has no end, because no crawl is coming.
+    """
+    conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 16, 0))])
+    store.set_gitlab_watermark(conn, datetime(2026, 8, 18, 12, 0))
+    after_add = _report(conn, {"added": {"audacy-x": "X"}, "hidden": [], "version": 9})["crawl"]
+    assert after_add["pending"] is False
+    # The versions are still reported, for diagnosis; they just no longer drive `pending`.
+    assert after_add["roster_version"] == 9 and after_add["crawled_version"] == 0
 
 
 def test_a_roster_member_re_added_is_not_split_into_two_rows():
@@ -613,14 +632,21 @@ def test_ordinary_pe_work_is_excluded_from_a_page_that_scores_self_service():
     assert len(report["slowest"]) == 1
 
 
-def test_an_agent_footer_alone_keeps_an_mr_in_scope():
-    """Two independent signals: the footer predates the pe:* labels by two months."""
+def test_an_agent_footer_alone_is_not_self_service():
+    """The footer says Claude wrote the code, not that a requester served themselves.
+
+    It used to satisfy the scope test on its own, on the reasoning that it predated the pe:* labels
+    by two months. That was wrong in kind rather than degree, and it admitted 347 merge requests with
+    no self-service label at all -- overstating the population 2.1x. Those are AI-assisted, which is
+    a real figure and a different one.
+    """
     opened, merged = datetime(2026, 8, 3, 15, 0, 0), datetime(2026, 8, 3, 20, 0, 0)
     row = _mr(1, _BEN, opened, merged, self_service=False)
     from dataclasses import replace
-    conn = _seed([replace(row, description="Generated with Claude Code via /iac-request")])
-    assert _report(conn)["team"]["merged"] == 1
-    assert _report(conn)["not_self_service"] == 0
+    conn = _seed([replace(row, description="Generated with Claude Code")])
+    report = _report(conn)
+    assert report["team"]["merged"] == 0, "an agent footer alone is out of scope"
+    assert report["not_self_service"] == 1, "counted as out of scope, not silently dropped"
 
 
 def test_an_author_with_no_self_service_work_disappears_entirely():

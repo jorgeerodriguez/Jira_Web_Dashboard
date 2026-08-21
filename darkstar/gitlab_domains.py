@@ -110,17 +110,41 @@ def environment_of(project_path: str, changed_paths: list[str]) -> str:
         return PRODUCTION
     return OTHER_ENVIRONMENT
 
-# A merge request counts as self-service when either signal is present. Two independent signals,
-# because each alone misses a slice: the footer predates the labels by two months, and the labels
-# catch skill-filed work whose description was rewritten. Kept here rather than in slas.py because
-# mrflow needs it too and slas already imports mrflow -- putting it there would be a cycle.
+# Self-service means a named workflow produced the merge request, and only these produce one.
+# Everything else Claude touched is AI-ASSISTED, which is a different claim: it says the code was
+# agent-written, not that a requester served themselves. Conflating them overstated the population
+# by 2.1x -- 682 merge requests scored as self-service where 330 carry a workflow label, and 347 of
+# the difference had no self-service label at all.
+#
+# Both tf-module spellings are matched because the two sides of the workflow disagree: the GitLab
+# label in the data is `pe:tf-module` (14 merge requests) while the Jira watermark is
+# `pe-tf-module-request`. Matching one spelling scores the other as zero.
+SELF_SERVICE_LABELS: frozenset[str] = frozenset({
+    "pe:iac-request",
+    "pe:k8s-request",
+    "pe:tf-module",
+    "pe:tf-module-request",
+})
+
+# The workflow names, without the label prefix -- the footer spells them the same way the labels do.
+SELF_SERVICE_WORKFLOWS: frozenset[str] = frozenset(
+    label.removeprefix("pe:") for label in SELF_SERVICE_LABELS)
+
+# Kept here rather than in slas.py because mrflow needs it too and slas already imports mrflow --
+# putting it there would be a cycle.
 _AGENT_FOOTER_RE = re.compile(
     r"generated\s+with\s+\[?claude\s+code|authored-by:\s*claude|claude\.com/claude-code",
     re.IGNORECASE,
 )
-# Any pe:-prefixed label, matching the iac-request-labels.sh hook, which accepts any such prefix
-# rather than a fixed list. A boolean does not need to know WHICH skill produced the MR.
-_SKILL_LABEL_PREFIX = "pe:"
+# The whole footer line, not just the phrase that identifies it. Matching only the phrase truncates
+# the part that matters: real footers read
+#   "Generated with Claude Code via /iac-request · Install the PE plugin: ..."
+# so the workflow is AFTER the bit the detector keys on.
+_FOOTER_LINE_RE = re.compile(r"generated\s+with\s+\[?claude\s+code[^\n]*", re.IGNORECASE)
+# `via /<workflow>`, optionally plugin-qualified as `via /<plugin>:<workflow>`. Both shapes are in
+# the corpus: 267 plain and 145 qualified.
+_VIA_WORKFLOW_RE = re.compile(
+    r"\bvia\s+/(?:[a-z0-9][a-z0-9._-]*:)?([a-z0-9][a-z0-9._-]*)", re.IGNORECASE)
 
 
 def has_agent_footer(description: str | None) -> bool:
@@ -128,17 +152,49 @@ def has_agent_footer(description: str | None) -> bool:
     return bool(_AGENT_FOOTER_RE.search(description or ""))
 
 
+def footer_workflow(description: str | None) -> str | None:
+    """The workflow a Claude footer names, or None if it names none.
+
+    Measured over the corpus: 348 footers name /iac-request, 52 /troubleshoot, 7 /k8s-request,
+    6 /tf-module-request, and 135 name nothing at all. So the footer is not one signal but two --
+    which workflow ran, and whether one ran at all -- and only the first says "self-service".
+    """
+    line = _FOOTER_LINE_RE.search(description or "")
+    if line is None:
+        return None
+    named = _VIA_WORKFLOW_RE.search(line.group(0))
+    return named.group(1).lower() if named else None
+
+
 def has_skill_label(labels: list[str] | None) -> bool:
-    """True iff any label marks the MR as produced by a self-service skill."""
-    return any(str(label).startswith(_SKILL_LABEL_PREFIX) for label in (labels or []))
+    """True iff a label names one of the self-service workflows.
+
+    Deliberately a fixed list, not the `pe:`-prefix test this used to be. That prefix mirrors the
+    iac-request-labels.sh hook, which accepts any `pe:` label -- so it also admitted `pe:troubleshoot`
+    and `pe:skill-introspective`, neither of which is a self-service request.
+    """
+    return any(str(label) in SELF_SERVICE_LABELS for label in (labels or []))
 
 
 def is_self_service_mr(description: str | None, labels: list[str] | None) -> bool:
     """Whether a merge request came out of a self-service workflow.
 
-    The self-service page exists to score how well self-service is working, so its panels must not
-    silently include ordinary PE work. Measured over 1,571 merge requests since June 2026, only 29%
-    carried a footer and 20% a pe:* label -- so an unscoped panel is 71% unrelated work, and engineers
-    with no access to the skills at all (70 and 51 merge requests each) appeared in it.
+    Two signals, both of which must NAME a workflow: a `pe:<workflow>` label, or a footer reading
+    `via /<workflow>`. Either is evidence a requester served themselves.
+
+    What does not count is a footer that names no workflow, or names one that is not self-service.
+    `Generated with Claude Code` on its own says an agent wrote the code for someone already in the
+    codebase, and `via /troubleshoot` says an agent helped debug -- neither is a request anybody
+    filed. Admitting any agent footer overstated this population 2.1x.
     """
-    return has_agent_footer(description) or has_skill_label(labels)
+    return has_skill_label(labels) or footer_workflow(description) in SELF_SERVICE_WORKFLOWS
+
+
+def is_ai_assisted_mr(description: str | None, labels: list[str] | None) -> bool:
+    """Agent-written, but NOT through a self-service workflow.
+
+    Mutually exclusive with is_self_service_mr, so the two can be reported side by side without
+    double counting. This is the honest home for a footer that names no self-service workflow: work
+    an agent wrote for someone already in the codebase, which is worth measuring and is not adoption.
+    """
+    return has_agent_footer(description) and not is_self_service_mr(description, labels)

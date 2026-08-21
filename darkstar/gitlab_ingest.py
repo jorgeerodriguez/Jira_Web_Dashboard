@@ -211,7 +211,7 @@ def _project_path(mr: dict) -> str:
     return full_reference.split("!")[0] or str(mr["project_id"])
 
 
-def _needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> bool:
+def needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> bool:
     """True if in-window MRs lack opened_at/description/events, which an incremental crawl cannot fix.
 
     Incremental crawls only re-fetch MRs *updated* since the watermark, so rows written before
@@ -248,7 +248,7 @@ def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window
     The first crawl (no stored watermark) pulls the whole trailing window; every crawl after pulls
     only MRs updated since the last successful sync (minus a small margin). The watermark advances
     only after a successful crawl, so a failed run just retries the same slice next time. A store
-    holding incomplete in-window rows is re-crawled in full once (see _needs_backfill).
+    holding incomplete in-window rows is re-crawled in full once (see needs_backfill).
 
     The roster is read ONCE here and both used for the crawl and recorded against it. That pairing
     is what makes adding an author safe under concurrency: an author added while this crawl is
@@ -260,7 +260,7 @@ def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window
     version = int(roster.get("version", 0))
     watermark = store.get_gitlab_watermark(connection)
     window_cutoff = now - timedelta(days=window_days)
-    if watermark is None or _needs_backfill(connection, window_cutoff):
+    if watermark is None or needs_backfill(connection, window_cutoff):
         cutoff = window_cutoff
     else:
         cutoff = watermark - _WATERMARK_MARGIN
