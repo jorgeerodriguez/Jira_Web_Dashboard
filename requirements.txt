@@ -67,6 +67,11 @@ vaderSentiment==3.3.2
 websockets==16.0
 Werkzeug==3.1.8
 wordcloud==1.9.6
-xgboost==3.2.0
+# xgboost-cpu, not xgboost: same version and source, built with USE_CUDA/USE_NCCL off.
+# The default wheel declares `nvidia-nccl-cu12; platform_system == "Linux"`, so it is
+# invisible on a macOS install and costs 664 MB on every CI build (904 MB -> 240 MB of
+# site-packages) for a GPU collective-communications library nothing here can use. Verified
+# on linux/amd64 against reports/forecast_report.py's XGBRegressor call site.
+xgboost-cpu==3.2.0
 xlrd==2.0.2
 zipp==3.23.1

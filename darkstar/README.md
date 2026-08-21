@@ -925,7 +925,20 @@ Streamlit into the system environment (pe-reports, unchanged) and darkstar into 
 `APP_ENTRYPOINT=darkstar`. The two dependency sets can't co-resolve in one environment (pe-reports
 pins `starlette==1.0.0`, darkstar's `fastapi` needs `starlette<0.42`), which is what forces the
 venv split. So the existing `publish:pe-reports` job builds one image for both apps — there is no
-separate darkstar image or pipeline. The **in-process Jira + GitLab pollers** launch from app
+separate darkstar image or pipeline.
+
+Because the image is shared, darkstar pays pe-reports' build cost on every merge — and that cost is
+mostly one dependency. `xgboost` declares `nvidia-nccl-cu12; platform_system == "Linux"`, a 342 MB
+CUDA collective-communications library, on top of its own 131 MB wheel. Nothing in either app can
+use a GPU. The pin is therefore **`xgboost-cpu`**: identical version and source, built with
+`USE_CUDA`/`USE_NCCL` off, which takes site-packages from 904 MB to 240 MB. Kaniko snapshots the full
+filesystem after each layer, so that saving comes off build time as well as image size. Note the
+`platform_system` marker — the dependency is invisible to a local macOS install and only appears in
+CI, which is how it went unnoticed. The test job installs `requirements-dev.txt` and
+`darkstar/requirements.txt` only, so it does **not** exercise this pin; the publish build and
+runtime do.
+
+The **in-process Jira + GitLab pollers** launch from app
 startup, share the store connection under a write-lock, and are each skipped if their secret is
 absent; `/health` is independent of the store so probes pass during the first crawl.
 
