@@ -339,14 +339,14 @@ def test_draft_time_is_excluded_from_the_reported_turnaround():
     conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 18, 15, 0))])
     assert _report(conn)["team"]["biz_hours_median"] == 9.0      # no events yet: whole span
     store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
-        mr_id=1, kind="draft", happened_at=datetime(2026, 8, 17, 19, 0), seq=0)])
+        mr_id=1, kind="draft", happened_at=datetime(2026, 8, 17, 19, 0), seq=0, actor=None)])
     assert _report(conn)["team"]["biz_hours_median"] == 4.0      # draft from 12:00 Mon onwards
 
 
 def test_first_review_is_reported_on_the_ready_clock():
     conn = _seed([_mr(1, _ADAM, datetime(2026, 8, 17, 15, 0), datetime(2026, 8, 17, 23, 0))])
     store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
-        mr_id=1, kind="review", happened_at=datetime(2026, 8, 17, 18, 0), seq=0)])
+        mr_id=1, kind="review", happened_at=datetime(2026, 8, 17, 18, 0), seq=0, actor=None)])
     fr = _report(conn)["first_review"]
     assert fr["reviewed"] == 1 and fr["hours_median"] == 3.0
 
@@ -501,9 +501,9 @@ def test_each_slowest_row_carries_both_clocks_so_draft_time_is_visible():
     conn = _seed([_mr(1, _BEN, opened, merged)])
     # Marked ready only for the final hour: two days open, one hour actually awaiting review.
     store.replace_mr_events(conn, 1, [
-        store.MergeRequestEventRow(mr_id=1, kind="draft", happened_at=opened, seq=0),
+        store.MergeRequestEventRow(mr_id=1, kind="draft", happened_at=opened, seq=0, actor=None),
         store.MergeRequestEventRow(
-            mr_id=1, kind="ready", happened_at=datetime(2026, 8, 5, 16, 0, 0), seq=1),
+            mr_id=1, kind="ready", happened_at=datetime(2026, 8, 5, 16, 0, 0), seq=1, actor=None),
     ])
     row = _report(conn)["slowest"][0]
 
@@ -581,9 +581,9 @@ def test_red_time_inside_a_draft_spell_is_not_deducted_twice():
     conn = _seed([_mr(1, _BEN, opened, merged)])
     store.replace_mr_events(conn, 1, [
         store.MergeRequestEventRow(mr_id=1, kind="draft",
-                                   happened_at=datetime(2026, 8, 3, 16, 0, 0), seq=0),
+                                   happened_at=datetime(2026, 8, 3, 16, 0, 0), seq=0, actor=None),
         store.MergeRequestEventRow(mr_id=1, kind="ready",
-                                   happened_at=datetime(2026, 8, 4, 15, 0, 0), seq=1),
+                                   happened_at=datetime(2026, 8, 4, 15, 0, 0), seq=1, actor=None),
     ])
     # red for the whole draft window: Mon 10:00 -> Tue 07:00, which is 7 business hours
     _pipes(conn, 1, [("failed", datetime(2026, 8, 3, 17, 0, 0)),

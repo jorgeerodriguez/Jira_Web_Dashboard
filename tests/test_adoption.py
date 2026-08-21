@@ -161,9 +161,9 @@ def test_an_independent_approval_is_counted_per_side():
          _mr(2, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
          _mr(3, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0))],
         events={1: [store.MergeRequestEventRow(
-            mr_id=1, kind="approval", happened_at=datetime(2026, 8, 10, 16, 30), seq=0)],
+            mr_id=1, kind="approval", happened_at=datetime(2026, 8, 10, 16, 30), seq=0, actor=None)],
                 2: [store.MergeRequestEventRow(
-            mr_id=2, kind="review", happened_at=datetime(2026, 8, 10, 16, 30), seq=0)]})
+            mr_id=2, kind="review", happened_at=datetime(2026, 8, 10, 16, 30), seq=0, actor=None)]})
     report = _report(conn)
     assert report["non_pe"]["mrs"] == 3
     # One approval, not two: a review comment is not an approval, and the other MR drew neither.
@@ -177,9 +177,8 @@ def test_figures_the_store_cannot_support_are_named_not_approximated():
     is how a dashboard ends up quietly disagreeing with the audit it was built to reproduce.
     """
     report = _report(_seed([]))
-    assert set(report["unmeasurable"]) == {"merge_rate", "approver_identity"}
+    assert set(report["unmeasurable"]) == {"merge_rate"}
     assert "state=merged" in report["unmeasurable"]["merge_rate"]
-    assert "not who" in report["unmeasurable"]["approver_identity"]
 
 
 def test_an_author_the_roster_has_never_heard_of_is_counted_and_named():
@@ -238,3 +237,50 @@ def test_an_author_with_no_display_name_anywhere_is_labelled_by_username():
     conn = _seed([_mr(1, "audacy-zack.amadi", datetime(2026, 8, 10, 16, 0),
                       datetime(2026, 8, 10, 17, 0), author_name=None)])
     assert [a["name"] for a in _report(conn)["by_author"]] == ["audacy-zack.amadi"]
+
+
+def _approval(mr_id, actor):
+    return store.MergeRequestEventRow(mr_id=mr_id, kind="approval",
+                                      happened_at=datetime(2026, 8, 10, 16, 30), seq=0, actor=actor)
+
+
+def test_approvals_on_non_pe_work_are_attributed_to_whoever_gave_them():
+    """The cost line: authoring can move off PE while reviewing stays on it.
+
+    Counting only *that* an independent approval happened made this unanswerable, and it is the
+    question that decides whether self-service actually reduced PE's load or just relocated it.
+    """
+    conn = _seed(
+        [_mr(1, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0), author_name="Ben"),
+         _mr(2, _BEN, datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0), author_name="Ben"),
+         _mr(3, _BEN, datetime(2026, 8, 12, 16, 0), datetime(2026, 8, 12, 17, 0), author_name="Ben")],
+        events={1: [_approval(1, "audacy-adam.shero")],      # PE approved
+                2: [_approval(2, "omar.saundersholiday")],   # PE approved
+                3: [_approval(3, "audacy-marc.polidor")]})   # a peer outside PE approved
+    report = _report(conn)
+    assert report["approvals_on_non_pe"] == {"pe": 2, "other": 1, "unknown": 0}
+    assert report["top_approvers"][0] == {"actor": "audacy-adam.shero", "approvals": 1}
+
+
+def test_an_approval_crawled_before_the_actor_column_is_unknown_not_not_pe():
+    """A NULL approver must not be scored as "someone other than PE".
+
+    That would understate exactly the load this figure exists to expose, and it would do it silently
+    on every row written before the column existed -- which is all of them, until the backfill runs.
+    """
+    conn = _seed(
+        [_mr(1, _BEN, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0), author_name="Ben")],
+        events={1: [_approval(1, None)]})
+    report = _report(conn)
+    assert report["approvals_on_non_pe"] == {"pe": 0, "other": 0, "unknown": 1}
+    assert report["top_approvers"] == [], "nobody can be credited for an approval with no actor"
+
+
+def test_approvals_on_pe_authored_work_are_not_counted_as_review_load():
+    """This figure is about work PE did not write. PE approving its own team's MRs is not that."""
+    conn = _seed(
+        [_mr(1, _ADAM, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0))],
+        events={1: [_approval(1, "omar.saundersholiday")]})
+    report = _report(conn)
+    assert report["approvals_on_non_pe"] == {"pe": 0, "other": 0, "unknown": 0}
+    assert report["pe"]["independent_approvals"] == 1

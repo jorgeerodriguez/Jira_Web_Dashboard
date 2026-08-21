@@ -280,17 +280,11 @@
         letter-spacing:.11em; text-transform:uppercase; color:#e0a445; margin-bottom:9px;
         border:1px solid rgba(224,164,69,.4); border-radius:3px; padding:2px 6px}
 
-  .panel.edge-ok{border-left:3px solid var(--pos)}
-  .panel.edge-warn{border-left:3px solid #e0a445}
-  .adopt-sev{font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.12em;
-        text-transform:uppercase; padding:3px 8px; border-radius:3px; white-space:nowrap}
-  .adopt-sev.ok{background:rgba(65,201,138,.14); color:var(--pos)}
-  .adopt-sev.warn{background:rgba(224,164,69,.14); color:#e0a445}
-  .adopt-prose{max-width:70ch; color:var(--ink2); font-size:14.5px}
-  .adopt-prose b{color:var(--ink); font-weight:600}
-  .adopt-note{background:var(--well); border:1px solid var(--line); border-radius:9px;
-        padding:13px 16px; font-size:13.5px; color:var(--ink2); margin-top:14px}
-  .adopt-note b{color:var(--ink); font-weight:600}
+  .adopt-prose{max-width:70ch; color:var(--muted); font-size:12.5px}
+  .adopt-prose p{margin:8px 0 0}
+  .adopt-prose b{color:var(--ink2); font-weight:600}
+  #adoptWhoNote{color:var(--muted); font-size:12.5px; margin-top:10px; max-width:70ch}
+  #adoptWhoNote b{color:var(--ink2); font-weight:600}
 
   /* Author volume runs ACROSS the page, not down it: one column per author, so the shape of who is
      adopting is read in one glance instead of scanned as a list. */
@@ -398,10 +392,15 @@
   <div class="panels">
   <section class="panel wide adopt">
   <h2>Self-service authorship</h2>
-  <p class="filter-hint">Has authoring moved off Platform Engineering at all? Every author who merged
-  a self-service merge request in the window, split by whether they are on the PE roster &mdash; a
-  census, not a tracked list. Ignores the author and environment filters below: those curate a table,
-  and an author hidden from a table has not stopped adopting.</p>
+  <details class="note"><summary>About this panel</summary>
+  <p>Has authoring moved off Platform Engineering at all? Every author who merged a self-service
+  merge request in the window, split by whether they are on the PE roster &mdash; a <b>census</b>,
+  not a tracked list. The crawl keeps every author it finds, so nobody has to be added for their work
+  to count.</p>
+  <p>Ignores the author and environment filters below, and the hidden list: those curate a table, and
+  an author hidden from a table has not stopped adopting. This panel and the table further down will
+  therefore disagree on totals, by design.</p>
+  </details>
   <div class="adopt-hero">
     <div>
       <div class="adopt-big" id="adoptShare">—</div>
@@ -475,11 +474,10 @@
   </section>
   <section class="panel wide adopt" id="adoptWhoPanel">
   <h2>Who is self-serving</h2>
-  <div class="p-head" style="display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-    <span class="adopt-sev ok" id="adoptWhoSev">—</span>
-    <span class="filter-hint" style="margin:0" id="adoptWhoLede"></span>
-  </div>
+  <details class="note"><summary>About this panel</summary>
   <div class="adopt-prose" id="adoptWhoProse"></div>
+  <div id="adoptWhoNote"></div>
+  </details>
   <div class="adopt-legend" style="margin-top:16px">
     <span><i style="background:var(--s-pe)"></i>PE roster</span>
     <span><i style="background:var(--s-non)"></i>Outside PE</span>
@@ -502,7 +500,6 @@
     </span>
   </div>
   <p class="filter-hint" id="adoptAuthorsNote" style="margin-top:12px"></p>
-  <div class="adopt-note" id="adoptWhoNote"></div>
   </section>
 
   <section class="panel wide">
@@ -1086,24 +1083,30 @@ function renderAdoptCards(a){
             `The crawl fetches <b>state=merged</b> only, so merge requests that never merged are `+
             `absent and no rate has a denominator.`,
             `fetching all states in <b>gitlab_ingest</b>`) +
-    blocked("Approvals by PE",
-            `<b>mr_events</b> records that an independent approval happened, not who gave it, so `+
-            `approvals cannot be attributed back to PE.`,
-            `storing approver identity on the event`);
+    (() => {
+      // The cost line: every merge request a team stops asking PE to write, PE may still review.
+      const ap = a.approvals_on_non_pe || {};
+      const known = (ap.pe || 0) + (ap.other || 0);
+      if(!known && !ap.unknown) return cell("empty", "&mdash;",
+        `approvals on non-PE work &mdash; none recorded<br>in this window`);
+      // A crawl predating the approver column names nobody. Counting those as "not PE" would
+      // understate exactly the load this card exists to show, so they read as unattributed instead.
+      if(!known) return cell("empty", "&mdash;",
+        `who approves non-PE work &mdash; <b>${ap.unknown}</b> approval`+
+        `${ap.unknown === 1 ? "" : "s"} predate the approver<br>column, unattributed until the next `+
+        `full crawl`);
+      const pct = Math.round((ap.pe / known) * 100);
+      return cell(pct >= 75 ? "warn" : "ok", `${ap.pe} / ${known}`,
+        `approvals on non-PE work were given by PE`+
+        (ap.unknown ? ` &mdash; ${ap.unknown} unattributed` : "")+
+        `<br>authoring moved${pct >= 75 ? "; reviewing did not" : ", and some review with it"}`);
+    })();
 }
 
 function renderAdoptWho(a){
   const nonPe = a.non_pe || {}, authors = a.by_author || [];
   const t = a.turnaround || {};
   const adopted = (nonPe.mrs || 0) > 0;
-  const peAuthors = authors.filter(x => x.pe).length;
-  const sev = document.getElementById("adoptWhoSev");
-  sev.className = "adopt-sev " + (adopted ? "ok" : "warn");
-  sev.textContent = adopted ? "Working" : authors.length ? "PE only" : "No data";
-  document.getElementById("adoptWhoLede").textContent = authors.length
-    ? `${authors.length} author${authors.length === 1 ? "" : "s"} merged self-service work `+
-      `— ${peAuthors} on the PE roster, ${authors.length - peAuthors} outside it`
-    : "Nobody merged self-service work in this window";
 
   const nt = t.non_pe || {}, pt = t.pe || {};
   const compare = (nt.biz_hours_median != null && pt.biz_hours_median != null)
