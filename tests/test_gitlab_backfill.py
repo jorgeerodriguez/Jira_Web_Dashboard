@@ -60,25 +60,25 @@ def _mr_row(id, opened, merged):
 
 def test_in_window_row_missing_opened_at_forces_a_full_crawl():
     conn = _migrated_conn_with_legacy_row(_NOW - timedelta(days=9))
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True
 
 
 def test_complete_in_window_rows_stay_incremental():
     """The backfill must terminate — once repaired, crawls go back to cheap incremental pulls."""
     conn = _conn()
     store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=10), _NOW - timedelta(days=9))])
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_incomplete_row_older_than_the_window_is_ignored():
     """Ancient rows are never re-crawled, so they must not pin the sync to full crawls forever."""
     conn = _migrated_conn_with_legacy_row(_NOW - timedelta(days=399))
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_empty_store_needs_no_backfill():
     """A first run already crawls the full window via the absent watermark, not via backfill."""
-    assert gitlab_ingest._needs_backfill(_conn(), _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(_conn(), _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_rows_missing_a_source_branch_force_one_full_recrawl(tmp_path):
@@ -97,16 +97,16 @@ def test_rows_missing_a_source_branch_force_one_full_recrawl(tmp_path):
         "[], 'u', '', '2026-08-03 00:00:00', '2026-08-03 00:00:00', '')")
     assert conn.execute(
         "SELECT count(*) FROM merge_requests WHERE source_branch IS NULL").fetchone()[0] == 1
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is True
 
     conn.execute("UPDATE merge_requests SET source_branch = 'DEVOPS-1-thing'")
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True, \
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is True, \
         "still owed: pipelines_fetched_at is its own marker and remains NULL"
     conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True, \
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is True, \
         "still owed: author_name is its own marker and remains NULL"
     conn.execute("UPDATE merge_requests SET author_name = 'A'")
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is False, \
         "and the forcing has to stop once every marker is filled, or every crawl is a full one"
 
 
@@ -177,18 +177,18 @@ def test_the_ingest_stores_pipeline_results(monkeypatch):
     stored = conn.execute(
         "SELECT status FROM mr_pipelines WHERE mr_id = 601 ORDER BY seq").fetchall()
     assert [row[0] for row in stored] == ["failed", "success"], "both results must be stored"
-    # And the marker must be stamped, or _needs_backfill forces a full crawl on every cycle forever.
+    # And the marker must be stamped, or needs_backfill forces a full crawl on every cycle forever.
     marker = conn.execute(
         "SELECT pipelines_fetched_at FROM merge_requests WHERE id = 601").fetchone()[0]
     assert marker is not None, "reading pipelines must record that they were read"
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is False, \
         "a crawled MR must not still look owed"
 
 
 def test_rows_with_no_pipeline_history_force_one_full_recrawl():
     """The Red CI clock is dead data without this, and nothing would ever say so.
 
-    !17 added mr_pipelines but not a marker, so `_needs_backfill` stayed False once the other five
+    !17 added mr_pipelines but not a marker, so `needs_backfill` stayed False once the other five
     columns were filled and the crawl remained incremental forever. The 2,649 merge requests already
     stored would never have been read for pipelines, so red time would have been excluded for nothing
     and the Red CI column would have sat empty permanently.
@@ -203,12 +203,12 @@ def test_rows_with_no_pipeline_history_force_one_full_recrawl():
         "merged_at, labels, web_url, merged_by, fetched_at, events_fetched_at, description, "
         "source_branch) VALUES (1, 'p', 1, 'a', 'DEVOPS-1 x', '2026-08-01 16:00:00', "
         "'2026-08-02 17:00:00', [], 'u', '', '2026-08-03 00:00:00', '2026-08-03 00:00:00', '', 'b')")
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is True
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is True
 
     # marked as read, with no pipeline rows at all — a legitimate outcome
     conn.execute("UPDATE merge_requests SET pipelines_fetched_at = '2026-08-03 00:00:00'")
     conn.execute("UPDATE merge_requests SET author_name = 'A'")   # the other marker on this row
-    assert gitlab_ingest._needs_backfill(conn, datetime(2026, 7, 1)) is False, \
+    assert gitlab_ingest.needs_backfill(conn, datetime(2026, 7, 1)) is False, \
         "an MR with genuinely no pipelines must not re-trigger the crawl forever"
 
 
@@ -225,15 +225,15 @@ def test_rows_without_an_author_name_force_one_full_recrawl():
     """
     conn = _conn()
     store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
     conn.execute("UPDATE merge_requests SET author_name = NULL WHERE id = 1")
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True, \
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True, \
         "a row with no author_name predates the census crawl and cannot be repaired incrementally"
 
     # ...and it terminates: once the full crawl has named the author, no further crawl is forced.
     conn.execute("UPDATE merge_requests SET author_name = 'Marc Polidor' WHERE id = 1")
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_an_out_of_window_row_without_an_author_name_is_left_alone():
@@ -241,7 +241,7 @@ def test_an_out_of_window_row_without_an_author_name_is_left_alone():
     conn = _conn()
     store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=400), _NOW - timedelta(days=399))])
     conn.execute("UPDATE merge_requests SET author_name = NULL WHERE id = 1")
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def _api_mr(mr_id, username, name, **over):
@@ -333,13 +333,13 @@ def test_approval_events_without_an_actor_force_one_full_recrawl():
     store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
     store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
         mr_id=1, kind="approval", happened_at=_NOW - timedelta(days=1), seq=0, actor="someone")])
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
     conn.execute("UPDATE mr_events SET actor = NULL WHERE kind = 'approval'")
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is True
 
     conn.execute("UPDATE mr_events SET actor = 'audacy-adam.shero' WHERE kind = 'approval'")
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_a_draft_event_without_an_actor_does_not_force_a_crawl():
@@ -351,7 +351,7 @@ def test_a_draft_event_without_an_actor_does_not_force_a_crawl():
     store.upsert_merge_requests(conn, [_mr_row(1, _NOW - timedelta(days=2), _NOW - timedelta(days=1))])
     store.replace_mr_events(conn, 1, [store.MergeRequestEventRow(
         mr_id=1, kind="draft", happened_at=_NOW - timedelta(days=1), seq=0, actor=None)])
-    assert gitlab_ingest._needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
+    assert gitlab_ingest.needs_backfill(conn, _NOW - timedelta(days=_WINDOW_DAYS)) is False
 
 
 def test_the_ingest_records_who_approved(monkeypatch):

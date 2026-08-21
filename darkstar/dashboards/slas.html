@@ -397,6 +397,13 @@
   merge request in the window, split by whether they are on the PE roster &mdash; a <b>census</b>,
   not a tracked list. The crawl keeps every author it finds, so nobody has to be added for their work
   to count.</p>
+  <p><b>Self-service</b> means a merge request that <b>names a workflow</b> &mdash; either a
+  <code>pe:iac-request</code> / <code>pe:k8s-request</code> / <code>pe:tf-module</code> label, or a
+  footer reading <code>via /iac-request</code>. Both are evidence a requester served themselves.</p>
+  <p>A footer that names <i>no</i> workflow, or names one that is not self-service
+  (<code>via /troubleshoot</code>), is <b>AI-assisted</b> instead: an agent wrote code for somebody
+  already in the codebase. Real work, not adoption. It is reported on its own scorecard card and the
+  two populations never overlap.</p>
   <p>Ignores the author and environment filters below, and the hidden list: those curate a table, and
   an author hidden from a table has not stopped adopting. This panel and the table further down will
   therefore disagree on totals, by design.</p>
@@ -1079,6 +1086,17 @@ function renderAdoptCards(a){
              `of those carried an independent approval<br>&mdash; vs ${peApprovalPct} of PE&rsquo;s own`)
       : cell("empty", "&mdash;",
              `independent-approval rate &mdash; no non-PE merge<br>requests in this window to rate`)) +
+    (() => {
+      // Agent-written work outside any workflow. Beside the self-service figures, never inside them:
+      // "Claude wrote this" is not "a requester served themselves", and folding the two together
+      // overstated this page 2.1x.
+      const ai = a.ai_assisted || {};
+      if(!ai.mrs) return cell("empty", "&mdash;",
+        `AI-assisted merge requests outside a<br>workflow &mdash; none in this window`);
+      return cell("", ai.mrs,
+        `AI-assisted MRs outside any workflow,<br>from ${ai.authors} author`+
+        `${ai.authors === 1 ? "" : "s"} &mdash; agent-written, not self-served`);
+    })() +
     blocked("Merge rate",
             `The crawl fetches <b>state=merged</b> only, so merge requests that never merged are `+
             `absent and no rate has a denominator.`,

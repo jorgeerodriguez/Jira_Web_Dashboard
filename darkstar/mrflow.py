@@ -43,6 +43,7 @@ from darkstar.gitlab_domains import (
     MIXED_ENVIRONMENT,
     OTHER_ENVIRONMENT,
     environment_of,
+    is_ai_assisted_mr,
     is_self_service_mr,
 )
 from darkstar.metrics import (
@@ -58,7 +59,7 @@ from darkstar.metrics import (
     red_spans,
     window_start,
 )
-from darkstar import store
+from darkstar import gitlab_ingest, store
 from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, ROSTER
 
 _WINDOW_MONTHS: int = 6
@@ -138,20 +139,24 @@ def _matches(name: str, terms: list[str]) -> bool:
     return not terms or any(term in name.lower() for term in terms)
 
 
-def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict) -> dict:
-    """Whether the store has caught up with the roster, and when it last did.
+def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict,
+                since: datetime) -> dict:
+    """Whether a full crawl is still owed, and when one last completed.
 
-    An added author cannot appear until a crawl has fetched their merge requests. Without this the
-    page has no way to distinguish "the crawl is still running" from "the add did nothing", which
-    is exactly how a working add gets reported as broken.
+    `pending` used to mean "the roster moved and the crawl has not caught up". That stopped meaning
+    anything when roster edits stopped forcing a crawl: the comparison is now almost always equal,
+    so the page reported itself current while a backfill was genuinely outstanding and figures that
+    depend on it sat empty. Which is the failure this function was written to prevent, arriving from
+    the other direction.
+
+    It now reports the condition that actually forces a full crawl -- in-window rows missing a
+    marker -- so "still filling" is distinguishable from "this is all there is".
     """
-    wanted = int(roster.get("version", 0))
-    crawled = store.get_roster_version(connection)
     last = store.get_gitlab_watermark(connection)
     return {
-        "roster_version": wanted,
-        "crawled_version": crawled,
-        "pending": wanted != crawled,
+        "roster_version": int(roster.get("version", 0)),
+        "crawled_version": store.get_roster_version(connection),
+        "pending": gitlab_ingest.needs_backfill(connection, since),
         "last_crawl": last.isoformat(timespec="minutes") if last else None,
     }
 
@@ -352,7 +357,7 @@ def mr_turnaround_report(
         "hidden": sorted(hidden),
         "filter": name_filter,
         "environment": environment,
-        "crawl": crawl_state(connection, roster),
+        "crawl": crawl_state(connection, roster, since),
         "mixed": mixed,
         # Merge requests by tracked authors carrying neither an agent footer nor a pe:* label, so
         # excluded from this page by scope. Reported for the same reason every other omission is.
@@ -437,6 +442,11 @@ def adoption_report(
     approvers: dict[str, int] = {}
     by_author: dict[str, dict] = {}
     robots = 0
+    # Agent-written but not through a workflow. Reported beside the self-service population rather
+    # than folded into it: it says Claude wrote the code for someone already in the codebase, which
+    # is worth knowing and is not adoption. Counting it as adoption overstated the panel 2.1x.
+    ai_assisted = 0
+    ai_assisted_authors: set[str] = set()
     for (mr_id, account_id, author_name, opened_at, merged_at, description,
          mr_labels) in connection.execute(
         "SELECT id, author_account_id, author_name, opened_at, merged_at, description, labels "
@@ -445,6 +455,9 @@ def adoption_report(
         [since, until, until],
     ).fetchall():
         if not is_self_service_mr(description, mr_labels):
+            if is_ai_assisted_mr(description, mr_labels) and account_id not in NON_HUMAN_GROUP_MEMBERS:
+                ai_assisted += 1
+                ai_assisted_authors.add(account_id)
             continue
         if account_id in NON_HUMAN_GROUP_MEMBERS:
             # Service accounts carry agent footers by their nature, so they would otherwise dominate
@@ -506,6 +519,9 @@ def adoption_report(
         # Service accounts in the PE group, excluded from the population above. Stated rather than
         # dropped: these carry agent footers by their nature and would otherwise read as adoption.
         "robots": robots,
+        # Agent-written work outside any workflow, and how many people it came from. Mutually
+        # exclusive with the self-service counts above, so the two never double count.
+        "ai_assisted": {"mrs": ai_assisted, "authors": len(ai_assisted_authors)},
         # Who reviews the work PE no longer writes. Split three ways rather than two: an approval
         # crawled before the actor column existed names nobody, and calling that "not PE" would
         # understate the very load this figure exists to show.

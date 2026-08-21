@@ -284,3 +284,108 @@ def test_approvals_on_pe_authored_work_are_not_counted_as_review_load():
     report = _report(conn)
     assert report["approvals_on_non_pe"] == {"pe": 0, "other": 0, "unknown": 0}
     assert report["pe"]["independent_approvals"] == 1
+
+
+_FOOTER = "Generated with Claude Code"
+
+
+def test_self_service_means_a_workflow_label_and_nothing_else():
+    """Adam's definition: iac-request, k8s-request, tf-module. Everything else is AI-assisted.
+
+    The predicate used to be `footer OR any pe:* label`, which overstated the population 2.1x over
+    the real corpus — 682 merge requests scored self-service where 330 carry a workflow label. Both
+    halves leaked: the footer says Claude wrote the code, not that a requester served themselves, and
+    the `pe:` prefix test also admitted pe:troubleshoot and pe:skill-introspective.
+    """
+    from darkstar.gitlab_domains import is_ai_assisted_mr, is_self_service_mr
+    for label in ("pe:iac-request", "pe:k8s-request", "pe:tf-module", "pe:tf-module-request"):
+        assert is_self_service_mr("", [label]) is True, label
+        assert is_ai_assisted_mr(_FOOTER, [label]) is False, "a workflow label wins over the footer"
+    for label in ("pe:troubleshoot", "pe:skill-introspective", "DevOps"):
+        assert is_self_service_mr(_FOOTER, [label]) is False, label
+    assert is_self_service_mr(_FOOTER, []) is False, "a footer naming no workflow is not self-service"
+
+
+def test_both_tf_module_spellings_count():
+    """The two sides of that workflow disagree, and matching one scores the other as zero.
+
+    The GitLab label in the data is `pe:tf-module` (14 merge requests); the Jira watermark is
+    `pe-tf-module-request`. Until they are reconciled at the source, both spellings count here.
+    """
+    from darkstar.gitlab_domains import SELF_SERVICE_LABELS
+    assert {"pe:tf-module", "pe:tf-module-request"} <= SELF_SERVICE_LABELS
+
+
+def test_ai_assisted_is_reported_separately_and_never_double_counted():
+    """Agent-written work outside a workflow is a real figure, and it is not adoption."""
+    conn = _seed([
+        _mr(1, _ADAM, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),   # pe:iac-request
+        _mr(2, _BEN, datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0),
+            self_service=False, author_name="Ben"),                                  # footer only
+        _mr(3, "audacy-marc.polidor", datetime(2026, 8, 12, 16, 0), datetime(2026, 8, 12, 17, 0),
+            self_service=False, author_name="Marc"),                                 # footer only
+    ])
+    conn.execute("UPDATE merge_requests SET description = ? WHERE id IN (2, 3)", [_FOOTER])
+    report = _report(conn)
+    assert report["total"] == 1, "only the workflow-labelled MR is self-service"
+    assert report["ai_assisted"] == {"mrs": 2, "authors": 2}
+    # ...and the two populations do not overlap.
+    assert report["total"] + report["ai_assisted"]["mrs"] == 3
+
+
+def test_a_service_account_is_not_counted_as_ai_assisted_either():
+    """Bots carry the footer by their nature; scoring them as AI-assisted humans is the same error."""
+    bot = sorted(NON_HUMAN_GROUP_MEMBERS)[0]
+    conn = _seed([_mr(1, bot, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0),
+                      self_service=False, author_name="a bot")])
+    conn.execute("UPDATE merge_requests SET description = ?", [_FOOTER])
+    report = _report(conn)
+    assert report["ai_assisted"] == {"mrs": 0, "authors": 0}
+
+
+# The footer shapes actually present in the corpus, verbatim.
+_FOOTER_IAC = ("Generated with Claude Code via /iac-request · Install the PE plugin: "
+               "/plugin install audacy-platform-engineering@audacy-ai-plugins")
+_FOOTER_IAC_QUALIFIED = "Generated with Claude Code via /audacy-platform-engineering:iac-request"
+_FOOTER_TROUBLESHOOT = "Generated with Claude Code via /audacy-platform-engineering:troubleshoot"
+_FOOTER_BARE = "Generated with [Claude Code](https://claude.com/claude-code)"
+
+
+def test_a_footer_naming_a_self_service_workflow_counts():
+    """The footer carries the workflow, and the detector must read past the phrase it keys on.
+
+    Real footers read `Generated with Claude Code via /iac-request · Install the PE plugin: …`, so
+    the workflow sits AFTER the words the detector matches on. Sampling the regex match rather than
+    the line hides it completely — which is how this was first mis-scoped as "footers name no
+    workflow". 413 of 548 footers in the corpus name one.
+    """
+    from darkstar.gitlab_domains import footer_workflow, is_ai_assisted_mr, is_self_service_mr
+    assert footer_workflow(_FOOTER_IAC) == "iac-request"
+    assert is_self_service_mr(_FOOTER_IAC, []) is True
+    assert is_ai_assisted_mr(_FOOTER_IAC, []) is False
+
+
+def test_a_plugin_qualified_footer_counts_the_same():
+    """Both shapes are in the corpus: 267 plain `via /x`, 145 qualified `via /plugin:x`.
+
+    Reading the qualifier as the workflow name scores every qualified footer as an unknown workflow.
+    """
+    from darkstar.gitlab_domains import footer_workflow, is_self_service_mr
+    assert footer_workflow(_FOOTER_IAC_QUALIFIED) == "iac-request"
+    assert is_self_service_mr(_FOOTER_IAC_QUALIFIED, []) is True
+
+
+def test_a_footer_naming_a_non_self_service_workflow_is_ai_assisted():
+    """`via /troubleshoot` is an agent helping debug, not a request anybody filed. 52 in the corpus."""
+    from darkstar.gitlab_domains import footer_workflow, is_ai_assisted_mr, is_self_service_mr
+    assert footer_workflow(_FOOTER_TROUBLESHOOT) == "troubleshoot"
+    assert is_self_service_mr(_FOOTER_TROUBLESHOOT, []) is False
+    assert is_ai_assisted_mr(_FOOTER_TROUBLESHOOT, []) is True
+
+
+def test_a_bare_footer_is_ai_assisted():
+    """135 footers name no workflow at all — agent-written for someone already in the codebase."""
+    from darkstar.gitlab_domains import footer_workflow, is_ai_assisted_mr, is_self_service_mr
+    assert footer_workflow(_FOOTER_BARE) is None
+    assert is_self_service_mr(_FOOTER_BARE, []) is False
+    assert is_ai_assisted_mr(_FOOTER_BARE, []) is True

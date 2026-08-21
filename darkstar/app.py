@@ -21,6 +21,17 @@ from darkstar import (
     overrides, slas, store, velocity,
 )
 
+# Uvicorn configures handlers for its own loggers only, and leaves the root logger without one --
+# so every darkstar logger.info() is dropped and the pod log carries four uvicorn lines and nothing
+# else. That made the ingest unobservable in production exactly when it mattered: "forcing a full
+# re-crawl", "N in-window MRs incomplete" and "poller not started: GITLAB_TOKEN unset" are the lines
+# that answer "is it working", and none of them reached the log. Configured here rather than in
+# main() because the deployed process is uvicorn, which never calls main().
+logging.basicConfig(
+    level=os.environ.get("DARKSTAR_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+
 logger = logging.getLogger("darkstar.app")
 
 # The in-process pollers and the dashboards share one DuckDB connection (EBS is single-writer);
