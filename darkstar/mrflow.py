@@ -134,9 +134,18 @@ def first_review_signal(events: list[tuple[str, datetime]], merged_at: datetime,
     return min(candidates, key=lambda pair: pair[0])
 
 
-def _matches(name: str, terms: list[str]) -> bool:
-    """True if no filter is set, or any term is a substring of the name (case-insensitive)."""
-    return not terms or any(term in name.lower() for term in terms)
+def _matches(name: str, terms: list[str], aliases: tuple[str, ...] = ()) -> bool:
+    """True if no filter is set, or any term is a substring of the name or one of its aliases.
+
+    `aliases` are the other spellings the same person is known by on this page: the display name
+    they were added under and their GitLab username. Both are needed because the add control shows
+    a GitLab display name ("Trevor Atchley") while a roster member renders under their short name
+    ("Trevor"), so filtering by the name you just typed matched nothing at all.
+    """
+    if not terms:
+        return True
+    haystacks = [name.lower(), *(alias.lower() for alias in aliases)]
+    return any(term in haystack for term in terms for haystack in haystacks)
 
 
 def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict,
@@ -159,6 +168,64 @@ def crawl_state(connection: duckdb.DuckDBPyConnection, roster: dict,
         "pending": gitlab_ingest.needs_backfill(connection, since),
         "last_crawl": last.isoformat(timespec="minutes") if last else None,
     }
+
+
+def _absent_authors(
+    connection: duckdb.DuckDBPyConnection, in_view: set[str], measured: set[str],
+    names: dict[str, str], hidden: set[str], name_filter: list[str],
+    aliases: dict[str, tuple[str, ...]],
+) -> list[dict]:
+    """Added authors who merged no self-service MR in the window, most recently active first.
+
+    An add that took and an add that silently failed looked identical: no row, no message, nothing
+    anywhere on the page. That is the one question this control exists to answer, so an author with
+    nothing in the window is listed with a zero rather than dropped.
+
+    Each row carries the date they last merged self-service work at ANY time, because "never" and
+    "not lately" have completely different remedies -- widen the lookback, or go look at whether
+    their work is going through a workflow at all. Trevor was the case that surfaced this: added,
+    saved, attributed, and last self-service on 2026-07-09, so every recent lookback showed nothing.
+
+    The self-service test is a Python predicate over description and labels, not SQL, so this reads
+    the candidates' merge requests and filters in memory -- bounded by the added authors who have no
+    rows in view, which is a handful.
+    """
+    missing = in_view - measured
+    if not missing:
+        return []
+    placeholders = ", ".join(["?"] * len(missing))
+    last_seen: dict[str, datetime] = {}
+    for account_id, merged_at, description, mr_labels in connection.execute(
+        f"SELECT author_account_id, merged_at, description, labels FROM merge_requests "
+        f"WHERE author_account_id IN ({placeholders}) AND merged_at IS NOT NULL",
+        sorted(missing),
+    ).fetchall():
+        if not is_self_service_mr(description, mr_labels):
+            continue
+        if account_id not in last_seen or merged_at > last_seen[account_id]:
+            last_seen[account_id] = merged_at
+
+    rows: list[dict] = []
+    for account_id in missing:
+        name = names.get(account_id) or account_id
+        # Same two view rules the measured rows obey: a hidden name stays hidden, and a filter that
+        # excludes someone must not reintroduce them here as a zero.
+        if name in hidden or not _matches(name, name_filter, aliases.get(account_id, ())):
+            continue
+        seen = last_seen.get(account_id)
+        rows.append({
+            "name": name,
+            "tracked": not is_pe_author(account_id),
+            "merged": 0,
+            "biz_hours_median": None,
+            "biz_hours_p90": None,
+            "last_self_service": seen.date().isoformat() if seen else None,
+        })
+    active = sorted((row for row in rows if row["last_self_service"]),
+                    key=lambda row: (row["last_self_service"], row["name"]), reverse=True)
+    never = sorted((row for row in rows if not row["last_self_service"]),
+                   key=lambda row: row["name"])
+    return active + never
 
 
 def mr_turnaround_report(
@@ -184,6 +251,14 @@ def mr_turnaround_report(
     # names back out of the display WITHOUT touching any total, because the x button is a view
     # control and a number that moves when you tidy a table cannot be quoted.
     in_view = {GITLAB_USERNAMES.get(username, username) for username in (roster.get("added") or {})}
+    # The added display name and username, keyed the way the store keys the author's merge requests,
+    # so the author filter matches the spelling the add control put in front of you. `names` above
+    # cannot carry them: a roster member's MRs are keyed by accountId, so the username-keyed overlay
+    # is never consulted for them and their short name wins.
+    aliases: dict[str, tuple[str, ...]] = {}
+    for username, display_name in (roster.get("added") or {}).items():
+        account_id = GITLAB_USERNAMES.get(username, username)
+        aliases[account_id] = aliases.get(account_id, ()) + (display_name, username)
     # One pass, two cuts: keep (account, merged-day, hours) per MR so the per-author and per-day
     # views are guaranteed to describe exactly the same population.
     # Changed paths are only needed where the repo name says nothing, so fetch them for that
@@ -246,7 +321,7 @@ def mr_turnaround_report(
         # Every in-window MR reaches the accumulators; only the per-author view is narrowed, so the
         # team totals below describe the whole self-service population however the view is curated.
         in_this_view = (account_id in in_view and name not in hidden
-                        and _matches(name, name_filter))
+                        and _matches(name, name_filter, aliases.get(account_id, ())))
         # This page exists to score how well self-service is working, so ordinary PE work is out of
         # scope. Unscoped, the panel was 71% unrelated merge requests -- only 29% of 1,571 carried an
         # agent footer and 20% a pe:* label -- and engineers with no access to the skills at all
@@ -329,6 +404,9 @@ def mr_turnaround_report(
     # Slowest first on the standard clock, matching the lead-time dashboard; no median sorts last.
     authors.sort(key=lambda a: (a["biz_hours_median"] is None, -(a["biz_hours_median"] or 0.0), a["name"]))
 
+    absent = _absent_authors(connection, in_view, set(business_by_account), names, hidden,
+                             name_filter, aliases)
+
     # Most recent day first: this reads as a log, not a chart axis.
     daily = [{"day": day, **_stats(hours)} for day, hours in sorted(by_day.items(), reverse=True)]
 
@@ -345,6 +423,9 @@ def mr_turnaround_report(
 
     return {
         "authors": authors,
+        # Added authors with nothing in this window. Kept out of `authors` so the counts, paging and
+        # per-author series keep describing measured work only, and rendered as zero rows below it.
+        "absent": absent,
         "daily": daily,
         "series": series,
         "days": sorted(by_day),

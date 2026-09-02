@@ -269,6 +269,16 @@ requests are stored under their Jira **accountId**. The view membership test map
 because comparing them directly would silently never match and adding a PE member would look like a
 dead button with no error anywhere.
 
+The **display name does not** map, and that is deliberate: a roster member renders under their roster
+short name, so "Trevor Atchley" in the add box becomes "Trevor" in the table. The author filter
+therefore matches a row's rendered name *and* the display name and username it was added under —
+otherwise searching for the name you just typed finds nothing, which is exactly what it did.
+
+The filter round-trips to the server, because the daily medians cannot be re-derived from per-author
+medians in the page. That makes the server the only side that knows a row's aliases, so the page must
+not re-filter what arrives. It used to, on the rendered name alone, throwing away precisely the rows
+the alias match had just admitted.
+
 ## Adding an author is a labelling change
 
 Adding a name through the MR-turnaround panel decides who **that table** lists. It no longer fetches
@@ -292,6 +302,30 @@ admits, never the five currently rendered. Paging is a view, not a population �
 as you clicked Next would mean nothing. This is deliberately different from `hidden`, which removes
 an author from the rows *and* the totals, because hiding changes who is being measured and paging
 does not.
+
+## An added author with nothing in the window is still a row
+
+An add that took and an add that silently failed used to look identical: no row, no message, nothing
+anywhere on the page. Authors appeared only once they had measured work in the window, so adding
+somebody who merged no self-service MR in the current lookback produced no visible change at all —
+and whether the add worked is the one question this control exists to answer.
+
+Those authors are now listed below the measured rows, fenced off with a dashed rule, as a zero with
+dashes for the medians. Each carries the date they last merged self-service work at **any** time,
+because "never" and "not lately" have completely different remedies: widen the lookback, or go and
+ask why the work is not going through a workflow at all.
+
+Trevor was the case that surfaced it, and every part of it was working. He was added, saved and
+attributed correctly, with 18 self-service merge requests — all of them between 2026-07-07 and
+2026-07-10. His work since (the Composer 3 upgrade, DEVOPS-9815/9816/9822) carries no `pe:*` label
+and no workflow footer, so it is out of scope for this page by design. Every recent lookback
+therefore showed him nothing, which is indistinguishable from a broken button.
+
+The zero rows sit **outside the pager**, because somebody checking whether their add worked will not
+go looking on page three. They obey the same two view rules the measured rows do: a hidden name stays
+hidden, and a filter that excludes someone does not reintroduce them as a zero. They are kept out of
+`authors`, so the counts, paging, per-author series and **Team (all authors)** keep describing
+measured work only.
 
 ## MR turnaround is scoped to self-service
 
