@@ -36,10 +36,12 @@ order. `/slas` keeps its route name for existing bookmarks though the page is la
 
 - **Self-service authorship** — the share of self-service merge requests authored *outside* Platform
   Engineering, as one number plus a stacked chart per period. This is the adoption question: not how
-  fast PE is, but whether authoring has moved off PE at all. PE means a member of `roster.ROSTER`;
-  every other attributed author counts as outside it, tested on the Jira accountId rather than the
-  GitLab username: outside contributors carry the same `audacy-` prefix roster members do, so a
-  username test would put them on the wrong side of the only comparison the panel makes.
+  fast PE is, but whether authoring has moved off PE at all. PE means a member of `roster.PE_EVER` —
+  the current roster plus anyone who has left it, since a departure does not change who authored work
+  that already happened. Every other attributed author counts as outside PE, tested on the Jira
+  accountId rather than the GitLab username: outside contributors carry the same `audacy-` prefix
+  roster members do, so a username test would put them on the wrong side of the only comparison the
+  panel makes.
 
   **This is a census.** The ingest attributes every author it finds rather than a curated list, so an
   author appears because they merged self-service work — not because somebody remembered to add them.
@@ -209,25 +211,41 @@ links are dim enough to be worth revisiting.
 
 ## Who counts as PE
 
-`roster.ROSTER` is a hand-maintained list of 14 Jira accountIds, ported from the audacy-jira-reports
-pipeline. Nothing derives or refreshes it at runtime, and it is load-bearing well beyond one panel:
-`velocity`, `capacity`, `intake` and the SME matrix all count roster members only, and `/slas` uses it
-to split PE from non-PE authorship (`mrflow.is_pe_author` is `account_id in ROSTER`).
+Two hand-maintained maps in `roster.py`, ported from the audacy-jira-reports pipeline, because the
+question has two answers that a departure pulls apart. `ROSTER` is the 13 people on the team **now**,
+and gates everything forward-looking: `velocity`, `capacity`, `intake` and the SME matrix count only
+these accountIds. `ALUMNI` is who has left. `PE_EVER` is the union, and it is what `/slas` uses to
+split PE from non-PE authorship (`mrflow.is_pe_author` is `account_id in PE_EVER`). Nothing derives or
+refreshes any of them at runtime.
+
+The split exists because deleting a leaver is wrong in both directions at once. Leave them in and
+capacity offers spare capacity nobody has while the team forecast counts a month they will not work;
+delete them and their past merge requests move to "outside PE", lifting the self-service adoption
+headline for a bookkeeping reason. Randall's 96 self-service merge requests alone took the measured
+window from 21% to 37% — a 16-point improvement, in a metric reported upward, caused by an
+offboarding. Alumni therefore keep their `GITLAB_USERNAMES` entry too, so their crawled merge requests
+stay nameable and their approvals stay on the PE side of the reviewing split.
 
 Drift is silent **and biased toward flattering the metric**. A new PE hire appears in no list, so
 their merge requests are attributed to "outside PE" and the self-service adoption headline goes up —
 and nobody investigates a number that improves.
 
-`tests/test_roster_membership.py` closes that by asserting the roster against live GitLab group
-membership: every human direct member of `audacy-inc/devops` must be on the roster, and no roster
-entry may have left the group. Non-people are handled by an explicit exclusion list
+`tests/test_roster_membership.py` closes that by asserting the maps against live GitLab group
+membership: every human direct member of `audacy-inc/devops` must be on one of the lists, and anyone
+who has lost group access must have been moved out of `ROSTER` into `ALUMNI`. That last check is a
+backstop, not the notification — group access routinely outlives the departure, so in practice the
+move is made by hand when someone leaves. Non-people are handled by an explicit exclusion list
 (`roster.NON_HUMAN_GROUP_MEMBERS`) rather than a name heuristic — "looks like a bot" silently
 reclassifies a person whose account happens to match, whereas an unknown account is in neither list
 and fails the test, which is the behaviour worth having. The exclusion list is itself asserted to
 still describe real members, so a stale entry cannot quietly write off a real person.
 
-The live checks skip without `GITLAB_TOKEN`; two structural checks (no overlap between the lists,
-every username resolvable to a `ROSTER` name) need no network and always run.
+The live checks skip without `GITLAB_TOKEN`; the structural checks (the lists do not overlap, alumni
+are never also current, every username resolvable to a `PE_EVER` name) need no network and always run.
+
+One thing a roster edit cannot fix: issues still assigned to the leaver. They drop out of the
+capacity numbers immediately, and the intake queue renders them with the `external` owner tag — which
+is the signal to reassign them in Jira, not something the dashboard can resolve.
 
 ## The crawl state has to be observable
 

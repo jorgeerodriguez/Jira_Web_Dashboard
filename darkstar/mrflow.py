@@ -60,7 +60,7 @@ from darkstar.metrics import (
     window_start,
 )
 from darkstar import gitlab_ingest, store
-from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, ROSTER
+from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, PE_EVER
 
 _WINDOW_MONTHS: int = 6
 # The drill-down list is for inspecting outliers, not for browsing the whole window: a 6-month
@@ -243,7 +243,7 @@ def mr_turnaround_report(
     so the totals always describe what is actually on screen. `name_filter` is a list of lowercase
     substrings; empty means no filtering.
     """
-    names = {**ROSTER, **{username: name for username, name in (roster.get("added") or {}).items()}}
+    names = {**PE_EVER, **{username: name for username, name in (roster.get("added") or {}).items()}}
     hidden = set(roster.get("hidden") or [])
     # This table is an opt-in comparison, not a census -- the adoption panels above answer "who is
     # using this". Nobody is listed until somebody is added, so the table starts empty rather than
@@ -466,13 +466,17 @@ def mr_turnaround_report(
 def is_pe_author(account_id: str) -> bool:
     """True when this MR author is a Platform Engineering roster member.
 
-    ROSTER is keyed by Jira accountId and holds PE only. Everyone else the ingest attributes is by
+    PE_EVER is keyed by Jira accountId and holds PE only. Everyone else the ingest attributes is by
     construction outside PE: the ingest keys anyone who is not a roster member by their GitLab
     username, which can never collide with a Jira accountId. So one membership test splits the two
     populations, on identity rather than on a username spelling that varies between `audacy-` and
     bare accounts.
+
+    PE_EVER rather than ROSTER, because this answers a question about the past. A member who has
+    since left was PE when they opened the merge request, and moving their history to the non-PE
+    side would raise the adoption share without anyone's authorship having changed.
     """
-    return account_id in ROSTER
+    return account_id in PE_EVER
 
 
 def adoption_report(
@@ -500,7 +504,7 @@ def adoption_report(
     mr_events does not store (it records that an independent approval happened, not by whom).
     """
     grain = grain or choose_grain(since, until, now)
-    names = {**ROSTER,
+    names = {**PE_EVER,
              **{username: name for username, name in (roster.get("added") or {}).items()}}
 
     # Who approved, not just that somebody did. The approver is a GitLab username, so roster

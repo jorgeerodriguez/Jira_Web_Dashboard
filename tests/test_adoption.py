@@ -13,10 +13,13 @@ from datetime import datetime
 import duckdb
 
 from darkstar import mrflow, store
-from darkstar.roster import GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, ROSTER
+from darkstar.roster import ALUMNI, GITLAB_USERNAMES, NON_HUMAN_GROUP_MEMBERS, PE_EVER, ROSTER
 
 _ADAM = "600ece193b1af000697f339d"
 _OMAR = "712020:58e4121c-dadd-4c34-99a9-92dc31ee039b"
+# Departed PE. Named explicitly rather than read off ALUMNI, so deleting the entry fails a test
+# instead of silently moving his history to the other side of the comparison.
+_RANDALL = "5aa3365d29118e2c1375d5ea"
 # Two ordinary non-PE contributors. Nothing special about them any more: with the ingest keeping
 # every author, an outside contributor is just a GitLab username the store has never been told about.
 _BEN = "audacy-ben.bonora"
@@ -58,9 +61,36 @@ def test_the_pe_test_is_roster_membership_not_a_username_spelling():
     assert mrflow.is_pe_author(_BEN) is False
     assert mrflow.is_pe_author(_JEREMY) is False
     # And the test is structural, not a list of known outsiders: every PE username maps to an
-    # accountId in ROSTER, and a bare GitLab username can never be one.
+    # accountId PE_EVER can name, and a bare GitLab username can never be one.
     for account_id in GITLAB_USERNAMES.values():
-        assert account_id in ROSTER
+        assert account_id in PE_EVER
+
+
+def test_a_departed_member_still_counts_as_pe():
+    """A departure must not read as adoption.
+
+    ROSTER is what capacity and velocity look up, so a leaver has to come out of it — nobody should
+    be offered spare capacity they no longer have, or have their throughput forecast for a month
+    they will not work. But this panel asks who authored work that already happened, and that answer
+    does not change when someone leaves. Deleting them outright moves their merge requests to
+    "outside PE" and lifts the adoption share for a reason that is not adoption: Randall's 96
+    self-service merge requests alone took the measured window from 21% to 37%.
+
+    That is the exact failure the rest of this file guards — a number moving in the flattering
+    direction for a bookkeeping reason — so it is asserted on the person it happened to.
+    """
+    assert _RANDALL in ALUMNI, "a departure is a move to ALUMNI, not a deletion"
+    assert _RANDALL not in ROSTER, "alumni must stay out of the capacity- and velocity-gating map"
+    assert mrflow.is_pe_author(_RANDALL) is True
+
+    conn = _seed([_mr(1, _RANDALL, datetime(2026, 8, 10, 16, 0), datetime(2026, 8, 10, 17, 0)),
+                  _mr(2, _BEN, datetime(2026, 8, 11, 16, 0), datetime(2026, 8, 11, 17, 0))])
+    report = _report(conn)
+    assert report["pe"]["mrs"] == 1
+    assert report["non_pe"]["mrs"] == 1
+    # Named from ALUMNI rather than falling through to the GitLab display name, so the row cannot
+    # quietly reappear among the outside contributors it is being compared against.
+    assert [author["name"] for author in report["by_author"] if author["pe"]] == [ALUMNI[_RANDALL]]
 
 
 def test_a_runtime_added_author_counts_as_non_pe():
