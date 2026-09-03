@@ -43,6 +43,21 @@ class IssueRow:
     planned_start: date | None
     target_end: date | None
     labels: list[str]
+    # The "Merge Request" field (customfield_11534), a free-text field holding a full GitLab MR URL.
+    # The most authoritative link a request has: someone stated it deliberately, rather than it being
+    # inferred from text a human typed for another purpose. Sampled clean -- 18 of 18 were a single
+    # canonical https://gitlab.com/<group>/<project>/-/merge_requests/<iid>.
+    mr_field_url: str | None
+    # Whether Jira's development panel shows a pull request / commits for this request. Booleans, and
+    # they come from a JQL predicate rather than from the Development summary field: that field
+    # (customfield_10400) serves a CACHE, and on DEVOPS-10117 it reported five builds where the panel
+    # showed two, omitted the merged pull request entirely, and carried "isStale":true. JQL's
+    # development[pullrequests] index agreed with the panel. These identify no particular merge
+    # request, so they cannot link anything -- but a request Jira says has code, with no link found
+    # here, is a hole in our own crawl rather than a request without code.
+    # None means the flag has not been queried yet, which is not the same as False.
+    dev_has_pr: bool | None
+    dev_has_commits: bool | None
     fetched_at: datetime
 
 
@@ -68,17 +83,66 @@ class SyncMeta:
 
 
 @dataclass(frozen=True)
+class MergeRequestEventRow:
+    """One draft/ready/review moment on a merge request, from its notes.
+
+    Stored as events rather than as a derived duration so the business-hour rules can change
+    without a re-crawl, and so an MR that toggles draft->ready more than once is representable.
+    kind is "ready", "draft", "review" (first human non-bot comment by someone other than the
+    author) or "approval" (first approval by someone other than the author).
+
+    actor is the GitLab username behind the event, where the note names one -- so a review or an
+    approval can be attributed to a person, and not merely counted. Recording only that an
+    independent approval happened made "who is actually reviewing this work" unanswerable, which is
+    the whole question when authoring shifts off the team doing the reviewing. NULL on the
+    draft/ready transitions, which are the author's own doing, and on rows written before the column
+    existed.
+    """
+
+    mr_id: int
+    kind: str
+    happened_at: datetime
+    seq: int
+    actor: str | None
+
+
+@dataclass(frozen=True)
 class MergeRequestRow:
-    """A merged GitLab merge request attributed to a roster member."""
+    """A merged GitLab merge request attributed to a tracked author."""
 
     id: int
     project_path: str
     iid: int
     author_account_id: str
     title: str
+    opened_at: datetime
     merged_at: datetime
+    labels: list[str]
     web_url: str
+    # GitLab username of whoever pressed merge, or "" when GitLab reports none. Never NULL once
+    # crawled, so NULL strictly means "predates this column" and the backfill terminates.
+    merged_by: str
     fetched_at: datetime
+    # When the MR's notes were last read for draft/ready/review events. Distinct from having any
+    # events: an MR that was never a draft and drew no comments legitimately has none, so absence
+    # of events cannot mean "not yet crawled" or the backfill would never terminate.
+    events_fetched_at: datetime
+    # Stored verbatim so the agent-footer heuristics in slas.py can be retuned without a re-crawl;
+    # the whole corpus is ~1.3 MiB, and the "Generated with Claude Code via /<skill>" footer is a
+    # denser AI signal than the pe:* label (it predates the labels by two months).
+    description: str
+    # The source branch, kept because it is often the ONLY place a DEVOPS key appears: a title like
+    # "feat(10117): add flux-reader iam role" carries the number without the project prefix, so the
+    # branch DEVOPS-10117 is the only reliable link. Measured across 5,878 merged MRs, adding the
+    # branch as a linking signal lifted the share of requests reachable from an MR by ~16% relative.
+    source_branch: str
+    # When this MR's pipelines were last read. Distinct from having any pipeline rows: an MR can
+    # legitimately have none (two in a 20-MR sample had zero), so absence of rows cannot mean "not yet
+    # crawled" or the backfill would never terminate. Exactly the reason events_fetched_at exists.
+    pipelines_fetched_at: datetime | None
+    # GitLab's display name for the author. The ingest no longer filters to a known roster, so most
+    # authors arrive with no entry anywhere to name them; without this the only label is a username.
+    author_name: str | None
 
 
 # Column order shared by the issues DDL and the upsert statement; keep in sync with IssueRow.
@@ -86,12 +150,14 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "fetched_at",
+    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
 _MR_COLUMNS: tuple[str, ...] = (
-    "id", "project_path", "iid", "author_account_id", "title", "merged_at", "web_url", "fetched_at",
+    "id", "project_path", "iid", "author_account_id", "title",
+    "opened_at", "merged_at", "labels", "web_url", "merged_by", "fetched_at", "events_fetched_at",
+    "description", "source_branch", "pipelines_fetched_at", "author_name",
 )
 
 _SCHEMA_SQL: str = """
@@ -115,6 +181,9 @@ CREATE TABLE IF NOT EXISTS issues (
     planned_start       DATE,
     target_end          DATE,
     labels              VARCHAR[] NOT NULL,
+    mr_field_url        VARCHAR,
+    dev_has_pr          BOOLEAN,
+    dev_has_commits     BOOLEAN,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -141,9 +210,36 @@ CREATE TABLE IF NOT EXISTS merge_requests (
     iid               BIGINT NOT NULL,
     author_account_id VARCHAR NOT NULL,
     title             VARCHAR NOT NULL,
+    opened_at         TIMESTAMP,
     merged_at         TIMESTAMP NOT NULL,
+    labels            VARCHAR[],
     web_url           VARCHAR NOT NULL,
-    fetched_at        TIMESTAMP NOT NULL
+    merged_by         VARCHAR,
+    fetched_at        TIMESTAMP NOT NULL,
+    events_fetched_at TIMESTAMP,
+    description       VARCHAR,
+    source_branch     VARCHAR,
+    pipelines_fetched_at TIMESTAMP,
+    author_name      VARCHAR
+);
+
+-- Pipeline results over an MR's life. Stored as events rather than as a computed red total so the
+-- clock can be retuned without a re-crawl, the same reason MR descriptions are kept verbatim.
+CREATE TABLE IF NOT EXISTS mr_pipelines (
+    mr_id       BIGINT NOT NULL,
+    status      VARCHAR NOT NULL,
+    happened_at TIMESTAMP NOT NULL,
+    seq         INTEGER NOT NULL,
+    PRIMARY KEY (mr_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS mr_events (
+    mr_id       BIGINT NOT NULL,
+    kind        VARCHAR NOT NULL,
+    happened_at TIMESTAMP NOT NULL,
+    seq         INTEGER NOT NULL,
+    actor       VARCHAR,
+    PRIMARY KEY (mr_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS mr_files (
@@ -152,8 +248,9 @@ CREATE TABLE IF NOT EXISTS mr_files (
 );
 
 CREATE TABLE IF NOT EXISTS gitlab_sync_meta (
-    id        INTEGER PRIMARY KEY,
-    last_sync TIMESTAMP
+    id             INTEGER PRIMARY KEY,
+    last_sync      TIMESTAMP,
+    roster_version INTEGER
 );
 """
 
@@ -164,8 +261,28 @@ def connect(db_path: str) -> duckdb.DuckDBPyConnection:
 
 
 def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
-    """Create the issues, transitions, and sync_meta tables if they do not exist."""
+    """Create the tables if absent, and idempotently migrate existing ones.
+
+    CREATE TABLE IF NOT EXISTS does not add columns to a table that already exists (e.g. the
+    persistent prod store on its PVC), so newer columns are added here with ADD COLUMN IF NOT
+    EXISTS. They are nullable — pre-existing rows have no value and the next crawl backfills them;
+    every new insert supplies them. This keeps a deploy from breaking MR ingestion on an old store.
+    """
     connection.execute(_SCHEMA_SQL)
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS opened_at TIMESTAMP")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS labels VARCHAR[]")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS description VARCHAR")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS events_fetched_at TIMESTAMP")
+    connection.execute("ALTER TABLE gitlab_sync_meta ADD COLUMN IF NOT EXISTS roster_version INTEGER")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS merged_by VARCHAR")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS source_branch VARCHAR")
+    connection.execute(
+        "ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS pipelines_fetched_at TIMESTAMP")
+    connection.execute("ALTER TABLE merge_requests ADD COLUMN IF NOT EXISTS author_name VARCHAR")
+    connection.execute("ALTER TABLE mr_events ADD COLUMN IF NOT EXISTS actor VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
     logger.debug("schema initialized")
 
 
@@ -243,6 +360,38 @@ def upsert_merge_requests(connection: duckdb.DuckDBPyConnection, mrs: list[Merge
     return len(mrs)
 
 
+@dataclass(frozen=True)
+class MergeRequestPipelineRow:
+    """One pipeline result on a merge request, in the order GitLab reported them."""
+
+    mr_id: int
+    status: str
+    happened_at: datetime
+    seq: int
+
+
+def replace_mr_pipelines(connection: duckdb.DuckDBPyConnection, mr_id: int,
+                         pipelines: list[MergeRequestPipelineRow]) -> None:
+    """Replace all stored pipeline results for one MR. Idempotent, so a re-crawl cannot duplicate."""
+    connection.execute("DELETE FROM mr_pipelines WHERE mr_id = ?", [mr_id])
+    if pipelines:
+        connection.executemany(
+            "INSERT INTO mr_pipelines (mr_id, status, happened_at, seq) VALUES (?, ?, ?, ?)",
+            [[p.mr_id, p.status, p.happened_at, p.seq] for p in pipelines],
+        )
+
+
+def replace_mr_events(connection: duckdb.DuckDBPyConnection, mr_id: int,
+                      events: list[MergeRequestEventRow]) -> None:
+    """Replace all stored events for one MR. Idempotent, so a re-crawl cannot duplicate them."""
+    connection.execute("DELETE FROM mr_events WHERE mr_id = ?", [mr_id])
+    if events:
+        connection.executemany(
+            "INSERT INTO mr_events (mr_id, kind, happened_at, seq, actor) VALUES (?, ?, ?, ?, ?)",
+            [[e.mr_id, e.kind, e.happened_at, e.seq, e.actor] for e in events],
+        )
+
+
 def replace_mr_files(
     connection: duckdb.DuckDBPyConnection,
     mr_ids: list[int],
@@ -262,6 +411,29 @@ def get_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> datetime | No
     """Return the last successful GitLab sync time, or None if never crawled (→ full window)."""
     row = connection.execute("SELECT last_sync FROM gitlab_sync_meta WHERE id = 1").fetchone()
     return row[0] if row else None
+
+
+def get_roster_version(connection: duckdb.DuckDBPyConnection) -> int:
+    """The MR-author roster version the last successful crawl was built from (0 if never)."""
+    row = connection.execute("SELECT roster_version FROM gitlab_sync_meta WHERE id = 1").fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def set_roster_version(connection: duckdb.DuckDBPyConnection, version: int) -> None:
+    """Record the roster version a crawl was built from, without disturbing the watermark."""
+    connection.execute(
+        "INSERT INTO gitlab_sync_meta (id, last_sync, roster_version) VALUES (1, NULL, ?) "
+        "ON CONFLICT (id) DO UPDATE SET roster_version = excluded.roster_version", [version]
+    )
+
+
+def clear_gitlab_watermark(connection: duckdb.DuckDBPyConnection) -> None:
+    """Drop the GitLab sync watermark so the next crawl covers the full window again.
+
+    Used when a newly tracked author is added: an incremental crawl only returns MRs *updated*
+    since the watermark, so their existing merged MRs would never be fetched.
+    """
+    connection.execute("DELETE FROM gitlab_sync_meta")
 
 
 def set_gitlab_watermark(connection: duckdb.DuckDBPyConnection, last_sync: datetime) -> None:

@@ -12,10 +12,25 @@ import threading
 from datetime import datetime, timezone
 
 import duckdb
-from fastapi import FastAPI, HTTPException
+import requests
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from darkstar import config, delivery, gitlab_ingest, ingest, intake, leadtime, overrides, store, velocity
+from darkstar import (
+    config, delivery, gitlab_ingest, ingest, intake, leadtime, metrics, mr_authors, mrflow,
+    overrides, slas, store, velocity,
+)
+
+# Uvicorn configures handlers for its own loggers only, and leaves the root logger without one --
+# so every darkstar logger.info() is dropped and the pod log carries four uvicorn lines and nothing
+# else. That made the ingest unobservable in production exactly when it mattered: "forcing a full
+# re-crawl", "N in-window MRs incomplete" and "poller not started: GITLAB_TOKEN unset" are the lines
+# that answer "is it working", and none of them reached the log. Configured here rather than in
+# main() because the deployed process is uvicorn, which never calls main().
+logging.basicConfig(
+    level=os.environ.get("DARKSTAR_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 logger = logging.getLogger("darkstar.app")
 
@@ -66,6 +81,20 @@ def _run_gitlab_cycle() -> None:
     """One GitLab MR crawl through the shared connection, serialized against the Jira poll."""
     with _write_lock:
         gitlab_ingest.run_gitlab_sync(_db().cursor(), _utcnow(), _GITLAB_WINDOW_DAYS)
+
+
+def _recrawl_now() -> None:
+    """Crawl immediately after a roster change, logging rather than raising.
+
+    Clearing the watermark only records that the next crawl should be a full one; on the default
+    24-hour poll interval that meant a newly added author's merge requests did not appear for up to
+    a day, which is indistinguishable from the add having failed. This runs the crawl there and
+    then. It is serialized against the poller by _write_lock in _run_gitlab_cycle.
+    """
+    try:
+        _run_gitlab_cycle()
+    except Exception:
+        logger.exception("post-add GitLab re-crawl failed; the next scheduled crawl will retry")
 
 
 async def _jira_poll_loop(cfg: config.Config) -> None:
@@ -130,6 +159,9 @@ async def velocity_dashboard() -> HTMLResponse:
     return _dashboard("velocity")
 
 
+# Unlinked from the nav on request — not currently useful — but deliberately still served, so an
+# existing bookmark keeps working and nothing has to be rebuilt to bring it back. Re-add the
+# `<a href="lead-time">` entry to the four dashboard navs to restore it.
 @app.get("/lead-time", response_class=HTMLResponse)
 async def lead_time_dashboard() -> HTMLResponse:
     """The lead/cycle-time dashboard (fetches /api/lead-time client-side)."""
@@ -146,6 +178,12 @@ async def intake_dashboard() -> HTMLResponse:
 async def delivery_forecast_dashboard() -> HTMLResponse:
     """The delivery-forecast dashboard (fetches /api/delivery-forecast client-side)."""
     return _dashboard("delivery-forecast")
+
+
+@app.get("/slas", response_class=HTMLResponse)
+async def slas_dashboard() -> HTMLResponse:
+    """The self-service SLA dashboard (fetches /api/slas client-side)."""
+    return _dashboard("slas")
 
 
 @app.get("/api/velocity")
@@ -183,3 +221,149 @@ def set_override(payload: dict) -> JSONResponse:
 def api_delivery_forecast() -> JSONResponse:
     """Forecast items (initiatives/features scope + recent pace), read from the store."""
     return JSONResponse(delivery.delivery_report(_db().cursor(), _utcnow()))
+
+
+def _day(value: str, field: str) -> datetime:
+    """Parse a YYYY-MM-DD lookback bound as midnight in the business timezone.
+
+    A bad date is rejected rather than silently ignored — a dashboard quietly showing a different
+    window than the control says is worse than an error.
+    """
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field} must be YYYY-MM-DD, got {value!r}")
+    return day.replace(tzinfo=metrics.BUSINESS_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _since(value: str | None, fallback: datetime) -> datetime:
+    """The window's lower bound: the page's shared lookback, or this view's default."""
+    return fallback if not value else _day(value, "since")
+
+
+def _until(value: str | None, since: datetime) -> datetime | None:
+    """The window's exclusive upper bound. None means "up to now", which is the usual case.
+
+    Bounded ranges exist because the presets include them: yesterday, last week and last month all
+    end before today. An inverted window is rejected rather than served, because it produces empty
+    panels that read as "the team did nothing" instead of "you asked for nothing".
+    """
+    if not value:
+        return None
+    until = _day(value, "until")
+    if until <= since:
+        raise HTTPException(
+            status_code=400,
+            detail=f"until ({value}) must be after since ({since.date().isoformat()})")
+    return until
+
+
+@app.get("/api/slas")
+def api_slas(since: str | None = None, until: str | None = None,
+             grain: str | None = None) -> JSONResponse:
+    """Self-service SLA compliance, turnaround, and agent success rate (no Jira call).
+
+    `grain` forces day/week/month row grouping; omitted, it follows the width of the window.
+    """
+    now = _utcnow()
+    start = _since(since, slas.default_window_start(now))
+    if grain is not None and grain not in metrics.GRAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"grain must be one of {', '.join(metrics.GRAINS)}, got {grain!r}")
+    return JSONResponse(
+        slas.slas_report(_db().cursor(), now, start, _until(until, start), grain))
+
+
+@app.get("/api/mr-turnaround")
+def api_mr_turnaround(since: str | None = None, until: str | None = None,
+                      authors: str | None = None, env: str | None = None) -> JSONResponse:
+    """Merge-request ready->merged turnaround per author and per day, read from the store.
+
+    `authors` is a comma-separated list of name substrings, and `env` one of prod/nonprod/other/all.
+    Both are applied server-side because the daily medians cannot be re-derived from per-author
+    medians in the page.
+    """
+    now = _utcnow()
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    terms = [t.strip().lower() for t in (authors or "").split(",") if t.strip()]
+    environment = (env or "all").strip().lower()
+    if environment not in ("all", "prod", "nonprod", "other"):
+        raise HTTPException(status_code=400, detail=f"env must be all/prod/nonprod/other, got {env!r}")
+    start = _since(since, mrflow.default_window_start(now))
+    return JSONResponse(mrflow.mr_turnaround_report(
+        _db().cursor(), start, roster, terms, environment, _until(until, start)))
+
+
+@app.get("/api/adoption")
+def api_adoption(since: str | None = None, until: str | None = None,
+                 grain: str | None = None) -> JSONResponse:
+    """Self-service authorship split between the PE roster and the teams PE serves.
+
+    Takes no `authors`/`env` filter on purpose: those curate the MR-turnaround table, and adoption
+    is not a property of whichever rows that table is currently showing.
+    """
+    now = _utcnow()
+    if grain is not None and grain not in metrics.GRAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"grain must be one of {', '.join(metrics.GRAINS)}, got {grain!r}")
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    start = _since(since, mrflow.default_window_start(now))
+    return JSONResponse(mrflow.adoption_report(
+        _db().cursor(), start, _until(until, start), now, grain, roster))
+
+
+@app.get("/api/gitlab-users")
+def api_gitlab_users(q: str = "") -> JSONResponse:
+    """Search GitLab for users to add to the MR-turnaround table.
+
+    Returns 503 rather than an empty list when no token is configured, so the page can say the
+    picker is unavailable instead of looking like nobody matched.
+    """
+    query = q.strip()
+    if len(query) < 2:
+        return JSONResponse({"users": []})
+    try:
+        return JSONResponse({"users": gitlab_ingest.search_members(query, 20)})
+    except RuntimeError as exc:            # no GITLAB_TOKEN configured
+        raise HTTPException(status_code=503, detail=str(exc))
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"GitLab user search failed: {exc}")
+
+
+@app.get("/api/mr-authors")
+def api_mr_authors() -> JSONResponse:
+    """The editable MR-author roster: usernames added by hand and names hidden from the table."""
+    return JSONResponse(mr_authors.read(mr_authors.authors_path(config.db_path())))
+
+
+@app.post("/api/mr-authors")
+def set_mr_authors(payload: dict, background: BackgroundTasks) -> JSONResponse:
+    """Add/remove a tracked GitLab author, or hide/show one; returns the updated roster.
+
+    Adding bumps the roster version, which forces the next crawl to cover the full window, and
+    starts that crawl immediately: an incremental pull only returns MRs updated since the
+    watermark, so a newly tracked author's history would never arrive, and waiting for the next
+    scheduled poll meant up to 24 hours of the author simply not appearing.
+    """
+    op = payload.get("op")
+    username, display_name = payload.get("username", ""), payload.get("display_name", "")
+    if op in ("add", "remove") and not username:
+        raise HTTPException(status_code=400, detail="username is required for add/remove")
+    if op == "add" and "@" in username:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{username!r} looks like an email address. Merge requests are attributed by "
+                   f"GitLab username (e.g. audacy-jeremy.williams), so an email matches nothing.")
+    if op in ("hide", "show") and not display_name:
+        raise HTTPException(status_code=400, detail="display_name is required for hide/show")
+    try:
+        roster, needs_recrawl = mr_authors.apply(
+            mr_authors.authors_path(config.db_path()), op, username, display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if needs_recrawl:
+        logger.info("mr-author %s added; no crawl needed, their merge requests are already ingested",
+                    username)
+    return JSONResponse({**roster, "recrawl_queued": False})

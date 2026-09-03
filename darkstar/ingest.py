@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -28,20 +29,34 @@ from jira.resources import Issue
 
 from darkstar import store
 from darkstar.config import Config, load_config
+from darkstar.metrics import SELF_SERVICE_EPOCH
 
 logger = logging.getLogger("darkstar.ingest")
+
+# Overlap the incremental window slightly: Jira's `updated` has minute resolution and its clock is
+# not ours, so a watermark used as an exact floor can miss an issue updated in the same minute the
+# previous sync finished.
+_WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
+
+# Splits a JQL statement from its trailing ORDER BY, which cannot appear inside
+# parentheses when the statement is wrapped as a sub-clause.
+_ORDER_BY_RE: re.Pattern[str] = re.compile(r"\s+ORDER\s+BY\s+", re.IGNORECASE)
+
+_FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
+_PAGE_SIZE: int = 100
+_RETRY_ATTEMPTS: int = 3
+_RETRY_BACKOFF_SECONDS: float = 2.0
 
 # Only the fields the dashboards need (keeps the payload small).
 _ISSUE_FIELDS: str = (
     "summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,"
-    "parent,project,customfield_11751,customfield_10946,customfield_10947"
+    "parent,project,customfield_11751,customfield_10946,customfield_10947,"
+    # customfield_11534 = "Merge Request", a free-text field holding a GitLab MR URL. The Development
+    # field (customfield_10400) is deliberately NOT fetched: it serves a stale cache that omitted a
+    # merged pull request on DEVOPS-10117 and disagreed with its own panel on build count. The dev
+    # panel is read through JQL instead -- see fetch_dev_panel_keys.
+    "customfield_11534"
 )
-_FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
-_PAGE_SIZE: int = 100
-_WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
-_RETRY_ATTEMPTS: int = 3
-_RETRY_BACKOFF_SECONDS: float = 2.0
-
 
 @dataclass(frozen=True)
 class SyncPlan:
@@ -157,6 +172,10 @@ def _map_issue(issue: Issue, fetched_at: datetime) -> store.IssueRow:
         planned_start=_parse_date(fields.get("customfield_10946")),
         target_end=_parse_date(fields.get("customfield_10947")),
         labels=list(fields.get("labels") or []),
+        mr_field_url=(fields.get("customfield_11534") or None),
+        # Filled by fetch_dev_panel_keys after the batch is mapped; unknown until then.
+        dev_has_pr=None,
+        dev_has_commits=None,
         fetched_at=fetched_at,
     )
 
@@ -178,6 +197,50 @@ def fetch_issues(jira: JIRA, jql: str) -> list[store.IssueRow]:
         if not next_token:
             break
     return rows
+
+
+def fetch_dev_panel_keys(jira: JIRA, scope_jql: str, predicate: str) -> set[str]:
+    """Keys whose development panel satisfies `predicate`, e.g. "development[pullrequests].all > 0".
+
+    One JQL query for the whole batch rather than a field on each issue, because the Development
+    summary field is a CACHE and lies: on DEVOPS-10117 it reported five builds where the panel showed
+    two, omitted the issue's merged pull request altogether, and flagged itself "isStale". The JQL
+    index agreed with the panel, and one query is cheaper than a field nobody can trust.
+
+    Jira rejects two development[] clauses OR'd together, so each predicate is asked separately.
+
+    The scope's ORDER BY is stripped before wrapping. Every JQL this module builds ends with one, and
+    `(... ORDER BY updated ASC) AND development[...]` is a 400 -- an ORDER BY cannot sit inside
+    parentheses. Ordering is meaningless here anyway; only the set of keys is wanted.
+    """
+    scope = _ORDER_BY_RE.split(scope_jql)[0].strip()
+    keys: set[str] = set()
+    next_token: str | None = None
+    while True:
+        kwargs = {"jql_str": f"({scope}) AND {predicate}", "maxResults": _PAGE_SIZE,
+                  "fields": "key"}
+        if next_token:
+            kwargs["nextPageToken"] = next_token
+        issues = _retry(lambda: jira.enhanced_search_issues(**kwargs),
+                        f"enhanced_search_issues({predicate})")
+        if not issues:
+            break
+        keys.update(issue.key for issue in issues)
+        next_token = getattr(issues, "nextPageToken", None)
+        if not next_token:
+            break
+    return keys
+
+
+def apply_dev_panel_flags(rows: list[store.IssueRow], with_pr: set[str],
+                          with_commits: set[str]) -> list[store.IssueRow]:
+    """Set dev_has_pr / dev_has_commits on the batch from the two key sets.
+
+    False, not None, for a row that was queried and did not come back: Jira positively reported no
+    linked code, which IS evidence. None survives only where the query never ran.
+    """
+    return [replace(row, dev_has_pr=row.key in with_pr, dev_has_commits=row.key in with_commits)
+            for row in rows]
 
 
 def _extract_transitions(key: str, histories: list[dict]) -> list[store.TransitionRow]:
@@ -211,6 +274,48 @@ def fetch_transitions(jira: JIRA, keys: list[str]) -> list[store.TransitionRow]:
     return transitions
 
 
+def issues_missing_link_fields(connection: duckdb.DuckDBPyConnection, floor: datetime) -> int:
+    """In-window issues that predate the Jira link columns and will never be revisited otherwise.
+
+    The incremental plan only fetches issues *updated* since the watermark, so an issue that has not
+    changed since a column was added keeps NULL there forever. GitLab's side self-heals through
+    `_needs_backfill`; this is the Jira equivalent, and without it the columns stayed empty on all
+    9,811 stored issues after the deploy that introduced them.
+
+    The marker is `dev_has_pr`, not `mr_field_url`. An issue with no Merge Request field set has a
+    legitimately NULL url, so keying on that would re-fetch the same issues every cycle forever;
+    `apply_dev_panel_flags` writes False for every issue it queries, so NULL there means only
+    "never synced".
+    """
+    return connection.execute(
+        "SELECT count(*) FROM issues WHERE created >= ? AND dev_has_pr IS NULL", [floor]
+    ).fetchone()[0]
+
+
+def backfill_link_fields(jira: JIRA, connection: duckdb.DuckDBPyConnection,
+                         floor: datetime) -> int:
+    """Re-read issue FIELDS (never changelogs) for the window, filling the Jira link columns.
+
+    Changelogs are the expensive half of a sync -- `fetch_transitions` costs one request per issue, so
+    a full re-sync of the store is ~9,800 requests -- and they have not changed. Skipping them turns
+    this into roughly 15 requests for the ~1,300 issues since the self-service epoch: 13 pages of
+    fields plus the two development[] queries.
+
+    Scoped to the epoch because nothing older is displayed by any panel.
+    """
+    jql = f'project = DEVOPS AND created >= "{floor:%Y-%m-%d}" ORDER BY created ASC'
+    issues = fetch_issues(jira, jql)
+    issues = apply_dev_panel_flags(
+        issues,
+        fetch_dev_panel_keys(jira, jql, "development[pullrequests].all > 0"),
+        fetch_dev_panel_keys(jira, jql, "development[commits].all > 0"),
+    )
+    store.upsert_issues(connection, issues)
+    logger.info("jira backfill: refreshed link fields on %d issues since %s (no changelogs)",
+                len(issues), floor.date())
+    return len(issues)
+
+
 def plan_sync(meta: store.SyncMeta | None, now: datetime) -> SyncPlan:
     """Decide whether this cycle is a full crawl or an incremental slice.
 
@@ -232,11 +337,24 @@ def run_sync(
     """Execute one planned sync: fetch, write issues + transitions, advance the watermark."""
     jql = _FULL_JQL if plan.watermark is None else build_incremental_jql(plan.watermark, jira_tz)
     issues = fetch_issues(jira, jql)
+    # Two extra queries for the whole batch, scoped by the same JQL, replacing a per-issue field that
+    # cannot be trusted. Jira will not accept both development[] clauses in one query.
+    issues = apply_dev_panel_flags(
+        issues,
+        fetch_dev_panel_keys(jira, jql, "development[pullrequests].all > 0"),
+        fetch_dev_panel_keys(jira, jql, "development[commits].all > 0"),
+    )
     keys = [issue.key for issue in issues]
     transitions = fetch_transitions(jira, keys)
 
     store.upsert_issues(connection, issues)
     store.replace_transitions(connection, keys, transitions)
+
+    # Self-heal the columns an incremental plan can never reach. Gated on the count, so it runs once
+    # after a column is added and is skipped on every cycle after.
+    backfilled = 0
+    if issues_missing_link_fields(connection, SELF_SERVICE_EPOCH):
+        backfilled = backfill_link_fields(jira, connection, SELF_SERVICE_EPOCH)
 
     total_issues = connection.execute("SELECT count(*) FROM issues").fetchone()[0]
     total_transitions = connection.execute("SELECT count(*) FROM transitions").fetchone()[0]
@@ -244,7 +362,7 @@ def run_sync(
 
     return SyncResult(
         full=plan.watermark is None,
-        fetched_issues=len(issues),
+        fetched_issues=len(issues) + backfilled,
         fetched_transitions=len(transitions),
         total_issues=total_issues,
         total_transitions=total_transitions,

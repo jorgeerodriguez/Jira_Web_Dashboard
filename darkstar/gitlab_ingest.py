@@ -1,9 +1,12 @@
-"""GitLab merge-request ingest: merged MRs by roster members, with changed file paths.
+"""GitLab merge-request ingest: merged MRs by tracked authors, with changed file paths.
 
 Parallel to the Jira poller. Pulls merged MRs from the PE groups (audacy-inc/devops and
-audacy-inc/gcp) over a trailing window, attributes each to a roster member via
-GITLAB_USERNAMES, and stores the MR plus its changed file paths. The SME matrix is then
-tagged from real authorship (see gitlab_domains), which fills the gaps sparse Jira titles leave.
+audacy-inc/gcp) over a trailing window, attributes each to a tracked author via
+every author it finds; roster.GITLAB_USERNAMES only decides which key their merge requests are
+mr_authors.py), and
+stores the MR plus its changed file paths. The SME matrix is then tagged from real authorship
+(see gitlab_domains), which fills the gaps sparse Jira titles leave; it keys on ROSTER, so
+tracked non-roster authors feed the MR-turnaround view without entering the SME matrix.
 
 Transport mirrors the Jira poller: a token from the environment (GITLAB_TOKEN), so the same
 code runs locally and in-cluster.
@@ -17,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 import duckdb
 import requests
 
-from darkstar import store
+from darkstar import config, mr_authors, store
 from darkstar.roster import GITLAB_USERNAMES
 
 logger = logging.getLogger("darkstar.gitlab_ingest")
@@ -40,6 +43,30 @@ def _token() -> str:
     if not token:
         raise RuntimeError("missing required environment variable: GITLAB_TOKEN")
     return token
+
+
+def search_members(query: str, limit: int) -> list[dict]:
+    """GitLab users in the PE groups matching `query`, for the dashboard's author picker.
+
+    Without this the author field is a bare text box: you have to already know the exact GitLab
+    username, and anything else — an email address, a display name — is accepted and silently
+    matches no merge requests at all. Searching the groups keeps the picker to people who could
+    plausibly have MRs in the store.
+    """
+    session = requests.Session()
+    session.headers["PRIVATE-TOKEN"] = _token()
+    seen: dict[str, dict] = {}
+    for group_id in _PE_GROUP_IDS:
+        response = session.get(
+            f"{_API}/groups/{group_id}/members/all",
+            params={"query": query, "per_page": limit}, timeout=_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        for member in response.json():
+            username = member.get("username")
+            if username and username not in seen:
+                seen[username] = {"username": username, "name": member.get("name") or username}
+    return sorted(seen.values(), key=lambda m: m["username"])[:limit]
 
 
 def _to_naive_utc(value: str) -> datetime:
@@ -83,28 +110,169 @@ def _changed_paths(session: requests.Session, project_id: int, iid: int) -> list
     return paths
 
 
+# Automated commenters. Their notes are not review activity: GitLab Duo answers on every MR, and
+# bot accounts post pipeline and security chatter. GitLab does not flag these reliably in the notes
+# payload, so match the account names instead.
+_BOT_USERNAMES: frozenset[str] = frozenset({"gitlabduo", "gitlab-duo", "ghost", "alert-bot"})
+_BOT_SUFFIXES: tuple[str, ...] = ("_bot", "-bot", "bot")
+
+_READY_NOTE: str = "as **ready**"
+_DRAFT_NOTE: str = "as **draft**"
+_APPROVAL_NOTE: str = "approved this merge request"
+
+
+def _is_bot(username: str) -> bool:
+    """True for automated commenters, whose notes must not count as human review activity."""
+    name = (username or "").lower()
+    return name in _BOT_USERNAMES or name.endswith(_BOT_SUFFIXES)
+
+
+def _mr_notes(session: requests.Session, project_id: int, iid: int) -> list[dict]:
+    """Every note on an MR, system and user alike (one page is ample; MRs rarely exceed 100)."""
+    response = session.get(
+        f"{_API}/projects/{project_id}/merge_requests/{iid}/notes",
+        params={"per_page": _PER_PAGE}, timeout=_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _mr_pipelines(session: requests.Session, project_id: int, iid: int,
+                  mr_id: int) -> list[store.MergeRequestPipelineRow]:
+    """Pipeline results for one merge request, oldest first.
+
+    Costs one API call per merge request, which roughly doubles a full crawl. Worth it because red
+    time was skewing the turnaround badly: 32% of open hours on the slowest PE-authored MRs were spent
+    with a failing pipeline, and the clock now excludes it.
+    """
+    response = session.get(
+        f"{_API}/projects/{project_id}/merge_requests/{iid}/pipelines",
+        params={"per_page": 100}, timeout=_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    raw = response.json() or []
+    rows: list[store.MergeRequestPipelineRow] = []
+    for seq, pipeline in enumerate(sorted(raw, key=lambda p: p.get("updated_at") or "")):
+        when = pipeline.get("updated_at") or pipeline.get("created_at")
+        status = pipeline.get("status")
+        if not when or not status:
+            continue
+        rows.append(store.MergeRequestPipelineRow(
+            mr_id=mr_id, status=status, happened_at=_to_naive_utc(when), seq=seq))
+    return rows
+
+
+def _mr_events(mr_id: int, author_username: str, notes: list[dict]) -> list[store.MergeRequestEventRow]:
+    """Draft/ready transitions and the first human review comment, from an MR's notes.
+
+    Draft state comes from GitLab's own system notes, which a rebase cannot rewrite -- unlike
+    commit timestamps, which proved useless for this (a three-week-old MR can carry a commit dated
+    minutes before the merge). "review" is the first note from a human who is not the MR's author:
+    a self-comment is not review, and neither is Duo's automatic reply.
+    """
+    events: list[tuple[str, datetime, str | None]] = []
+    review_at: datetime | None = None
+    review_by: str | None = None
+    approval_at: datetime | None = None
+    approval_by: str | None = None
+    for note in notes:
+        username = ((note.get("author") or {}).get("username")) or ""
+        created = _to_naive_utc(note["created_at"])
+        if note.get("system"):
+            body = note.get("body") or ""
+            if _READY_NOTE in body:
+                events.append(("ready", created, None))
+            elif _DRAFT_NOTE in body:
+                events.append(("draft", created, None))
+            elif (_APPROVAL_NOTE in body and username != author_username
+                  and not _is_bot(username)):
+                # An approval IS the review. PE merges its own work once a colleague approves, so
+                # counting comments alone measured conversation, not review: on the crawled sample
+                # 111 of 124 MRs carried an approval and only 23 drew a comment.
+                if approval_at is None or created < approval_at:
+                    approval_at, approval_by = created, username
+            continue
+        if _is_bot(username) or username == author_username:
+            continue
+        if review_at is None or created < review_at:
+            review_at, review_by = created, username
+    if review_at is not None:
+        events.append(("review", review_at, review_by))
+    if approval_at is not None:
+        events.append(("approval", approval_at, approval_by))
+    events.sort(key=lambda event: event[1])
+    return [store.MergeRequestEventRow(mr_id=mr_id, kind=kind, happened_at=when, seq=i, actor=actor)
+            for i, (kind, when, actor) in enumerate(events)]
+
+
 def _project_path(mr: dict) -> str:
     """The repo's full namespace path, e.g. 'audacy-inc/devops/pe-morning-report'."""
     full_reference = (mr.get("references") or {}).get("full", "")
     return full_reference.split("!")[0] or str(mr["project_id"])
 
 
+def needs_backfill(connection: duckdb.DuckDBPyConnection, cutoff: datetime) -> bool:
+    """True if in-window MRs lack opened_at/description/events, which an incremental crawl cannot fix.
+
+    Incremental crawls only re-fetch MRs *updated* since the watermark, so rows written before
+    opened_at/labels existed would stay incomplete
+    forever. One full re-crawl fixes both. Self-terminating: once every in-window row has an
+    opened_at this is False again, and rows older than the window are never revisited.
+
+    author_name is what makes the census release actually take effect. Dropping the ingest-time
+    author filter changes nothing on its own: no roster edit fires on deploy, so the pod would crawl
+    incrementally and every author the old filter discarded would stay discarded. Every pre-existing
+    row has a NULL author_name, so this forces exactly one full re-crawl, which ingests everyone.
+    """
+    missing = connection.execute(
+        "SELECT count(*) FROM merge_requests "
+        "WHERE merged_at >= ? AND (opened_at IS NULL OR description IS NULL "
+        "  OR events_fetched_at IS NULL OR merged_by IS NULL OR source_branch IS NULL "
+        "  OR pipelines_fetched_at IS NULL OR author_name IS NULL)", [cutoff]
+    ).fetchone()[0]
+    # Approval events written before `actor` existed name nobody, and an incremental crawl only
+    # revisits MRs updated since the watermark -- so without this the approver stays unknown on every
+    # historical row and the panel that needs it can never fill.
+    missing += connection.execute(
+        "SELECT count(*) FROM mr_events e JOIN merge_requests m ON m.id = e.mr_id "
+        "WHERE m.merged_at >= ? AND e.kind = 'approval' AND e.actor IS NULL", [cutoff]
+    ).fetchone()[0]
+    if missing:
+        logger.info("gitlab sync: %s in-window MRs incomplete, forcing a full re-crawl", missing)
+    return bool(missing)
+
+
 def run_gitlab_sync(connection: duckdb.DuckDBPyConnection, now: datetime, window_days: int) -> tuple[int, int]:
-    """Crawl merged MRs by roster members: full `window_days` on the first run, incremental after.
+    """Crawl merged MRs by tracked authors: full `window_days` on the first run, incremental after.
 
     The first crawl (no stored watermark) pulls the whole trailing window; every crawl after pulls
     only MRs updated since the last successful sync (minus a small margin). The watermark advances
-    only after a successful crawl, so a failed run just retries the same slice next time.
+    only after a successful crawl, so a failed run just retries the same slice next time. A store
+    holding incomplete in-window rows is re-crawled in full once (see needs_backfill).
+
+    The roster is read ONCE here and both used for the crawl and recorded against it. That pairing
+    is what makes adding an author safe under concurrency: an author added while this crawl is
+    running bumps the version past the one recorded at the end, so the next crawl is full and picks
+    them up. Re-reading the roster later, or recording the version at the end, would let a crawl
+    stamp a version it never actually crawled and lose that author's history for good.
     """
+    roster = mr_authors.read(mr_authors.authors_path(config.db_path()))
+    version = int(roster.get("version", 0))
     watermark = store.get_gitlab_watermark(connection)
-    cutoff = now - timedelta(days=window_days) if watermark is None else watermark - _WATERMARK_MARGIN
-    written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS)
+    window_cutoff = now - timedelta(days=window_days)
+    if watermark is None or needs_backfill(connection, window_cutoff):
+        cutoff = window_cutoff
+    else:
+        cutoff = watermark - _WATERMARK_MARGIN
+    written = _sync_scopes(connection, cutoff, _PE_GROUP_IDS, _PE_PROJECT_IDS, roster)
     store.set_gitlab_watermark(connection, now)
+    store.set_roster_version(connection, version)
     return written
 
 
 def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
-                 group_ids: tuple[int, ...], project_ids: tuple[int, ...]) -> tuple[int, int]:
+                 group_ids: tuple[int, ...], project_ids: tuple[int, ...],
+                 roster: dict) -> tuple[int, int]:
     """Crawl merged MRs by roster members from the given groups + projects; store MRs + file paths.
 
     `cutoff` is a naive-UTC floor: only MRs updated on GitLab and merged on or after it are
@@ -118,14 +286,30 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
 
     mr_rows: list[store.MergeRequestRow] = []
     file_rows: list[tuple[int, str]] = []
+    event_rows: list[store.MergeRequestEventRow] = []
+    pipeline_rows: list[store.MergeRequestPipelineRow] = []
     seen_ids: set[int] = set()
+
+    # Every author is ingested. This used to filter to a known list, which made the store a function
+    # of who somebody had remembered to add: a contributor nobody listed was discarded at crawl time
+    # and could never appear on any panel, no matter the lookback. Adoption is a census question --
+    # "who is using the self-service tooling" -- and a census cannot be answered from a curated list.
+    #
+    # Roster-gated views are unaffected, by the same mechanism that already protected them from
+    # dashboard-added authors: an author outside the PE roster is keyed by GitLab username, and
+    # velocity/capacity/SME look ROSTER up by Jira accountId, which a username never matches.
 
     scopes = [f"groups/{gid}" for gid in group_ids] + [f"projects/{pid}" for pid in project_ids]
     for scope in scopes:
         for mr in _merged_mrs(session, scope, updated_after_iso):
-            account_id = GITLAB_USERNAMES.get((mr.get("author") or {}).get("username", ""))
-            if account_id is None:
+            author = mr.get("author") or {}
+            username = author.get("username") or ""
+            if not username:
                 continue
+            # Roster members keep their Jira accountId so their history stays one series; everyone
+            # else is keyed by username. The roster wins on a collision, so re-adding a member
+            # through the dashboard cannot split one person into two rows with the same name.
+            account_id = GITLAB_USERNAMES.get(username, username)
             merged_at = mr.get("merged_at")
             if not merged_at:
                 continue
@@ -142,19 +326,54 @@ def _sync_scopes(connection: duckdb.DuckDBPyConnection, cutoff: datetime,
             except requests.RequestException as exc:
                 logger.warning("MR %s!%s changes fetch failed, no paths: %s", mr["project_id"], mr["iid"], exc)
                 paths = []
+            try:
+                notes = _mr_notes(session, mr["project_id"], mr["iid"])
+            except requests.RequestException as exc:
+                logger.warning("MR %s!%s notes fetch failed, no draft/review events: %s",
+                               mr["project_id"], mr["iid"], exc)
+                notes = []
+            event_rows.extend(_mr_events(mr_id, username, notes))
+            try:
+                pipeline_rows.extend(_mr_pipelines(session, mr["project_id"], mr["iid"], mr_id))
+            except requests.RequestException as exc:
+                # No pipeline history means no red time is excluded, so the MR reports its full ready
+                # clock. That errs toward charging PE for time it may not owe, which is the safe way
+                # round: a fetch failure must not quietly make a merge request look fast.
+                logger.warning("MR %s!%s pipelines fetch failed, red time not excluded: %s",
+                               mr["project_id"], mr["iid"], exc)
             mr_rows.append(store.MergeRequestRow(
                 id=mr_id,
                 project_path=_project_path(mr),
                 iid=mr["iid"],
                 author_account_id=account_id,
                 title=mr.get("title") or "",
+                opened_at=_to_naive_utc(mr["created_at"]),
                 merged_at=merged_naive,
+                labels=list(mr.get("labels") or []),
                 web_url=mr.get("web_url") or "",
+                merged_by=((mr.get("merged_by") or {}).get("username")) or "",
                 fetched_at=fetched_at,
+                events_fetched_at=fetched_at,
+                description=mr.get("description") or "",
+                source_branch=mr.get("source_branch") or "",
+                pipelines_fetched_at=fetched_at,
+                author_name=author.get("name") or username,
             ))
             file_rows.extend((mr_id, path) for path in paths)
 
     store.upsert_merge_requests(connection, mr_rows)
     store.replace_mr_files(connection, [row.id for row in mr_rows], file_rows)
-    logger.info("gitlab sync: %d merge requests, %d file rows", len(mr_rows), len(file_rows))
+    by_mr: dict[int, list[store.MergeRequestEventRow]] = {row.id: [] for row in mr_rows}
+    for event in event_rows:
+        by_mr.setdefault(event.mr_id, []).append(event)
+    for mr_id, events in by_mr.items():
+        store.replace_mr_events(connection, mr_id, events)
+    pipes_by_mr: dict[int, list[store.MergeRequestPipelineRow]] = {row.id: [] for row in mr_rows}
+    for pipeline in pipeline_rows:
+        pipes_by_mr.setdefault(pipeline.mr_id, []).append(pipeline)
+    for mr_id, pipelines in pipes_by_mr.items():
+        store.replace_mr_pipelines(connection, mr_id, pipelines)
+    logger.info("gitlab sync: %d merge requests, %d file rows, %d draft/review events, "
+                "%d pipeline results", len(mr_rows), len(file_rows), len(event_rows),
+                len(pipeline_rows))
     return len(mr_rows), len(file_rows)

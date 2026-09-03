@@ -1,0 +1,1669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform Engineering — Self-Service SLAs</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#1a212c; --card:#141922; --ink:#e7eaf0; --ink2:#9aa4b3; --muted:#7c8695;
+    --line:#252d3a; --line2:#39434f; --grid:rgba(255,255,255,.055);
+    --pos:#41c98a; --neg:#f2705f;
+    /* Three surfaces, not one. Everything used to sit on --panel, so a score card inside a panel had
+       nothing but a 1px border to separate it from its own container. --head reads as raised (the
+       panel's title bar), --well as recessed (the thing holding a number). */
+    --head:#202836; --well:#151b25;
+    /* One accent, taken from the chart palette so it is already in the page's vocabulary. Used only
+       where the eye should land first: panel disclosure markers and the focused control. */
+    --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(1100px 620px at 50% -8%, #141c29 0%, var(--bg) 62%);
+    color:var(--ink); font-family:var(--sans); line-height:1.55;
+    -webkit-font-smoothing:antialiased; padding:clamp(20px,4vw,56px) 16px; min-height:100vh;
+  }
+  .nav{max-width:none; margin:0 auto 18px; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .nav .brand{font-family:var(--mono); font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.14em; font-size:11px; margin-right:8px}
+  .nav a{font-family:var(--mono); font-size:13px; color:var(--ink2); text-decoration:none; padding:7px 13px; border-radius:8px; border:1px solid transparent}
+  .nav a:hover{color:var(--ink); border-color:var(--line2)}
+  .nav a.active{color:var(--ink); background:var(--panel); border-color:var(--line2)}
+  .card{
+    background:var(--card); max-width:none; margin:0 auto; border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -32px rgba(0,0,0,.75);
+    padding:clamp(22px,4vw,44px);
+  }
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+        color:var(--accent); margin:0 0 12px}
+  h1{font-size:clamp(24px,3.4vw,31px); line-height:1.12; font-weight:640; letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance}
+  .dek{color:var(--ink2); font-size:16px; margin:0; max-width:66ch}
+
+  /* The lookback drives every panel, so it reads as a toolbar rather than as loose inputs. */
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:26px 0 22px;
+        background:var(--well); border:1px solid var(--line); border-radius:11px; padding:12px 14px}
+  .controls .lbl{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-right:2px}
+  .chip{
+    display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+    border:1px solid var(--line2); background:transparent; color:var(--ink2);
+    padding:6px 11px; border-radius:999px; font:inherit; font-size:13px; font-weight:560;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .chip .dot{width:9px; height:9px; border-radius:50%; background:var(--c); opacity:.35; transition:opacity .15s}
+  .chip[aria-pressed="true"]{color:var(--ink); border-color:var(--c); background:color-mix(in srgb, var(--c) 16%, transparent)}
+  .chip[aria-pressed="true"] .dot{opacity:1}
+  .chip:focus-visible{outline:2px solid var(--c); outline-offset:2px}
+  .btn{cursor:pointer; border:1px solid var(--line2); background:transparent; color:var(--muted); font:inherit; font-size:12px; font-family:var(--mono); padding:6px 10px; border-radius:8px}
+  .btn:hover{color:var(--ink); border-color:var(--muted)}
+  .controls .note{font-family:var(--mono); font-size:12px; color:var(--muted); width:100%; margin-top:2px}
+
+  .chart-wrap{width:100%; overflow-x:auto; margin-top:10px}
+  svg.chart{display:block; width:85%; height:auto; min-width:520px; margin-inline:auto}
+  .chart-inner{position:relative}
+  .hit{fill:none; stroke:#000; stroke-opacity:0; stroke-width:14; pointer-events:stroke; cursor:pointer}
+  .series{transition:opacity .12s}
+  .tip{position:absolute; z-index:5; pointer-events:none; background:var(--panel); border:1px solid var(--line2);
+       border-radius:8px; padding:6px 10px; font-family:var(--mono); font-size:12.5px; color:var(--ink);
+       white-space:nowrap; box-shadow:0 8px 22px -10px rgba(0,0,0,.7); transform:translate(12px,10px)}
+  .tip .sw{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px}
+  .tip .t{color:var(--muted)}
+  .tip .tv{margin-top:3px; font-weight:600}
+  .pinned{margin-top:12px; display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+          font-family:var(--mono); font-size:12.5px; color:var(--ink2);
+          border:1px solid var(--line2); border-radius:999px; padding:5px 12px}
+  .pinned:hover{border-color:var(--muted); color:var(--ink)}
+  .pinned .sw{width:9px; height:9px; border-radius:50%; display:inline-block}
+  .pinned .x{color:var(--muted)}
+  .grid-line{stroke:var(--grid); stroke-width:1}
+  .axis-base{stroke:var(--line2); stroke-width:1}
+  .divider{stroke:var(--muted); stroke-width:1; stroke-dasharray:2 4; opacity:.6}
+  .ax-label{font-family:var(--mono); font-size:12px; fill:var(--muted)}
+  .ax-month{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
+  .ax-month.proj{fill:var(--muted)}
+  .plot-note{font-family:var(--mono); font-size:11px; fill:var(--muted); letter-spacing:.08em; text-transform:uppercase}
+  .val{font-family:var(--mono); font-size:12px; font-weight:600}
+  .series-line{fill:none; stroke-width:2.4; stroke-linejoin:round; stroke-linecap:round}
+  .hit{fill:none; stroke:#000; stroke-opacity:0; stroke-width:14; pointer-events:stroke; cursor:pointer}
+  .series{transition:opacity .12s}
+  .chips .chip{transition:opacity .12s}
+  .series-dash{fill:none; stroke-width:2.4; stroke-dasharray:6 5; opacity:.9}
+  .whisk{stroke-width:1.25; opacity:.55}
+
+  /* Panel titles are the brightest, largest mono on the page; sub-headings stay small and dim. They
+     were 13px/12px both in --muted at weight 600, which is why nothing read as a heading. */
+  h2{font-size:14px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.085em;
+     color:var(--ink); font-weight:700; margin:38px 0 6px}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--well);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.025); transition:border-color .15s}
+  .stat:hover{border-color:var(--line2)}
+  .stat .k{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted)}
+  .stat .v{font-family:var(--mono); font-size:30px; font-weight:600; letter-spacing:-.025em; color:var(--ink);
+        margin-top:5px; line-height:1.05; font-variant-numeric:tabular-nums}
+  .stat .s{font-size:12px; color:var(--ink2); margin-top:3px}
+  .stat .s.pos{color:var(--pos)} .stat .s.neg{color:var(--neg)}
+  .tbar-val{font-family:var(--mono); font-size:13px; font-weight:600; fill:var(--ink)}
+  .tbar-lbl{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
+  .tbar-lbl.proj{fill:var(--muted)}
+  .tbar-ax{font-family:var(--mono); font-size:11px; fill:var(--muted)}
+  .tbl-wrap{width:100%; overflow-x:auto}
+  table{border-collapse:collapse; width:100%; font-size:14px; min-width:520px}
+  caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
+  th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+        color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line2); padding-bottom:9px}
+  tbody td{border-bottom:1px solid var(--line)}
+  /* Wide rows of tabular numbers are hard to track across; a hover band does the work a zebra
+     stripe would without adding permanent noise. */
+  tbody tr{transition:background .12s}
+  tbody tr:hover td{background:rgba(255,255,255,.03)}
+  tbody tr:last-child td{border-bottom:none}
+  /* The first column is the row's identity (a week, an author), so it carries more weight than the
+     numbers it labels. */
+  tbody td:first-child{color:var(--ink); font-weight:560}
+  td.num{font-family:var(--mono)}
+  tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
+  tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
+  tbody tr.sum.first td{padding-top:14px}
+  .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
+  .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--well);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+  .fc .who{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:7px}
+  .fc .dot-badge{width:9px; height:9px; border-radius:50%}
+  .fc .big{font-family:var(--mono); font-size:28px; font-weight:600; letter-spacing:-.02em; margin:6px 0 1px; font-variant-numeric:tabular-nums}
+  .fc .rng{font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .fc.empty{color:var(--muted); font-size:13px; display:flex; align-items:center}
+
+  .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); max-width:76ch}
+  .foot > div{margin-top:7px}
+  .foot summary{cursor:pointer; font-family:var(--mono); font-size:12px; text-transform:uppercase;
+        letter-spacing:.1em; color:var(--muted); user-select:none}
+  .foot summary:hover{color:var(--ink2)}
+  .foot[open] summary{margin-bottom:4px}
+  .foot b{color:var(--ink2); font-weight:600}
+  .foot code{font-family:var(--mono); color:var(--ink2)}
+  h3{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.13em;
+     color:var(--muted); font-weight:600; margin:26px 0 8px}
+  h2.collapsible{cursor:pointer; user-select:none; width:fit-content}
+  h2.collapsible::before{content:"\25B8"; display:inline-block; margin-right:9px; color:var(--accent);
+        transition:transform .18s; transform:translateY(-1px)}
+  h2.collapsible[aria-expanded="true"]::before{transform:translateY(-1px) rotate(90deg)}
+  h2.collapsible:hover{color:#fff}
+  h2.collapsible:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:5px}
+  .sec-hidden{display:none !important}
+  .panel{border:1px solid var(--line); border-radius:12px; padding:0 20px 18px; background:var(--panel);
+         box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 18px 40px -30px rgba(0,0,0,.8);
+         transition:border-color .15s}
+  .panel:hover{border-color:var(--line2)}
+  /* The title becomes a bar spanning the panel: negative margins reach back out through the panel's
+     own padding, and the radius matches the panel minus its 1px border. */
+  .panel > h2{margin:0 -20px 14px; padding:13px 20px; background:var(--head);
+              border-bottom:1px solid var(--line); border-radius:11px 11px 0 0}
+  /* One collapsed explainer per panel instead of a standing wall of prose. */
+  .note{margin:0 0 12px}
+  .note summary{cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase;
+        letter-spacing:.09em; color:var(--muted); user-select:none; list-style:none}
+  .note summary::-webkit-details-marker{display:none}
+  .note summary::before{content:"\24D8"; margin-right:6px}
+  .note summary:hover{color:var(--ink2)}
+  .note p{color:var(--muted); font-size:12.5px; margin:8px 0 0; max-width:70ch}
+  /* No link may fall back to the browser default. Measured against this panel, #0000EE is 1.72:1
+     and the visited #551A8B is 1.47:1, where AA body text needs 4.5:1 — effectively unreadable. The
+     accent is 5.94:1 on --panel and 6.35:1 on --well. The nav sits outside main.card and keeps its
+     own quieter treatment, so this cannot reach it. */
+  .card a{color:var(--accent)}
+  .card a:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+  /* Merge-request refs are identifiers, so they read better in mono, and an underline that is not
+     full-strength keeps a column of them from turning into a wall of rules. */
+  tbody a{font-family:var(--mono); text-decoration:none; padding-bottom:1px;
+        border-bottom:1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+        transition:color .12s, background .12s, border-color .12s}
+  tbody a:hover{color:#fff; border-bottom-color:#fff; background:var(--accent-soft)}
+  caption a,.note a,.foot a{text-decoration:underline; text-underline-offset:2px}
+  /* The linkage strip sits under the impact cards: same row of facts, but about our own confidence
+     rather than about the team. */
+  .linkage{display:flex; flex-wrap:wrap; align-items:baseline; gap:7px 16px; margin-top:14px;
+        font-family:var(--mono); font-size:12px; color:var(--ink2)}
+  .linkage .lk-head{text-transform:uppercase; letter-spacing:.09em; color:var(--muted)}
+  .linkage .lk b{color:var(--ink); font-weight:600}
+  .linkage .gap{color:var(--muted)}
+  .linkage .gap b{color:var(--neg)}
+  .pager{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+        margin-top:12px; font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .pager .pg-btns{display:inline-flex; align-items:center; gap:8px}
+  .pager .pg-size{display:inline-flex; align-items:center; gap:6px; margin-right:6px;
+        text-transform:uppercase; letter-spacing:.08em}
+  .pager .pg-size select{font-family:var(--mono); font-size:12px; color:var(--ink);
+        background:var(--panel); border:1px solid var(--line2); border-radius:7px; padding:3px 6px}
+  .pager .pg-size select:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .pager .pg-at{min-width:52px; text-align:center; color:var(--ink2)}
+  .pager .btn[disabled]{opacity:.4; cursor:default}
+  .pager .btn[disabled]:hover{color:var(--muted); border-color:var(--line2)}
+  /* The rank is the row's position in the slowest ordering, which a page of ten would otherwise lose. */
+  /* Why a zero is a zero, without widening the column. */
+  .hint{display:block; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--muted); opacity:.75; line-height:1.5}
+  .rank{display:inline-block; min-width:22px; font-family:var(--mono); font-size:11px;
+        color:var(--muted); text-align:right; margin-right:9px}
+  .linkish{background:none; border:none; padding:0; font:inherit; color:var(--ink2);
+        text-decoration:underline dotted; cursor:pointer}
+  .linkish:hover{color:var(--ink)}
+  /* Two columns on wide screens, one below ~980px. Panels that need horizontal room — the card row
+     and the daily chart — span both. */
+  /* No align-items:start — grid's default stretch is what makes two panels in a row match height.
+     The panel is a flex column so its table takes the slack rather than leaving a gap. */
+  .panels{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:22px}
+  .panel{min-width:0; display:flex; flex-direction:column}
+  .panel > .tbl-wrap:last-child{flex:1}
+  .panel.wide{grid-column:1 / -1}
+
+  /* ---------- adoption panels ----------
+     Structure borrowed from the hand-built scorecard: one headline number carrying the whole
+     finding, a stacked share chart beside it, then a rule-separated stat grid. Rendered in this
+     page's dark tokens rather than that page's light ones -- the layout was the useful part.
+     --s-non is the only new colour: PE work is the page accent, and the teams PE serves need to be
+     legible against it at a glance, so they get its complement rather than another blue. */
+  .adopt{--s-pe:var(--accent); --s-non:#e8834a}
+  .adopt-hero{display:grid; grid-template-columns:minmax(190px,270px) 1fr; gap:30px; align-items:end}
+  @media (max-width:820px){ .adopt-hero{grid-template-columns:1fr; align-items:start} }
+  .adopt-big{font-size:clamp(48px,7vw,74px); font-weight:700; letter-spacing:-.04em; line-height:.92;
+        color:var(--s-non); font-variant-numeric:tabular-nums}
+  .adopt-big-l{font-size:14.5px; line-height:1.4; color:var(--ink2); margin-top:11px; max-width:26ch}
+  .adopt-big-sub{font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:11px; line-height:1.5}
+  .adopt-legend{display:flex; gap:15px; margin-bottom:15px; font-size:12px; color:var(--ink2); flex-wrap:wrap}
+  .adopt-legend i{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px}
+  .adopt-plot{position:relative; padding-left:28px}
+  .adopt-gl{position:absolute; left:28px; right:0; border-top:1px solid var(--grid)}
+  .adopt-gl span{position:absolute; left:-28px; top:-7px; font-family:var(--mono); font-size:10px;
+        color:var(--muted); font-variant-numeric:tabular-nums}
+  .adopt-cols{display:flex; gap:clamp(6px,2vw,24px); align-items:flex-end; position:relative}
+  .adopt-col{flex:1; min-width:0}
+  .adopt-stack{display:flex; flex-direction:column; justify-content:flex-end}
+  .adopt-seg{position:relative}
+  .adopt-seg-pe{background:var(--s-pe); border-radius:0 0 2px 2px}
+  .adopt-seg-non{background:var(--s-non); border-radius:3px 3px 0 0; margin-bottom:2px}
+  /* A truncated period is a shorter bar for a reason that is not a dip in the work. */
+  .adopt-col.partial .adopt-seg{background-image:repeating-linear-gradient(135deg,
+        rgba(255,255,255,.30) 0 3px, transparent 3px 7px)}
+  .adopt-dl{position:absolute; top:-18px; left:0; right:0; text-align:center; font-size:12px;
+        font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums}
+  .adopt-xl{margin-top:9px; text-align:center; font-size:12px; color:var(--ink)}
+  .adopt-xs{text-align:center; font-size:10.5px; color:var(--muted); font-family:var(--mono)}
+  .adopt-col.partial .adopt-xs{color:#e0a445}
+
+  /* Rule-separated cells: the 1px gap on a --line background IS the rule, so no per-cell borders. */
+  .adopt-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1px;
+        background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .adopt-cell{background:var(--well); padding:17px 19px}
+  .adopt-n{font-size:28px; font-weight:700; letter-spacing:-.025em; line-height:1;
+        font-variant-numeric:tabular-nums; display:block}
+  .adopt-l{font-size:12.5px; line-height:1.4; color:var(--ink2); margin-top:7px; display:block}
+  .adopt-cell.ok .adopt-n{color:var(--pos)} .adopt-cell.non .adopt-n{color:var(--s-non)}
+  .adopt-cell.warn .adopt-n{color:#e0a445}
+
+  /* Two different absences, and conflating them is what misleads. A cell that is EMPTY has a
+     working metric and nothing in the window; a cell that is BLOCKED cannot be computed at all
+     until the ingest changes, and will still be blank on a busy week. They must not look alike:
+     a reader who reads "blocked" as "quiet week" waits for a number that is never coming. */
+  .adopt-cell.empty .adopt-n{color:var(--muted)}
+  .adopt-cell.blocked{background:repeating-linear-gradient(135deg,
+        var(--well) 0 8px, rgba(255,255,255,.014) 8px 16px);
+        outline:1px dashed var(--line2); outline-offset:-5px}
+  .adopt-cell.blocked .adopt-n{color:var(--muted); font-size:15px; font-weight:600;
+        letter-spacing:.01em; line-height:1.3}
+  .adopt-cell.blocked .adopt-l{color:var(--muted)}
+  .adopt-tag{display:inline-block; font-family:var(--mono); font-size:9px; font-weight:700;
+        letter-spacing:.11em; text-transform:uppercase; color:#e0a445; margin-bottom:9px;
+        border:1px solid rgba(224,164,69,.4); border-radius:3px; padding:2px 6px}
+
+  .adopt-prose{max-width:70ch; color:var(--muted); font-size:12.5px}
+  .adopt-prose p{margin:8px 0 0}
+  .adopt-prose b{color:var(--ink2); font-weight:600}
+  #adoptWhoNote{color:var(--muted); font-size:12.5px; margin-top:10px; max-width:70ch}
+  #adoptWhoNote b{color:var(--ink2); font-weight:600}
+
+  /* Author volume runs ACROSS the page, not down it: one column per author, so the shape of who is
+     adopting is read in one glance instead of scanned as a list. */
+  /* Same clipping applies to the counts above these bars: padding, not margin, so the bar heights
+     stay measured from the same baseline. */
+  .adopt-authors{display:flex; align-items:flex-end; gap:clamp(6px,1.8vw,20px); padding-top:24px;
+        overflow-x:auto}
+  .adopt-abar{flex:1 1 0; min-width:56px; display:flex; flex-direction:column; align-items:center}
+  .adopt-abar .bar{width:100%; max-width:74px; background:var(--s-non); border-radius:3px 3px 0 0;
+        position:relative}
+  .adopt-abar .bar.pe{background:var(--s-pe)}
+  .adopt-abar .bn{position:absolute; top:-19px; left:0; right:0; text-align:center; font-size:12px;
+        font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums}
+  .adopt-abar .an{margin-top:9px; font-size:11.5px; color:var(--ink2); text-align:center;
+        line-height:1.3; word-break:break-word}
+  @media (max-width: 980px){ .panels{grid-template-columns:minmax(0, 1fr)} }
+  /* Must outrank .filter's display, or the hidden attribute is ignored and a control the code
+     thinks is put away stays on screen. */
+  .controls [hidden]{display:none}
+  .filter{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px;
+          text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:2px 0 4px}
+  .filter select{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 10px; text-transform:none}
+  .filter select:focus-visible,.filter input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .filter input{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 11px; min-width:220px; text-transform:none;
+          letter-spacing:0}
+  .filter input:focus-visible,.filter select:focus-visible{outline:2px solid var(--line2); outline-offset:2px; border-color:var(--muted)}
+  .filter select{font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--panel);
+          border:1px solid var(--line2); border-radius:8px; padding:6px 11px; text-transform:none}
+  .filter-hint{display:block; font-size:12px; color:var(--muted); margin:0 0 10px}
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:10px 0 4px}
+  .controls .filter-hint{margin:0; flex:1 1 260px; min-width:200px}
+  .btn{font-family:var(--mono); font-size:12.5px; color:var(--ink2); background:var(--panel);
+       border:1px solid var(--line2); border-radius:8px; padding:6px 13px; cursor:pointer}
+  .btn:hover{border-color:var(--muted); color:var(--ink)}
+  .btn:focus-visible{outline:2px solid var(--line2); outline-offset:2px}
+  .chips{display:flex; flex-wrap:wrap; gap:7px; margin:8px 0 2px}
+  .chip{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+        color:var(--muted); border:1px dashed var(--line2); border-radius:999px; padding:4px 11px}
+  .chip button{background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px;
+        padding:0; line-height:1}
+  .chip button:hover{color:var(--ink)}
+  .chips .chip[aria-pressed]{border-style:solid; border-color:var(--c); color:var(--ink);
+        background:color-mix(in srgb, var(--c) 16%, transparent)}
+  .chips .chip .dot{width:9px; height:9px; border-radius:50%; background:var(--c); display:inline-block}
+  .rowx{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1;
+        padding:0 2px}
+  .rowx:hover{color:var(--neg)}
+  .swatch{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px;
+        vertical-align:baseline}
+  .bar{display:block; height:7px; border-radius:999px; min-width:2px;
+       background:linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent))}
+  td.barcell{width:38%; padding-left:14px}
+  /* The answer column carries the weight; the spans beside it are workings. */
+  tbody td.strong{color:var(--ink); font-weight:640}
+  .mini{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:7px}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <span class="brand">Platform Eng</span>
+  <a href="intake">Intake</a>
+  <a href="slas" class="active">Self-Service</a>
+  <a href="delivery-forecast">Delivery Forecast</a>
+  <a href="velocity">Velocity</a>
+</nav>
+<main class="card">
+  <p class="eyebrow">Platform Engineering · Self-Service</p>
+  <h1>Self-Service Delivery</h1>
+  <p class="dek">How much of PE's delivered work comes through the self-service skills, how fast those
+  requests close, and how long merge requests take to land. All hours are business hours.</p>
+
+  <div class="controls">
+    <label class="filter">Lookback
+      <select id="preset">
+        <option value="">Panel defaults</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="last-week">Last week</option>
+        <option value="mtd">Month to date</option>
+        <option value="last-month">Last month</option>
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label class="filter" id="customRange" hidden>from
+      <input id="since" type="date" min="2026-01-01">
+      <span>to</span>
+      <input id="until" type="date" min="2026-01-01">
+    </label>
+    <label class="filter">Rows
+      <select id="grain">
+        <option value="">Auto</option>
+        <option value="day">Daily</option>
+        <option value="week">Weekly</option>
+        <option value="month">Monthly</option>
+      </select>
+    </label>
+    <button class="btn" id="sinceReset" type="button">Reset to defaults</button>
+    <span class="filter-hint" id="sinceHint"></span>
+  </div>
+
+  <div class="panels">
+  <section class="panel wide adopt">
+  <h2>Self-service authorship</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Has authoring moved off Platform Engineering at all? Every author who merged a self-service
+  merge request in the window, split by whether they are on the PE roster &mdash; a <b>census</b>,
+  not a tracked list. The crawl keeps every author it finds, so nobody has to be added for their work
+  to count.</p>
+  <p><b>Self-service</b> means a merge request that <b>names a workflow</b> &mdash; either a
+  <code>pe:iac-request</code> / <code>pe:k8s-request</code> / <code>pe:tf-module</code> label, or a
+  footer reading <code>via /iac-request</code>. Both are evidence a requester served themselves.</p>
+  <p>A footer that names <i>no</i> workflow, or names one that is not self-service
+  (<code>via /troubleshoot</code>), is <b>AI-assisted</b> instead: an agent wrote code for somebody
+  already in the codebase. Real work, not adoption. It is reported on its own scorecard card and the
+  two populations never overlap.</p>
+  <p>Ignores the author and environment filters below, and the hidden list: those curate a table, and
+  an author hidden from a table has not stopped adopting. This panel and the table further down will
+  therefore disagree on totals, by design.</p>
+  </details>
+  <div class="adopt-hero">
+    <div>
+      <div class="adopt-big" id="adoptShare">—</div>
+      <div class="adopt-big-l">of self-service merge requests were authored outside PE</div>
+      <div class="adopt-big-sub" id="adoptShareSub"></div>
+    </div>
+    <div>
+      <div class="adopt-legend">
+        <span><i style="background:var(--s-pe)"></i>PE roster</span>
+        <span><i style="background:var(--s-non)"></i>Outside PE</span>
+        <span style="color:var(--muted)">hatched = partial period</span>
+      </div>
+      <div class="tbl-wrap"><div id="adoptChart"></div></div>
+    </div>
+  </div>
+  <p class="filter-hint" id="adoptFloor"></p>
+  </section>
+
+  <section class="panel wide adopt">
+  <h2>Adoption scorecard</h2>
+  <div class="adopt-grid" id="adoptCards"></div>
+  </section>
+
+  <section class="panel wide">
+  <h2>Self-service impact</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>A <b>label</b> means the request came through a self-service skill; a
+  <b>Claude footer</b> on the MR means the code was agent-written, whoever filed the ticket. They
+  overlap but are not the same, so the share card reports both.</p>
+  </details>
+  <div class="cards" id="successStats"></div>
+  <div class="linkage" id="linkage"></div>
+
+  </section>
+  <section class="panel">
+  <h2>Delivery turnaround</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Self-service requests grouped by the period they were <b>created</b>. The grain follows the
+  lookback: up to two weeks is daily, up to a month is weekly, and anything longer is monthly, so the
+  table stays a handful of rows rather than growing with the window. <b>Rows</b> in the toolbar forces
+  a grain when you want one — 90 days week by week is 14 rows, which is sometimes what you want.</p>
+  <p>Grouping by arrival means a recent cohort may not have closed. <b>In</b> is what arrived,
+  <b>Done</b> what has landed, and a <b>*</b> marks the gap: that period's p50 counts only the
+  requests that finished, so it reads faster than it will once the rest land. A period the window or
+  the clock cuts short is marked <b>partial</b> — which includes the first row whenever the lookback
+  starts mid-period, and it almost always does.</p>
+  <p>The bar is the share closed inside one working day, scaled to the best period shown — the p50
+  range is wide enough that plotting it linearly would bury the recent periods.</p>
+  </details>
+  <div class="tbl-wrap"><table id="turnaroundTbl"></table></div>
+  </section>
+  <section class="panel">
+  <h2>How requests arrive</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p>Every request created that period, split by <b>how it was created</b>: filed by a self-service
+  skill, or filed by a person. The bar is the self-service share, and it is the capacity argument in
+  the only unit that means anything here — demand PE absorbed without a person writing the ticket.</p>
+  <p>The unit is <b>requests, not merge requests</b>. One request counts once however many MRs it
+  took, which is often several: July ran 643 merged MRs against just <b>117 distinct tickets</b>, one
+  of them spread across 19. Counting branches would answer a different question and inflate every
+  total roughly threefold.</p>
+  <p>A request counts as self-service if a skill's <b>Jira watermark</b> is on it, or if a merge
+  request it produced carries a <b>pe:*</b> label — some early skill-filed tickets never got the
+  watermark, and that label is the only remaining evidence. Reading a merge request for that signal
+  is not the same as counting it, so the bounded lookback deliberately does not cut it off.</p>
+  <p>A period is marked <b>partial</b> whenever the window or the clock cuts it short — the first
+  period of a lookback that began mid-period, the last period of a bounded range, and the period in
+  progress. All three hold a part-period of requests and would otherwise read as a real dip.</p>
+  </details>
+  <div class="tbl-wrap"><table id="originTbl"></table></div>
+  </section>
+  <section class="panel wide adopt" id="adoptWhoPanel">
+  <h2>Who is self-serving</h2>
+  <details class="note"><summary>About this panel</summary>
+  <div class="adopt-prose" id="adoptWhoProse"></div>
+  <div id="adoptWhoNote"></div>
+  </details>
+  <div class="adopt-legend" style="margin-top:16px">
+    <span><i style="background:var(--s-pe)"></i>PE roster</span>
+    <span><i style="background:var(--s-non)"></i>Outside PE</span>
+  </div>
+  <div class="tbl-wrap"><div class="adopt-authors" id="adoptAuthors"></div></div>
+  <div class="pager" id="authorPager">
+    <span class="pg-count" id="authorCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Authors
+        <select id="authorPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-apg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="authorAt"></span>
+      <button class="btn" type="button" data-apg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
+  <p class="filter-hint" id="adoptAuthorsNote" style="margin-top:12px"></p>
+  </section>
+
+  <section class="panel wide">
+  <h2>MR turnaround</h2>
+  <details class="note"><summary>About this panel</summary>
+  <p><b>Scoped to self-service.</b> Only merge requests carrying an agent footer or a
+  <b>pe:*</b> label are counted here, because this page scores how well self-service is working.
+  Unscoped it was 71% ordinary PE work — of 1,571 merged since June only 29% carried a footer and 20%
+  a label — and engineers with no access to the skills appeared in it with turnaround figures. The
+  count excluded by scope is shown below the table.</p>
+  <p><b>Ready → merged</b> counts only time an MR was offered for review <i>and</i> mergeable. Two
+  spans are excluded: <b>draft</b>, where the author has not asked yet, and <b>red CI</b>, where a
+  failing pipeline blocks the merge whoever reviews it. Measured across the slowest merge requests,
+  32% of open hours on PE-authored ones and 4% on externally-authored ones were spent red, so leaving
+  it in badly skewed the figure. Both are shown as their own columns in the drill-down rather than
+  simply removed.</p>
+  <p>Every merged MR the ingest attributes, <b>ready → merged</b>, slowest first, merged since
+  <span id="windowNote">—</span>. Counts every MR, with no per-issue pick. Time spent in <b>draft</b> is
+  excluded — the author is still working, not waiting on review. Note that an engineer working EET can
+  score near zero here, since their own workday falls inside the Pacific night.</p>
+  <p>Filter is comma-separated and matches any part of a
+    name. Add author searches GitLab as you type — pick a result, since merge requests are attributed
+    by username and an email address matches nothing. Environment is read from the repo name, falling
+    back to the changed file paths for repos like <code>gitops-k8s-team-a2</code> that hold both trees;
+    a change spanning both is counted as mixed and left out of the environment views. Otherwise — <code>*-prod</code> is production,
+    <code>*-nonprod</code> is not, and shared repos like <code>gitops-k8s-team-a2</code> are neither.
+    Adding an author queues one full GitLab re-crawl, since their existing MRs are not in the store
+    yet. Use <b>×</b> on a row to hide someone.</p>
+  <p>The same merged MRs, cut by the business-timezone day they landed rather than by
+  author, over the lookback set at the top of the page and narrowed by the author filter above. Solid
+  is the median, dashed the p90 — a day where the two diverge had one MR sitting, not a slow day.
+  Hover a point for the exact figures. Days with nothing merged are omitted.</p>
+  </details>
+
+  <div class="controls">
+    <label class="filter">Filter authors
+      <input id="mrFilter" type="search" placeholder="e.g. ben, jeremy" autocomplete="off"
+             >
+    </label>
+    <label class="filter">Add author
+      <input id="addUser" type="text" placeholder="search GitLab users" autocomplete="off"
+             list="gitlabUsers" aria-describedby="authorHint">
+      <datalist id="gitlabUsers"></datalist>
+    </label>
+    <label class="filter">shown as
+      <input id="addName" type="text" placeholder="Display Name" autocomplete="off">
+    </label>
+    <button class="btn" id="addBtn" type="button">Add</button>
+    <label class="filter">Environment
+      <select id="envFilter">
+        <option value="all">all</option>
+        <option value="prod">production</option>
+        <option value="nonprod">non-production</option>
+        <option value="other">neither</option>
+      </select>
+    </label>
+  </div>
+  <span class="filter-hint" id="authorHint"></span>
+  <div class="tbl-wrap"><table id="mrTbl"></table></div>
+  <div class="pager" id="mrPager">
+    <span class="pg-count" id="mrCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Authors
+        <select id="mrPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-mpg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="mrAt"></span>
+      <button class="btn" type="button" data-mpg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
+  <p class="filter-hint" id="scopeNote"></p>
+  <p class="filter-hint" id="hiddenNote"></p>
+  <p class="filter-hint" id="crawlNote"></p>
+  <p class="filter-hint" id="reviewNote"></p>
+  <h3>By day merged</h3>
+
+  <div class="tbl-wrap"><div id="dailyChart"></div></div>
+
+  <h3>Slowest merge requests</h3>
+  <div class="tbl-wrap"><table id="slowestTbl"></table></div>
+  <div class="pager" id="slowestPager">
+    <span class="pg-count" id="slowestCount"></span>
+    <span class="pg-btns">
+      <label class="pg-size">Rows
+        <select id="slowestPerPage">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-pg="prev" aria-label="Previous page">&lsaquo; Prev</button>
+      <span class="pg-at" id="slowestAt"></span>
+      <button class="btn" type="button" data-pg="next" aria-label="Next page">Next &rsaquo;</button>
+    </span>
+  </div>
+  </section>
+  </div>
+
+  <details class="foot">
+    <summary>How these numbers are derived</summary>
+
+    <div><b>Self-service vs AI-generated.</b> A request is <b>self-service</b> when a skill-stamped
+    label is present — <code>pe-*</code>, <code>ai-generated</code> or <code>self-service</code> on the
+    Jira issue, or <code>pe:&lt;skill&gt;</code> on the linked MR. It is <b>AI-generated</b> when the MR
+    description carries a <code>Generated with Claude Code</code> footer, whoever filed the ticket. They
+    overlap but are not the same: the Jira labels only began 2026-05-27, two months after the first
+    agent-footered MR, and 96 issues since then are footer-only — ordinary human-filed tickets PE
+    delivered with the agent.</div>
+
+    <div><b>Business hours.</b> Mon–Fri 08:00–17:00 US/Pacific, company holidays excluded, so a request
+    filed 15:00 and closed 08:00 next morning is 2h, not 17h. A business day is 9h, a week 45h. Raw
+    calendar time is not reported anywhere.</div>
+
+    <div><b>Delivery turnaround</b> = created → first <code>Done</code> in the changelog
+    (<code>resolutiondate</code> is null on ~85% of issues). <b>MR turnaround</b> = <b>ready</b> →
+    merged: time in draft is excluded, because the author is still working rather than waiting on
+    review. Across the 20 slowest MRs, 67% of attributed hours had been draft time.</div>
+
+    <div><b>Time to first review</b> is the earliest of a non-author comment, a non-author approval, or
+    a merge by someone other than the author. PE engineers merge their own work once a colleague
+    approves, so a self-merge is not evidence nobody looked — the approval is the review. Requests from
+    outside PE cannot be merged by the requester, so there the merge is the review.</div>
+
+    <div><b>Environment</b> comes from the repo name, falling back to the changed file paths for repos
+    like <code>gitops-k8s-team-a2</code> that hold both trees. A change touching both is counted as
+    mixed and left out of the environment views.</div>
+
+    <div><b>Population.</b> Delivery-type issues only (Story/Task/Bug/Hotfix/Sub-task) — a Feature or
+    Epic is a container for requests, not a request. Only merged MRs are ingested, so nothing here is a
+    queue depth: an MR still open is invisible until it lands.</div>
+
+    <div><b>Windows.</b> Impact cards and the monthly trend read the trailing 3 months of requests by
+    creation date; MR turnaround keeps its own 6-month window back to 2026-03, when the workflows
+    began. Both are overridden by the lookback control at the top.</div>
+
+    <div><b>Worth fixing.</b> Roughly 18% of a typical request's turnaround falls <i>after</i> its MR
+    merged — shipped work waiting to be closed out. An auto-transition on merge would improve every
+    figure here for free (DEVOPS-10186).</div>
+  </details>
+</main>
+<script>
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+const fmt = v => v==null ? '<span class="na">—</span>' : v;
+
+/* Every duration on this page is business hours, and printing them as decimal hours made the reader
+   do the arithmetic: time to first review read "0.1h" for what is six minutes, and the MR medians
+   read "0.3h" and "0.1h" for eighteen and six.
+
+   Three tiers, because the values span four orders of magnitude: minutes under an hour, hours and
+   minutes under a working day, and working days beyond that. A day here is NINE hours, not
+   twenty-four — that is what the clock counts, so 45h is a working week and printing "1d 21h" for it
+   would be a different lie. The raw figure stays in the title attribute for anyone who wants it. */
+const HOURS_PER_DAY = 9;
+
+function durText(hours){
+  const mins = Math.round(hours * 60);
+  if(mins === 0) return hours > 0 ? "<1m" : "0m";
+  if(mins < 60) return `${mins}m`;
+  // Minutes are carried at every tier, so the columns reconcile EXACTLY rather than approximately.
+  // Dropping them cost up to 59 minutes a cell and made a decomposition that balances perfectly look
+  // an hour out: 43.9h + 3.2h really is 47.1h, but "4d 7h" + "3h 12m" beside "5d 2h" does not read
+  // that way. Full precision is verbose and unambiguous, and unambiguous was the point.
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if(h < HOURS_PER_DAY) return m ? `${h}h ${m}m` : `${h}h`;
+  const d = Math.floor(h / HOURS_PER_DAY), rh = h % HOURS_PER_DAY;
+  return [`${d}d`, rh ? `${rh}h` : "", m ? `${m}m` : ""].filter(Boolean).join(" ");
+}
+
+/* Renders a duration with the decimal-hour figure kept on hover, so nothing is lost. */
+function dur(hours){
+  if(hours == null) return '<span class="na">—</span>';
+  return `<span title="${hours} business hours · a working day is ${HOURS_PER_DAY}h">`+
+         `${durText(hours)}</span>`;
+}
+const pct = v => v==null ? '<span class="na">—</span>' : v+'%';
+
+/* Three questions a human actually asks: is it used, does it carry real load, is it faster.
+   The old cards answered none of them — "90% success" only meant "the ticket was not cancelled". */
+/* How the requests on this page were tied to their code, most trusted route first.
+
+   Shown rather than folded away because the routes are not equally believable. A link from the Jira
+   "Merge Request" field is a URL somebody entered on purpose; a branch name follows a convention; a
+   title is prose typed for another purpose and can be wrong. A reader can only discount a figure that
+   rests on inference if the split is visible. `code_not_linked` is the honest counterpart: Jira's
+   development panel says code exists and nothing here could name it, which is a hole in our linkage
+   rather than a request without code. */
+const LINK_LABEL = {field: "Merge Request field", branch: "branch name", title: "MR title"};
+const LINK_NOTE = {field: "entered deliberately", branch: "convention", title: "typed prose"};
+
+function renderLinkage(l){
+  if(!l){ document.getElementById("linkage").innerHTML = ""; return; }
+  const rows = Object.entries(l.by_source).filter(([, n]) => n > 0).map(([src, n]) =>
+    `<span class="lk"><b>${n}</b> ${esc(LINK_LABEL[src] || src)}`+
+    `<span class="na">&nbsp;·&nbsp;${esc(LINK_NOTE[src] || "")}</span></span>`).join("");
+  // Named for whose gap it is. "code exists, not linked" read as "code with no merge request", which
+  // is the rarest of the three causes — 6 of 221 August requests had commits and no pull request at
+  // all. Usually the pull request exists and this crawl does not have it: darkstar ingests only
+  // MERGED merge requests from tracked authors and scopes, so an open one, an outside author or an
+  // un-crawled project is invisible here while Jira sees it plainly.
+  const gap = l.code_not_linked
+    ? `<span class="lk gap" title="Jira's development panel reports commits or a pull request on `+
+      `these, and none of our routes could name a crawled merge request. Usually the merge request `+
+      `exists and is not in this crawl — darkstar ingests only merged MRs from tracked authors and `+
+      `scopes — rather than the work having no merge request at all.">`+
+      `<b>${l.code_not_linked}</b> in Jira, not matched here</span>`
+    : "";
+  document.getElementById("linkage").innerHTML = l.linked || l.code_not_linked
+    ? `<span class="lk-head">Linked to code</span>${rows}${gap}`
+    : "";
+}
+
+function renderSuccess(h){
+  const card=(k,v,sub,cls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>`+
+    `<div class="s${cls?" "+cls:""}">${sub}</div></div>`;
+  const comparable = h.requests_prev_month != null;
+  const delta = comparable ? h.requests_this_month - h.requests_prev_month : null;
+  const speed = (h.self_service_median_hours!=null && h.other_median_hours!=null)
+    ? `${durText(h.self_service_median_hours)} vs ${durText(h.other_median_hours)}`
+    : '—';
+  const factor = (h.self_service_median_hours>0 && h.other_median_hours!=null)
+    ? `${(h.other_median_hours/h.self_service_median_hours).toFixed(1)}× faster than the rest of PE delivery`
+    : 'no comparison population in this window';
+  const review = h.first_review_median_hours==null ? '—' : durText(h.first_review_median_hours);
+  document.getElementById("successStats").innerHTML =
+    card("Self-service share", h.share_pct==null?'—':h.share_pct+'%',
+         `${h.share_delivered} of ${h.share_total} delivered tickets came through a skill`+
+         (h.ai_share_pct==null ? '' : ` · ${h.ai_share_pct}% were AI-written`)) +
+    card("Requests this month", h.requests_this_month,
+         comparable ? `${delta>=0?"up":"down"} from ${h.requests_prev_month} last month`
+                    : "last month is outside the selected lookback, so there is nothing to compare",
+         comparable ? (delta>=0?"pos":"neg") : "") +
+    card("Self-service speed", speed, factor) +
+    card("Time to first review", review,
+         h.first_review_reviewed
+           ? `${h.first_review_reviewed} drew a human comment · p90 ${h.first_review_p90_hours==null ? "—" : durText(h.first_review_p90_hours)}`
+           : "no human review comments in this window");
+}
+
+/* Filter terms are comma-separated; a row survives if any term is a substring of the name.
+   Team totals stay as returned — they describe the whole window, not the filtered subset. */
+function mrFilterTerms(){
+  return (document.getElementById("mrFilter").value || "")
+    .split(",").map(t=>t.trim().toLowerCase()).filter(Boolean);
+}
+
+function authorColours(d){
+  const map = new Map();
+  (d.series || []).forEach((sr, i) => map.set(sr.name, PALETTE[i % PALETTE.length]));
+  return map;
+}
+
+function renderMrTable(d){
+  const colour = authorColours(d);
+  const terms = mrFilterTerms();
+  const shown = terms.length
+    ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
+    : d.authors;
+  const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median</th>`+
+             `<th>p90</th><th></th></tr></thead>`;
+  const seriesKey = new Map((d.series || []).map((sr, i) => [sr.name, String(i)]));
+  const row=(a,cls)=>`<tr class="${cls}" data-k="${seriesKey.has(a.name) ? seriesKey.get(a.name) : ""}">
+     <td>${colour.get(a.name) ? `<span class="swatch" style="background:${colour.get(a.name)}"></span>` : ""}`+
+        `${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
+     <td class="num">${a.merged}</td>
+     <td class="num">${dur(a.biz_hours_median)}</td>
+     <td class="num">${dur(a.biz_hours_p90)}</td>
+     <td class="num">${cls==="sum" ? "" :
+       `<button class="rowx" type="button" data-hide="${esc(a.name)}" title="Hide ${esc(a.name)}">×</button>`}</td>
+   </tr>`;
+  const pages = Math.max(1, Math.ceil(shown.length / mrPerPage));
+  if(mrPage > pages - 1) mrPage = pages - 1;     // a narrower filter can shorten the list
+  if(mrPage < 0) mrPage = 0;
+  const from = mrPage * mrPerPage;
+  const rows = shown.slice(from, from + mrPerPage).map(a=>row(a,"")).join("");
+  // The team row describes every author the filter admits, not the five on this page. Paging is a
+  // view, not a population: a total that changed as you clicked Next would mean nothing at all.
+  const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
+  // Three different empties, and telling a person "no merged MRs" when they simply have not picked
+  // anyone yet sends them looking for a data problem that does not exist.
+  const empty = terms.length
+    ? '<tr><td colspan="5" class="na">No author in this view matches that filter.</td></tr>'
+    : (d.added && Object.keys(d.added).length)
+      ? '<tr><td colspan="5" class="na">Nobody in this view merged a self-service MR in the window.</td></tr>'
+      : '<tr><td colspan="5" class="na">This view is empty. Search for someone above and add them '
+        + 'to compare their turnaround &mdash; the adoption panels higher up already count everyone.</td></tr>';
+  document.getElementById("mrTbl").innerHTML = head +
+    `<tbody>${rows || empty}${d.authors.length?team:''}</tbody>` +
+    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors in this view`:''}. `+
+    `<b>Team (all authors)</b> covers every self-service author in the window, not just this view.</caption>`;
+
+  const pager = document.getElementById("mrPager");
+  pager.hidden = shown.length <= 5;
+  document.getElementById("mrCount").textContent = shown.length
+    ? `${from + 1}\u2013${Math.min(from + mrPerPage, shown.length)} of ${shown.length} authors`
+    : "";
+  document.getElementById("mrAt").textContent = `${mrPage + 1} / ${pages}`;
+  pager.querySelector('[data-mpg="prev"]').disabled = mrPage === 0;
+  pager.querySelector('[data-mpg="next"]').disabled = mrPage >= pages - 1;
+}
+
+/* One lookback drives every panel. Kept in localStorage so it survives a refresh, and sent to both
+   endpoints as ?since=/?until=; empty means "each panel uses its own default window".
+
+   Every preset resolves to dates in the BUSINESS timezone, not the browser's. A colleague in EET
+   picking "Yesterday" at 09:00 their time is still eight hours behind Pacific midnight, so a local
+   computation would ask for the wrong day and quietly show them different numbers than everyone
+   else. `until` is exclusive, matching the API. */
+const PRESET_KEY = "darkstar.slas.preset";
+const GRAIN_KEY = "darkstar.slas.grain";
+const SINCE_KEY = "darkstar.slas.since";
+const UNTIL_KEY = "darkstar.slas.until";
+const BUSINESS_TZ = "America/Los_Angeles";
+
+function businessToday(){
+  // en-CA renders ISO-8601, so this is the current date *in Pacific* regardless of where we run.
+  const [y, m, d] = new Date().toLocaleDateString("en-CA", {timeZone: BUSINESS_TZ}).split("-");
+  return new Date(Date.UTC(+y, +m - 1, +d));
+}
+const iso = utc => utc.toISOString().slice(0, 10);
+const shift = (utc, days) => new Date(utc.getTime() + days * 86400000);
+
+/* Returns {since, until} as ISO dates, or null for "panel defaults". `until` is exclusive, so a
+   range ending "today" passes tomorrow and a single day passes the next day. */
+function presetRange(preset){
+  const today = businessToday();
+  const monday = ref => shift(ref, -((ref.getUTCDay() + 6) % 7));   // Sun=0 -> 6, so Monday is 0
+  switch(preset){
+    case "yesterday":  return {since: iso(shift(today, -1)), until: iso(today)};
+    case "last-week":  return {since: iso(shift(monday(today), -7)), until: iso(monday(today))};
+    case "mtd":        return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))),
+                               until: iso(shift(today, 1))};
+    case "last-month": return {since: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1))),
+                               until: iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)))};
+    case "30": case "60": case "90":
+      return {since: iso(shift(today, -Number(preset))), until: iso(shift(today, 1))};
+    case "custom": {
+      const since = document.getElementById("since").value;
+      const until = document.getElementById("until").value;
+      return since ? {since, until: until || ""} : null;
+    }
+    default: return null;
+  }
+}
+let mrData = null, slaData = null;
+
+/* Query string for a panel: the shared lookback, plus the author filter where the endpoint
+   supports it. Built with URLSearchParams so an empty value simply never appears. */
+function query(withMrFilters){
+  const p = new URLSearchParams();
+  const range = presetRange(document.getElementById("preset").value);
+  if(range && range.since) p.set("since", range.since);
+  if(range && range.until) p.set("until", range.until);
+  const grain = document.getElementById("grain").value;
+  if(grain) p.set("grain", grain);
+  if(withMrFilters){
+    const terms = mrFilterTerms();
+    if(terms.length) p.set("authors", terms.join(","));
+    const env = document.getElementById("envFilter").value;
+    if(env && env !== "all") p.set("env", env);
+  }
+  const q = p.toString();
+  return q ? `?${q}` : "";
+}
+
+async function getJSON(path, withAuthors){
+  const res = await fetch(path + query(withAuthors));
+  if(!res.ok){
+    let detail = "HTTP " + res.status;
+    try{ detail = (await res.json()).detail || detail; }catch(e){}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/* Hidden authors are listed here rather than as a row of pills in the panel body: it is roster
+   state you set once, not something to read on every visit. Each name restores itself. */
+function renderHidden(){
+  const hidden = (mrData && mrData.hidden) || [];
+  document.getElementById("hiddenNote").innerHTML = hidden.length
+    ? `Hidden from this view (totals unaffected): ` + hidden.map(n =>
+        `<button type="button" class="linkish" data-show="${esc(n)}" title="Show ${esc(n)} again">${esc(n)}</button>`
+      ).join(", ") + `. Click a name to show it again.`
+    : "";
+}
+
+async function editAuthors(body){
+  const res = await fetch("api/mr-authors", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if(!res.ok){
+    let detail = "HTTP " + res.status;
+    try{ detail = (await res.json()).detail || detail; }catch(e){}
+    showError("Could not update authors: " + detail);
+    return;
+  }
+  const saved = await res.json();
+  document.getElementById("authorHint").textContent = "Saved.";
+  await reload();
+}
+
+/* username -> display name for whatever the last search returned, so picking a result can fill
+   the "shown as" field without a second round trip. */
+const knownUsers = new Map();
+
+async function searchUsers(q){
+  const hint = document.getElementById("authorHint");
+  try{
+    const res = await fetch(`api/gitlab-users?q=${encodeURIComponent(q)}`);
+    if(!res.ok){
+      const detail = await res.json().then(b => b.detail).catch(() => "HTTP " + res.status);
+      document.getElementById("gitlabUsers").innerHTML = "";
+      hint.textContent = `User search unavailable: ${detail}. Type an exact GitLab username instead.`;
+      return;
+    }
+    const users = (await res.json()).users || [];
+    users.forEach(u => knownUsers.set(u.username, u.name));
+    document.getElementById("gitlabUsers").innerHTML =
+      users.map(u => `<option value="${esc(u.username)}">${esc(u.name)}</option>`).join("");
+    hint.textContent = users.length ? "" : `No GitLab user matches “${q}”.`;
+  }catch(e){
+    hint.textContent = "User search failed: " + e.message;
+  }
+}
+
+function showError(message){
+  document.querySelector("main.card").insertAdjacentHTML("afterbegin",
+    `<div style="color:var(--neg);font-family:var(--mono);margin-bottom:16px">${esc(message)}</div>`);
+}
+
+let adoptData = null;
+
+async function reload(){
+  // Adoption takes no author/env filter: it measures who is adopting, not whichever rows the table
+  // below is currently showing.
+  [slaData, mrData, adoptData] = await Promise.all([
+    getJSON("api/slas", false), getJSON("api/mr-turnaround", true), getJSON("api/adoption", false)]);
+  authorPage = 0;
+  mrPage = 0;
+  renderAdoption(adoptData);
+  renderSuccess(slaData.headline);
+  renderLinkage(slaData.linkage);
+  renderTurnaroundTable(slaData.turnaround, slaData.grain);
+  renderOriginTable(slaData.origin, slaData.grain);
+  renderMrTable(mrData);
+  renderDailyChart(mrData);
+  slowestPage = 0;
+  renderSlowest(mrData);
+  renderHidden();
+  document.getElementById("windowNote").textContent = mrData.window_start;
+  const scoped = mrData.not_self_service
+    ? `<b>${mrData.not_self_service}</b> merge request${mrData.not_self_service === 1 ? "" : "s"} `+
+      `by these authors carried no agent footer and no <b>pe:*</b> label, so they are out of scope `+
+      `for this page and excluded above.`
+    : "";
+  document.getElementById("scopeNote").innerHTML = scoped;
+  const crawl = mrData.crawl || {};
+  document.getElementById("crawlNote").innerHTML = crawl.pending
+    ? `<b>A GitLab crawl is still owed.</b> An author you added is not in the table yet because `+
+      `their merge requests have not been fetched. A full crawl reads two API calls per merge `+
+      `request, so it takes a while; reload when it finishes. `+
+      `Last completed crawl: ${crawl.last_crawl ? esc(crawl.last_crawl) : "never"}.`
+    : crawl.last_crawl
+      ? `Merge-request data current as of ${esc(crawl.last_crawl)}.`
+      : `No GitLab crawl has completed yet.`;
+  const fr = mrData.first_review || {};
+  const by = fr.by_source || {};
+  const parts = [["comment", "a comment"], ["approval", "an approval"], ["merge", "the merge alone"]]
+    .filter(([k]) => by[k]).map(([k, label]) => `<b>${by[k]}</b> by ${label}`);
+  document.getElementById("reviewNote").innerHTML = fr.reviewed
+    ? `All <b>${fr.reviewed}</b> drew a review signal — ${parts.join(", ")} — median `+
+      `<b>${durText(fr.hours_median)}</b> to first review, p90 ${durText(fr.hours_p90)}. `+
+      `A comment or approval is a review; where neither exists the merge timestamp is the review.`
+    : `No review signals on these MRs in the window.`;
+  const range = presetRange(document.getElementById("preset").value);
+  const rows = `Rows grouped by ${GRAIN_NOUN[slaData.grain] || slaData.grain}`+
+    `${document.getElementById("grain").value ? "" : " (chosen from the window)"}.`;
+  document.getElementById("sinceHint").textContent = range
+    ? `${range.since} to ${range.until || "now"} (end exclusive), applied to every panel. ${rows}`
+    : `Defaults: SLA ${slaData.window_months} months from ${slaData.window_start}, MR turnaround `+
+      `${mrData.window_months} months from ${mrData.window_start}. ${rows}`;
+}
+
+/* Median per day, with an inline bar scaled to the worst day in view — enough to see a trend
+   without an axis. Days with no merged MRs simply do not appear. */
+/* Month-by-month turnaround. A table rather than a plotted line: the p50 range spans two orders
+   of magnitude, so a linear axis buries exactly the recent months this panel exists to show. The
+   bar carries the trend on a bounded scale — share closed inside one working day. */
+/* Weekly, and labelled by the Monday commencing, because a week label has to be a date a person
+   can look up. `created` sits beside `delivered`: these rows group by the week a request came IN,
+   so a week whose cohort has not closed shows only what finished fast. */
+/* One renderer for whichever grain the window resolved to. `created` sits beside `delivered`: these
+   rows group by the period a request came IN, so a period whose cohort has not closed shows only
+   what finished fast. */
+const GRAIN_LABEL = {day: "Day", week: "Week of", month: "Month"};
+const GRAIN_NOUN = {day: "day", week: "week", month: "month"};
+
+function periodLabel(iso, grain){
+  if(grain !== "month") return iso;
+  const [y, m] = iso.split("-");
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]} ${y}`;
+}
+
+/* ---------- adoption ----------
+   One number, one chart, one stat grid, one author breakdown, over every author who merged
+   self-service work in the window. This was a floor while the ingest filtered to a curated author
+   list; it is now a census, so the copy must not keep hedging about who might be missing. The one
+   exclusion is PE service accounts, which is stated on the panel rather than applied quietly. */
+const ADOPT_CHART_H = 200;
+/* Headroom for the count sitting above the tallest bar. The plot lives inside .tbl-wrap, whose
+   overflow-x:auto makes overflow-y compute to auto as well, so anything drawn above the box is
+   clipped rather than overflowing visibly — a full-height bar lost its number entirely. Reserved as
+   padding so the bar can still use the whole plot height. */
+const ADOPT_LABEL_H = 24;
+
+function pctText(share){ return share == null ? "—" : Math.round(share * 100) + "%"; }
+
+function renderAdoptChart(a){
+  const host = document.getElementById("adoptChart");
+  const periods = a.periods || [];
+  if(!periods.length){
+    host.innerHTML = `<p class="na" style="font-family:var(--mono);font-size:13px">`+
+      `No self-service merge requests merged in this window.</p>`;
+    return;
+  }
+  const top = niceCeil(Math.max(...periods.map(p => p.total), 1));
+  const px = n => (n / top) * ADOPT_CHART_H;
+  const ticks = [0, 0.5, 1].map(f => Math.round(top * f));
+  const grid = ticks.map(t =>
+    `<div class="adopt-gl" style="top:${(ADOPT_LABEL_H + ADOPT_CHART_H - px(t)).toFixed(1)}px">`+
+    `<span>${t}</span></div>`
+  ).join("");
+  const cols = periods.map(p => {
+    const label = periodLabel(p.period, a.grain);
+    // Non-PE sits on top and carries the data label: it is the series the panel is about.
+    const seg = (cls, n, who) => n
+      ? `<div class="adopt-seg adopt-seg-${cls}" style="height:${px(n).toFixed(1)}px" `+
+        `title="${who} · ${n} MR${n === 1 ? "" : "s"} · ${esc(label)}">`+
+        (cls === "non" ? `<span class="adopt-dl">${n}</span>` : "") + `</div>`
+      : "";
+    return `<div class="adopt-col${p.partial ? " partial" : ""}">`+
+      `<div class="adopt-stack" style="height:${ADOPT_CHART_H}px">`+
+        seg("non", p.non_pe, "Outside PE") + seg("pe", p.pe, "PE roster") +
+      `</div>`+
+      `<div class="adopt-xl">${esc(label)}</div>`+
+      `<div class="adopt-xs">${p.partial ? "partial" : pctText(p.share) + " outside PE"}</div>`+
+    `</div>`;
+  }).join("");
+  host.innerHTML = `<div class="adopt-plot" style="padding-top:${ADOPT_LABEL_H}px">`+
+    grid + `<div class="adopt-cols">${cols}</div></div>`;
+}
+
+function renderAdoptCards(a){
+  const cell = (cls, n, label) =>
+    `<div class="adopt-cell ${cls}"><span class="adopt-n">${n}</span><span class="adopt-l">${label}</span></div>`;
+  /* A metric the store cannot support, distinguished from one that simply has no rows this week.
+     Carries what is missing and what would unblock it, so nobody waits for a number that is not
+     coming or tries to re-derive it from the panels around it. */
+  const blocked = (what, why, needs) =>
+    `<div class="adopt-cell blocked"><span class="adopt-tag">needs ingest change</span>`+
+    `<span class="adopt-n">${what}</span>`+
+    `<span class="adopt-l">${why}<br><b>Unblocked by:</b> ${needs}</span></div>`;
+  const nonPe = a.non_pe || {}, pe = a.pe || {};
+  const peApprovalPct = pe.mrs ? Math.round((pe.independent_approvals / pe.mrs) * 100) + "%" : "—";
+  document.getElementById("adoptCards").innerHTML =
+    cell(nonPe.mrs ? "non" : "empty", nonPe.mrs ?? 0,
+         nonPe.mrs
+           ? `self-service MRs authored outside PE,<br>from ${nonPe.authors ?? 0} distinct author`+
+             `${nonPe.authors === 1 ? "" : "s"}`
+           : `self-service MRs authored outside PE<br>in this window`) +
+    (nonPe.mrs
+      ? cell("ok", Math.round((nonPe.independent_approvals / nonPe.mrs) * 100) + "%",
+             `of those carried an independent approval<br>&mdash; vs ${peApprovalPct} of PE&rsquo;s own`)
+      : cell("empty", "&mdash;",
+             `independent-approval rate &mdash; no non-PE merge<br>requests in this window to rate`)) +
+    (() => {
+      // Agent-written work outside any workflow. Beside the self-service figures, never inside them:
+      // "Claude wrote this" is not "a requester served themselves", and folding the two together
+      // overstated this page 2.1x.
+      const ai = a.ai_assisted || {};
+      if(!ai.mrs) return cell("empty", "&mdash;",
+        `AI-assisted merge requests outside a<br>workflow &mdash; none in this window`);
+      return cell("", ai.mrs,
+        `AI-assisted MRs outside any workflow,<br>from ${ai.authors} author`+
+        `${ai.authors === 1 ? "" : "s"} &mdash; agent-written, not self-served`);
+    })() +
+    blocked("Merge rate",
+            `The crawl fetches <b>state=merged</b> only, so merge requests that never merged are `+
+            `absent and no rate has a denominator.`,
+            `fetching all states in <b>gitlab_ingest</b>`) +
+    (() => {
+      // The cost line: every merge request a team stops asking PE to write, PE may still review.
+      const ap = a.approvals_on_non_pe || {};
+      const known = (ap.pe || 0) + (ap.other || 0);
+      if(!known && !ap.unknown) return cell("empty", "&mdash;",
+        `approvals on non-PE work &mdash; none recorded<br>in this window`);
+      // A crawl predating the approver column names nobody. Counting those as "not PE" would
+      // understate exactly the load this card exists to show, so they read as unattributed instead.
+      if(!known) return cell("empty", "&mdash;",
+        `who approves non-PE work &mdash; <b>${ap.unknown}</b> approval`+
+        `${ap.unknown === 1 ? "" : "s"} predate the approver<br>column, unattributed until the next `+
+        `full crawl`);
+      const pct = Math.round((ap.pe / known) * 100);
+      return cell(pct >= 75 ? "warn" : "ok", `${ap.pe} / ${known}`,
+        `approvals on non-PE work were given by PE`+
+        (ap.unknown ? ` &mdash; ${ap.unknown} unattributed` : "")+
+        `<br>authoring moved${pct >= 75 ? "; reviewing did not" : ", and some review with it"}`);
+    })();
+}
+
+function renderAdoptWho(a){
+  const nonPe = a.non_pe || {}, authors = a.by_author || [];
+  const t = a.turnaround || {};
+  const adopted = (nonPe.mrs || 0) > 0;
+
+  const nt = t.non_pe || {}, pt = t.pe || {};
+  const compare = (nt.biz_hours_median != null && pt.biz_hours_median != null)
+    ? ` PE&rsquo;s own median on the same clock is <b>${durText(pt.biz_hours_median)}</b>.` : "";
+  document.getElementById("adoptWhoProse").innerHTML = adopted
+    ? `<p>Every author below merged self-service work in this window; the bars are coloured by `+
+      `whether they are on the PE roster. Of the <b>${nonPe.mrs}</b> authored <b>outside</b> PE, `+
+      `<b>${nonPe.independent_approvals}</b> carried an approval from someone other than the author. `+
+      `Median open&rarr;merged is <b>${durText(nt.biz_hours_median)}</b>, p90 `+
+      `<b>${durText(nt.biz_hours_p90)}</b> &mdash; business hours, not calendar, so these are smaller `+
+      `than a wall-clock figure for the same merge requests.${compare}</p>`+
+      `<p>This is the <b>whole open&rarr;merged span</b>, including draft time and time spent on a red `+
+      `pipeline. The MR turnaround panel below runs the <b>ready clock</b>, which excludes both, so its `+
+      `median for the same merge requests is smaller. Adoption asks how long the requester waited; that `+
+      `panel asks how responsive PE was.</p>`
+    : authors.length
+      ? `<p>Only the PE roster merged self-service work in this window &mdash; no attributed author `+
+        `outside it did. The bars below are PE&rsquo;s own use of the tooling.</p>`
+      : `<p>Nothing to break down: no attributed author merged a self-service merge request in this `+
+        `window.</p>`;
+
+  const host = document.getElementById("adoptAuthors");
+  // Scaled to the tallest bar across ALL pages, not this page's tallest. Rescaling per page would
+  // make page two's 3-MR author as tall as page one's 96 and turn the pager into a lie.
+  const top = Math.max(1, ...authors.map(x => x.mrs));
+  const pages = Math.max(1, Math.ceil(authors.length / authorPerPage));
+  if(authorPage > pages - 1) authorPage = pages - 1;   // a narrower window can shorten the list
+  if(authorPage < 0) authorPage = 0;
+  const from = authorPage * authorPerPage;
+  const shown = authors.slice(from, from + authorPerPage);
+
+  const apager = document.getElementById("authorPager");
+  apager.hidden = authors.length <= authorPerPage;
+  document.getElementById("authorCount").textContent = authors.length
+    ? `${from + 1}\u2013${Math.min(from + authorPerPage, authors.length)} of ${authors.length} authors`
+    : "";
+  document.getElementById("authorAt").textContent = `${authorPage + 1} / ${pages}`;
+  apager.querySelector('[data-apg="prev"]').disabled = authorPage === 0;
+  apager.querySelector('[data-apg="next"]').disabled = authorPage >= pages - 1;
+
+  host.innerHTML = shown.map(x =>
+    `<div class="adopt-abar">`+
+      `<div class="bar${x.pe ? " pe" : ""}" style="height:${Math.max(4, (x.mrs / top) * 132).toFixed(1)}px" `+
+        `title="${esc(x.name)} · ${x.mrs} MR${x.mrs === 1 ? "" : "s"} · ${x.pe ? "PE roster" : "outside PE"}">`+
+        `<span class="bn">${x.mrs}</span></div>`+
+      `<div class="an">${esc(x.name)}</div>`+
+    `</div>`).join("");
+
+  const omitted = a.authors_omitted || 0;
+  document.getElementById("adoptAuthorsNote").innerHTML = omitted
+    ? `Top <b>${(a.by_author || []).length}</b> of <b>${a.authors_total}</b> authors by volume; `+
+      `<b>${omitted}</b> more merged self-service work in this window and are not charted.`
+    : "";
+
+  const robots = a.robots || 0;
+  document.getElementById("adoptWhoNote").innerHTML =
+    `<b>Every author who merged self-service work is here.</b> The crawl no longer filters to a list `+
+    `of known contributors, so nobody has to be added for their work to count &mdash; an author `+
+    `appears because they merged, not because someone remembered them.`+
+    (robots
+      ? ` ${robots} merge request${robots === 1 ? "" : "s"} from PE service accounts `+
+        `${robots === 1 ? "is" : "are"} excluded: those carry agent footers by their nature and `+
+        `would read as adoption.`
+      : "");
+}
+
+function renderAdoption(a){
+  document.getElementById("adoptShare").textContent = pctText(a.share);
+  const nonPe = a.non_pe || {};
+  const robots = a.robots
+    ? `<br>${a.robots} from PE service accounts, excluded`
+    : "";
+  document.getElementById("adoptShareSub").innerHTML = a.total
+    ? `${nonPe.mrs} of ${a.total} &middot; ${nonPe.authors} distinct author`+
+      `${nonPe.authors === 1 ? "" : "s"}${robots}`
+    : `no self-service merge requests in this window`;
+  document.getElementById("adoptFloor").innerHTML = a.total
+    ? `Grouped by ${GRAIN_NOUN[a.grain] || a.grain}. PE means a member of the Platform Engineering `+
+      `roster; every other attributed author counts as outside it.`
+    : "";
+  renderAdoptChart(a);
+  renderAdoptCards(a);
+  renderAdoptWho(a);
+}
+
+function renderTurnaroundTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>In</th><th>Done</th>`+
+             `<th>p50</th><th>p90</th><th class="barcell">Inside a day</th></tr></thead>`;
+  const best=Math.max(1,...(rows||[]).map(r=>r.within_day_pct||0));
+  const body=(rows||[]).map(r=>`<tr>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
+     <td class="num">${r.created}</td>
+     <td class="num">${r.delivered < r.created
+        ? `<span title="${r.created - r.delivered} still open, so this ${noun} is still settling">${r.delivered}*</span>`
+        : r.delivered}</td>
+     <td class="num">${dur(r.p50_hours)}</td>
+     <td class="num">${dur(r.p90_hours)}</td>
+     <td class="barcell">${r.within_day_pct==null ? '<span class="na">—</span>'
+        : `<span class="bar" style="width:${Math.round(100*r.within_day_pct/best)}%"></span>`+
+          `<span class="mini">${r.within_day_pct}%</span>`}</td>
+   </tr>`).join("");
+  document.getElementById("turnaroundTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="6" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>Business hours from created to done, by the ${noun} the request arrived. “In” is `+
+    `requests created that ${noun} and “Done” how many have landed — a <b>*</b> marks a cohort still `+
+    `settling, whose p50 counts only the ones that finished. The bar is the share closed inside one `+
+    `working day, scaled to the best ${noun} shown.</caption>`;
+}
+
+/* How requests arrive: skill-filed against human-filed, counted in REQUESTS.
+
+   Not merge requests. One request routinely spawns several — July ran 643 MRs against 117 distinct
+   tickets — so an MR count answers a question about branches while looking like one about demand. */
+function renderOriginTable(rows, grain){
+  const noun = GRAIN_NOUN[grain] || "period";
+  const head=`<thead><tr><th>${GRAIN_LABEL[grain] || "Period"}</th><th>Self-service</th>`+
+             `<th>Human-filed</th><th>All</th><th class="barcell">Self-service share</th></tr></thead>`;
+  const body=(rows||[]).map(r=>`<tr>
+     <td>${esc(periodLabel(r.period, grain))}${r.partial?` <span class="na" title="part-${noun}: the window or the clock cuts it short">·&nbsp;partial</span>`:''}</td>
+     <td class="num">${r.agent}</td>
+     <td class="num">${r.human}</td>
+     <td class="num">${r.total}</td>
+     <td class="barcell">${r.agent_share_pct==null ? '<span class="na">—</span>'
+        : `<span class="bar" style="width:${r.agent_share_pct}%"></span>`+
+          `<span class="mini">${r.agent_share_pct}%</span>`}</td>
+   </tr>`).join("");
+  const solid=(rows||[]).filter(r=>r.agent_share_pct!=null && !r.partial);
+  const arc=(solid.length>1)
+    ? `Self-service went from ${solid[0].agent_share_pct}% of requests in `+
+      `${periodLabel(solid[0].period, grain)} to ${solid[solid.length-1].agent_share_pct}% in `+
+      `${periodLabel(solid[solid.length-1].period, grain)}.`
+    : "Widen the lookback to see the trend.";
+  document.getElementById("originTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="5" class="na">No requests created in the window.</td></tr>'}</tbody>` +
+    `<caption>${arc} Counted in <b>requests</b>, by the ${noun} each was created — one request counts `+
+    `once however many merge requests it took.</caption>`;
+}
+
+/* The drill-down behind the numbers above: which merge requests actually took days.
+
+   Two clocks per row on purpose. `open_hours` is the whole span in business hours and `ready_hours`
+   only the spells it was marked ready, so the gap between them is draft time. That distinction is
+   usually the answer: an MR open five days with two ready hours was the author still working, while
+   one with five ready days was waiting on review. A single "age" column cannot tell those apart.
+
+   Paged rather than scrolled. A fixed box with an inner scrollbar hides how deep the tail goes and
+   is easy to miss inside a page that already scrolls; a pager states the population outright, which
+   is the thing a drill-down has to be honest about. It also let the server cap go from 25 to 100 --
+   at 25 the rest were unreachable, not merely unlisted. */
+// Five by default: ten filled the panel and pushed everything below it off screen, and the list is
+// for inspecting outliers rather than browsing. Adjustable, and remembered.
+const SLOWEST_SIZE_KEY = "darkstar.slas.slowestPerPage";
+let slowestPerPage = 5;
+let slowestPage = 0;
+const MR_SIZE_KEY = "darkstar.slas.mrPerPage";
+let mrPerPage = 5;
+let mrPage = 0;
+const AUTHOR_SIZE_KEY = "darkstar.slas.authorPerPage";
+let authorPerPage = 20;
+let authorPage = 0;
+
+/* Time to first review, with the zero explained rather than left bare.
+
+   A zero here is arithmetically right and says nothing on its own: 31.6% of merge requests were
+   reviewed outside business hours, and 11.1% were reviewed before the author marked the MR ready, so
+   no ready time preceded the review at all. Both read as "0m" and look broken. The cell names the
+   signal that counted — a comment, an approval, or the merge itself when nobody commented — and says
+   which kind of zero it is. */
+const REVIEW_SOURCE = {comment: "a human comment", approval: "an approval",
+                       merge: "merged by someone other than the author, with no comment"};
+
+function reviewCell(r){
+  if(r.first_review_hours == null) return '<span class="na">—</span>';
+  const via = REVIEW_SOURCE[r.first_review_source] || r.first_review_source;
+  if(r.first_review_hours > 0){
+    return `<span title="First review signal: ${esc(via)}">${durText(r.first_review_hours)}</span>`;
+  }
+  const why = r.first_review_before_ready
+    ? "reviewed before the author marked it ready, so no waiting time preceded it"
+    : "reviewed outside working hours, so no business time elapsed";
+  return `<span class="na" title="First review signal: ${esc(via)} — ${why}">0m`+
+         `<span class="hint">${r.first_review_before_ready ? "pre-ready" : "off-hours"}</span></span>`;
+}
+
+function renderSlowest(d){
+  const rows = d.slowest || [];
+  const pages = Math.max(1, Math.ceil(rows.length / slowestPerPage));
+  if(slowestPage > pages - 1) slowestPage = pages - 1;   // a narrower filter can shorten the list
+  const from = slowestPage * slowestPerPage;
+  const page = rows.slice(from, from + slowestPerPage);
+
+  // Read right to left this is a decomposition: Open, less the time it sat in Draft, less the time
+  // a red pipeline blocked it, leaves the Turnaround. Read left to right it is the answer first and
+  // then what was taken out to get there. The three right-hand spans sum to Open.
+  const head = `<thead><tr><th>MR</th><th>Author</th>`+
+               `<th title="Business hours the MR was approvable — marked ready with a green `+
+               `pipeline — and therefore waiting on PE to merge it">Mergeable&nbsp;&rarr;&nbsp;merged</th>`+
+               `<th>Red CI</th><th>Draft</th><th>Open</th>`+
+               `<th>To review</th><th>Merged</th></tr></thead>`;
+  const body = page.map((r, i) => {
+    const draft = Math.max(0, Math.round((r.open_hours - r.ready_hours) * 10) / 10);
+    return `<tr>
+     <td><span class="rank">${from + i + 1}</span>`+
+       `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="${esc(r.title)}">`+
+       `${esc(r.project.split("/").pop())}!${r.iid}</a>`+
+       `${r.environment && r.environment !== "other" ? ` <span class="na">·&nbsp;${esc(r.environment)}</span>` : ""}</td>
+     <td>${esc(r.author)}</td>
+     <td class="num strong">${dur(r.ready_hours)}</td>
+     <td class="num">${r.red_hours > 0
+        ? `<span class="neg">${durText(r.red_hours)}</span>` : '<span class="na">—</span>'}</td>
+     <td class="num">${draft > 0 ? dur(draft) : '<span class="na">—</span>'}</td>
+     <td class="num">${dur(r.open_hours)}</td>
+     <td class="num">${reviewCell(r)}</td>
+     <td class="num">${esc(r.merged.slice(0, 10))}</td>
+   </tr>`;
+  }).join("");
+  document.getElementById("slowestTbl").innerHTML = head +
+    `<tbody>${body || '<tr><td colspan="8" class="na">No measurable merge requests in the window.</td></tr>'}</tbody>` +
+    `<caption><b>Mergeable&nbsp;&rarr;&nbsp;merged + Red CI + Draft = Open</b>, exactly. `+
+    `<b>Mergeable&nbsp;&rarr;&nbsp;merged</b> is the one number to read: the business hours this MR `+
+    `was approvable — marked ready, pipeline green — and so waiting on PE to merge it. `+
+    `Read right to left: <b>Open</b> is the whole `+
+    `span, less the <b>Draft</b> time the author had not offered it for review, less the <b>Red CI</b> `+
+    `time a failing pipeline blocked the merge whoever looked at it, leaves the time that was `+
+    `genuinely on PE. A large number in either middle column means the wait was never on review. `+
+    `A working day is <b>9 hours</b>, so a day here is not 24; hover any cell for the exact decimal. `+
+    `Same author and environment filters as above.</caption>`;
+
+  const shownFrom = rows.length ? from + 1 : 0;
+  const shownTo = Math.min(from + slowestPerPage, rows.length);
+  const tail = d.slowest_omitted
+    ? ` · ${d.slowest_omitted} faster of ${d.measured} measured not listed`
+    : (d.measured ? ` · all ${d.measured} measured` : "");
+  // Update the parts, never the container: the size select lives in it and would lose its state.
+  const pager = document.getElementById("slowestPager");
+  pager.hidden = !rows.length;
+  document.getElementById("slowestCount").textContent =
+    rows.length ? `${shownFrom}\u2013${shownTo} of ${rows.length} slowest${tail}` : "";
+  document.getElementById("slowestAt").textContent = `${slowestPage + 1} / ${pages}`;
+  pager.querySelector('[data-pg="prev"]').disabled = slowestPage === 0;
+  pager.querySelector('[data-pg="next"]').disabled = slowestPage >= pages - 1;
+}
+
+function niceCeil(v){
+  if(v <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  return Math.ceil(v / mag) * mag;
+}
+
+/* Same palette and per-series colouring as the velocity dashboard, so a person reads the same
+   across both pages. One line per author currently in view; the author filter above is the
+   selector. Each author's points sit only on days they actually merged, on a shared x axis. */
+const PALETTE = ["#ef6f9e","#6fd07f","#c084ef","#4cc4d6","#5b9dff","#f4a24c","#e8c24a",
+                 "#9a8cf5","#3fccc4","#f07b6b","#b9cf5a","#e57fd0","#7c93f5","#4fd0a0"];
+
+function renderDailyChart(d){
+  const host = document.getElementById("dailyChart");
+  const days = d.days || [];
+  const series = d.series || [];
+  if(!days.length){
+    host.innerHTML = `<p class="na" style="font-family:var(--mono);font-size:13px">`+
+      `No merged MRs in the window${(d.filter||[]).length ? " for that author filter" : ""}.</p>`;
+    return;
+  }
+  const W = 900, H = 280, L = 44, R = 12, T = 14, B = 34;
+  const top = niceCeil(Math.max(...series.flatMap(s => s.points.map(p => p.biz_hours_median || 0)), 1));
+  const idx = Object.fromEntries(days.map((day, i) => [day, i]));
+  const x = i => L + (days.length === 1 ? (W-L-R)/2 : i * (W-L-R) / (days.length-1));
+  const y = v => T + (H-T-B) * (1 - (v||0)/top);
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top*f));
+  const grid = ticks.map(t => `<line class="grid-line" x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}"/>`+
+    `<text class="ax-label" x="${L-8}" y="${y(t)+4}" text-anchor="end">${t}h</text>`).join("");
+  const step = Math.max(1, Math.ceil(days.length/5));
+  const xlabels = days.map((day,i) => i % step ? "" :
+    `<text class="ax-label" x="${x(i)}" y="${H-B+18}" text-anchor="middle">${esc(day.slice(5))}</text>`).join("");
+
+  const colour = authorColours(d);
+  const lines = series.map((s, si) => {
+    const col = colour.get(s.name) || PALETTE[si % PALETTE.length];
+    const pts = s.points.filter(p => p.day in idx);
+    if(!pts.length) return "";
+    const path = pts.map((p,i) => `${i?"L":"M"}${x(idx[p.day]).toFixed(1)},${y(p.biz_hours_median).toFixed(1)}`).join("");
+    const dots = pts.map(p =>
+      `<circle cx="${x(idx[p.day]).toFixed(1)}" cy="${y(p.biz_hours_median).toFixed(1)}" r="3" fill="${col}">`+
+      `<title>${esc(s.name)} — ${esc(p.day)}, ${p.merged} MR${p.merged===1?"":"s"}, `+
+      `median ${durText(p.biz_hours_median)}, p90 ${durText(p.biz_hours_p90)}</title></circle>`).join("");
+    // Wrapped in a group with a fat transparent hit path, exactly as the velocity chart does, so a
+    // line is easy to hit and the whole series can be emphasised as one thing.
+    return `<g class="series" data-k="${si}">`+
+           `<path class="hit" d="${path}"/>`+
+           (pts.length > 1 ? `<path class="series-line" d="${path}" stroke="${col}"/>` : "") +
+           dots + `</g>`;
+  }).join("");
+
+  // No legend: the table above carries the same colours, and hovering one of its rows highlights
+  // the matching line, so a separate legend would only repeat it.
+
+  host.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Daily merge-request turnaround by author">
+       ${grid}
+       <line class="axis-base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>
+       ${lines}${xlabels}
+       <text class="plot-note" x="${L}" y="${H-2}">median business hours per author</text>
+     </svg>
+     ${d.mixed ? `<p class="filter-hint">${d.mixed} merge request${d.mixed===1?"":"s"} touched both the `+
+        `production and non-production trees and ${d.mixed===1?"is":"are"} excluded from the environment `+
+        `views — a change spanning both belongs to neither.</p>` : ""}
+     ${d.incomplete ? `<p class="filter-hint" style="color:var(--neg)">`+
+        `${d.incomplete} merged MR${d.incomplete===1?"":"s"} in this window cannot be measured yet — `+
+        `they were crawled before the ready-clock existed and have no opened time. The chart therefore `+
+        `starts at ${esc(d.earliest_measurable || "the first measurable day")} rather than `+
+        `${esc(d.window_start)}. The next full GitLab crawl repairs them.</p>` : ""}
+     <p class="filter-hint">${days.length} day${days.length===1?"":"s"} with at least one merged MR since ${esc(d.window_start)}`+
+       `${(d.filter||[]).length ? `, filtered to \u201c${esc(d.filter.join(", "))}\u201d` : ""}. `+
+       `Hover a line to isolate it, click to pin it; hover a point for exact figures.</p>`;
+  bindDailyHover();
+}
+
+/* Hover emphasis, matching the velocity chart: the hovered series stays at full opacity and the
+   rest drop to 0.13. Click pins a series, and while pinned only that series answers to hover.
+   Rebound on every render because the chart is re-created from innerHTML. */
+let dailyLocked = null;
+
+function bindDailyHover(){
+  const host = document.getElementById("dailyChart");
+  const svg = host.querySelector("svg");
+  if(!svg) return;
+  const groups = svg.querySelectorAll(".series");
+  const chips = [];
+  const emphasise = k => {
+    groups.forEach(g => g.style.opacity = (k==null || g.dataset.k===k) ? "" : "0.13");
+    document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr =>
+      tr.style.opacity = (k==null || !tr.dataset.k || tr.dataset.k===k) ? "" : "0.35");
+  };
+  const base = () => {
+    if(dailyLocked != null && !svg.querySelector(`.series[data-k="${dailyLocked}"]`)) dailyLocked = null;
+    emphasise(dailyLocked);
+  };
+  svg.addEventListener("mousemove", e => {
+    const g = e.target.closest(".series");
+    if(!g || (dailyLocked != null && g.dataset.k !== dailyLocked)){ base(); return; }
+    emphasise(g.dataset.k);
+  });
+  svg.addEventListener("mouseleave", base);
+  svg.addEventListener("click", e => {
+    const g = e.target.closest(".series");
+    dailyLocked = g ? (dailyLocked === g.dataset.k ? null : g.dataset.k) : null;
+    base();
+  });
+  // The author table is the legend now: hovering a row isolates that author's line, clicking pins
+  // it. Rows without a series (no merged MRs in the window) carry an empty key and are inert.
+  document.querySelectorAll("#mrTbl tbody tr[data-k]").forEach(tr => {
+    const k = tr.dataset.k;
+    if(!k) return;
+    tr.style.cursor = "pointer";
+    tr.addEventListener("mouseenter", () => { if(dailyLocked == null) emphasise(k); });
+    tr.addEventListener("mouseleave", base);
+    tr.addEventListener("click", () => { dailyLocked = dailyLocked === k ? null : k; base(); });
+  });
+  base();
+}
+
+function syncCustomVisibility(){
+  const custom = document.getElementById("preset").value === "custom";
+  document.getElementById("customRange").hidden = !custom;
+}
+
+/* Wiring comes BEFORE the first load, and nothing here may return early.
+
+   A missing element in one render used to throw out of reload(), and init() caught it and returned
+   — so every listener after that point was never attached and the whole page went inert: lookback,
+   author filter, environment, add and hide. A broken panel has to cost that panel, not the page. */
+async function init(){
+  const preset = document.getElementById("preset");
+  const grain = document.getElementById("grain");
+  const since = document.getElementById("since");
+  const until = document.getElementById("until");
+  grain.value = localStorage.getItem(GRAIN_KEY) || "";
+  since.value = localStorage.getItem(SINCE_KEY) || "";
+  until.value = localStorage.getItem(UNTIL_KEY) || "";
+  // A stored bare date predates the presets. Carry it over as a custom range rather than dropping
+  // it, so a refresh does not silently widen the window someone was reading.
+  preset.value = localStorage.getItem(PRESET_KEY) || (since.value ? "custom" : "");
+  syncCustomVisibility();
+
+  const applyRange = async () => {
+    localStorage.setItem(PRESET_KEY, preset.value);
+    localStorage.setItem(GRAIN_KEY, grain.value);
+    localStorage.setItem(SINCE_KEY, since.value);
+    localStorage.setItem(UNTIL_KEY, until.value);
+    syncCustomVisibility();
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  };
+  preset.addEventListener("change", applyRange);
+  grain.addEventListener("change", applyRange);
+  // Typing a date IS choosing a custom range. Without this, editing from/to while the select still
+  // said "Panel defaults" resolved to null and the dates were silently discarded.
+  const applyCustom = async () => { preset.value = "custom"; await applyRange(); };
+  since.addEventListener("change", applyCustom);
+  until.addEventListener("change", applyCustom);
+  document.getElementById("sinceReset").addEventListener("click", async () => {
+    preset.value = ""; grain.value = ""; since.value = ""; until.value = "";
+    [PRESET_KEY, GRAIN_KEY, SINCE_KEY, UNTIL_KEY].forEach(k => localStorage.removeItem(k));
+    syncCustomVisibility();
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  });
+  // Debounced refetch: the daily medians are computed server-side, so filtering must round-trip.
+  let filterTimer = null;
+  document.getElementById("mrFilter").addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(async () => {
+      try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+    }, 250);
+  });
+  document.getElementById("envFilter").addEventListener("change", async () => {
+    try{ await reload(); }catch(e){ showError("Failed to load: " + e.message); }
+  });
+  document.getElementById("addBtn").addEventListener("click", () => {
+    const user = document.getElementById("addUser").value.trim();
+    const name = document.getElementById("addName").value.trim();
+    const hint = document.getElementById("authorHint");
+    if(!user){ hint.textContent = "Search for a GitLab user."; return; }
+    if(user.includes("@")){
+      hint.textContent = `“${user}” is an email address. Merge requests are attributed by GitLab `+
+        `username — search for the person instead.`;
+      return;
+    }
+    document.getElementById("addUser").value = ""; document.getElementById("addName").value = "";
+    editAuthors({op: "add", username: user, display_name: name || knownUsers.get(user) || user});
+  });
+
+  /* Live GitLab lookup. Debounced, minimum two characters, and it fills in the display name from
+     the picked account so the roster shows a person rather than a handle. */
+  let userTimer = null;
+  const addUser = document.getElementById("addUser");
+  addUser.addEventListener("input", () => {
+    const q = addUser.value.trim();
+    const known = knownUsers.get(q);
+    if(known) document.getElementById("addName").value = known;
+    clearTimeout(userTimer);
+    if(q.length < 2){ document.getElementById("gitlabUsers").innerHTML = ""; return; }
+    userTimer = setTimeout(() => searchUsers(q), 250);
+  });
+  // row × and chip + are re-rendered on every reload, so delegate rather than rebind
+  document.getElementById("mrTbl").addEventListener("click", e => {
+    const name = e.target.getAttribute && e.target.getAttribute("data-hide");
+    if(name) editAuthors({op: "hide", display_name: name});
+  });
+  const perPage = document.getElementById("slowestPerPage");
+  const stored = localStorage.getItem(SLOWEST_SIZE_KEY);
+  if(stored && [...perPage.options].some(o => o.value === stored)) perPage.value = stored;
+  slowestPerPage = Number(perPage.value);
+  perPage.addEventListener("change", () => {
+    // Keep the first visible row visible rather than jumping to the top: changing the size to look
+    // closer at row 12 should not send you back to row 1.
+    const anchor = slowestPage * slowestPerPage;
+    slowestPerPage = Number(perPage.value);
+    localStorage.setItem(SLOWEST_SIZE_KEY, perPage.value);
+    slowestPage = Math.floor(anchor / slowestPerPage);
+    renderSlowest(mrData);
+  });
+  document.getElementById("slowestPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-pg");
+    if(!dir) return;
+    slowestPage += dir === "next" ? 1 : -1;
+    renderSlowest(mrData);
+  });
+  const mrSize = document.getElementById("mrPerPage");
+  const storedMr = localStorage.getItem(MR_SIZE_KEY);
+  if(storedMr && [...mrSize.options].some(o => o.value === storedMr)) mrSize.value = storedMr;
+  mrPerPage = Number(mrSize.value);
+  mrSize.addEventListener("change", () => {
+    const anchor = mrPage * mrPerPage;
+    mrPerPage = Number(mrSize.value);
+    localStorage.setItem(MR_SIZE_KEY, mrSize.value);
+    mrPage = Math.floor(anchor / mrPerPage);
+    renderMrTable(mrData);
+  });
+  document.getElementById("mrPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-mpg");
+    if(!dir) return;
+    mrPage += dir === "next" ? 1 : -1;
+    renderMrTable(mrData);
+  });
+  const authorSize = document.getElementById("authorPerPage");
+  const storedAuthors = localStorage.getItem(AUTHOR_SIZE_KEY);
+  if(storedAuthors && [...authorSize.options].some(o => o.value === storedAuthors))
+    authorSize.value = storedAuthors;
+  authorPerPage = Number(authorSize.value);
+  authorSize.addEventListener("change", () => {
+    const anchor = authorPage * authorPerPage;
+    authorPerPage = Number(authorSize.value);
+    localStorage.setItem(AUTHOR_SIZE_KEY, authorSize.value);
+    authorPage = Math.floor(anchor / authorPerPage);
+    if(adoptData) renderAdoptWho(adoptData);
+  });
+  document.getElementById("authorPager").addEventListener("click", e => {
+    const dir = e.target.getAttribute && e.target.getAttribute("data-apg");
+    if(!dir) return;
+    authorPage += dir === "next" ? 1 : -1;
+    renderAdoptWho(adoptData);
+  });
+  document.getElementById("hiddenNote").addEventListener("click", e => {
+    const name = e.target.getAttribute && e.target.getAttribute("data-show");
+    if(name) editAuthors({op: "show", display_name: name});
+  });
+
+  // Last, so a failure here leaves every control above still working.
+  try{
+    await reload();
+  }catch(e){
+    showError("Failed to load: " + e.message);
+  }
+}
+init();
+
+/* ---------- collapsible sections ----------
+   Each panel's <h2> toggles the rest of its own section, so the grid can nest them. The notes block
+   starts collapsed: it is reference material, and expanded it dominated the page. */
+(function(){
+  const panels=[...document.querySelectorAll("section.panel")].map(sec=>({
+    head: sec.querySelector("h2"),
+    body: [...sec.children].filter(el=>el.tagName!=="H2"),
+    open: true,
+  }));
+  panels.forEach(({head, body, open})=>{
+    if(!head) return;
+    head.classList.add("collapsible");
+    head.setAttribute("role","button");
+    head.setAttribute("tabindex","0");
+    head.setAttribute("aria-expanded",String(open));
+    const set=o=>{ head.setAttribute("aria-expanded",String(o)); body.forEach(el=>el.classList.toggle("sec-hidden",!o)); };
+    set(open);
+    head.addEventListener("click",()=>set(head.getAttribute("aria-expanded")!=="true"));
+    head.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); set(head.getAttribute("aria-expanded")!=="true"); }});
+  });
+})();
+</script>
+</body>
+</html>
