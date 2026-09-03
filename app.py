@@ -601,44 +601,53 @@ elif selected == "🏠  Overview":
 # ── Tickets Older Than 90 Days ──────────────────────────────────────────────────
 elif selected == "📅  Tickets Older Than 90 Days":
     st.title("📅 Tickets Older Than 90 Days")
-    st.caption("Tickets that have been open for more than 90 days without resolution.")
+    st.caption("Open work older than 90 days, split into Epics (Feature) and Tickets.")
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     visuals = build_tickets_older_than_90_days_visuals(df_issues)
 
-    if visuals["total_old"] == 0:
+    total_old = visuals["epics_count"] + visuals["tickets_count"]
+    if total_old == 0:
         if isinstance(df_issues, pd.DataFrame) and not df_issues.empty:
-            st.info("No open tickets older than 90 days were found in the current dataframe.")
+            st.info("No open epics or tickets older than 90 days were found in the current dataframe.")
         else:
-            st.info("📥 Fetch Jira tickets from the sidebar to see tickets older than 90 days.")
+            st.info("📥 Fetch Jira tickets from the sidebar to see epics and tickets older than 90 days.")
     else:
         c1, c2 = st.columns(2)
-        c1.metric("Total Stale Tickets", visuals["total_old"])
-        c2.metric("Average Age (days)", visuals["avg_age"])
+        c1.metric("Epics", visuals["epics_count"])
+        c2.metric("Tickets", visuals["tickets_count"])
 
         st.divider()
+        st.subheader("Epics Older Than 90 Days")
+        if visuals["epics_df"].empty:
+            st.info("No epics older than 90 days.")
+        else:
+            st.dataframe(
+                visuals["epics_df"],
+                width="stretch",
+                column_config={
+                    "Issue": st.column_config.LinkColumn(
+                        "Issue",
+                        help="Open Jira issue",
+                        display_text=r".*/([^/]+)$",
+                    )
+                },
+            )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(visuals["hist_fig"], width="stretch")
-
-        with col2:
-            st.plotly_chart(visuals["pie_fig"], width="stretch")
-
-        st.subheader("Top 25 Oldest Open Tickets")
-        st.plotly_chart(visuals["top25_fig"], width="stretch")
-
-        st.subheader("Stale Ticket Details")
-        st.dataframe(
-            visuals["details_df"],
-            width="stretch",
-            column_config={
-                "Ticket": st.column_config.LinkColumn(
-                    "Ticket",
-                    help="Open Jira ticket",
-                    display_text=r".*/([^/]+)$",
-                )
-            },
-        )
+        st.subheader("Tickets Older Than 90 Days")
+        if visuals["tickets_df"].empty:
+            st.info("No tickets older than 90 days.")
+        else:
+            st.dataframe(
+                visuals["tickets_df"],
+                width="stretch",
+                column_config={
+                    "Issue": st.column_config.LinkColumn(
+                        "Issue",
+                        help="Open Jira issue",
+                        display_text=r".*/([^/]+)$",
+                    )
+                },
+            )
 
 
 # ── Capacity ───────────────────────────────────────────────────────────────────

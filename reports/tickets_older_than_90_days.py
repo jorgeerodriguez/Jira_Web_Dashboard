@@ -1,6 +1,4 @@
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 
 
 JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
@@ -18,6 +16,9 @@ EXCLUDED_STATUSES = {
     "Released Successfully to Production",
     "❌ Rolled Back",
 }
+
+
+EPIC_ISSUE_TYPES = {"feature", "iniciative", "initiative"}
 
 
 def get_tickets_older_than_days(df_issues: pd.DataFrame, min_days: int = 90) -> pd.DataFrame:
@@ -47,84 +48,20 @@ def get_tickets_older_than_days(df_issues: pd.DataFrame, min_days: int = 90) -> 
     return filtered.sort_values("days_old", ascending=False)
 
 
-def build_tickets_older_than_90_days_visuals(df_issues: pd.DataFrame) -> dict:
-    """Build KPI values, charts, and detail table for the stale tickets view."""
-    df_old = get_tickets_older_than_days(df_issues, min_days=90)
+def _build_details_table(df_subset: pd.DataFrame) -> pd.DataFrame:
+    """Build a link-friendly details table for stale issues."""
+    if df_subset.empty:
+        return pd.DataFrame()
 
-    if df_old.empty:
-        return {
-            "total_old": 0,
-            "avg_age": 0,
-            "hist_fig": None,
-            "pie_fig": None,
-            "top25_fig": None,
-            "details_df": pd.DataFrame(),
-        }
-
-    total_old = int(len(df_old))
-    avg_age = int(df_old["days_old"].mean()) if total_old > 0 else 0
-
-    hist_fig = px.histogram(
-        df_old,
-        x="days_old",
-        nbins=20,
-        title="Age Distribution (>90 days)",
-        color_discrete_sequence=["#f97316"],
-    )
-    hist_fig.update_layout(height=350)
-
-    if "priority_name" in df_old.columns and df_old["priority_name"].notna().any():
-        pri_counts = df_old["priority_name"].fillna("Unknown").value_counts().reset_index()
-        pri_counts.columns = ["Priority", "Count"]
-    else:
-        pri_counts = pd.DataFrame({"Priority": ["Unknown"], "Count": [len(df_old)]})
-
-    pie_fig = px.pie(
-        pri_counts,
-        names="Priority",
-        values="Count",
-        title="By Priority",
-        color_discrete_map={
-            "Critical": "#dc2626",
-            "High": "#f97316",
-            "Medium": "#facc15",
-            "Low": "#4ade80",
-            "Unknown": "#94a3b8",
-        },
-    )
-    pie_fig.update_layout(height=350)
-
-    lead_col = "business_lead" if "business_lead" in df_old.columns else "bussiness_lead"
-    if lead_col in df_old.columns:
-        label_series = df_old["key"].astype(str) + " | " + df_old[lead_col].fillna("Unknown").astype(str).str[:16]
-    else:
-        label_series = df_old["key"].astype(str)
-
-    top25 = df_old.head(25).copy()
-    top25_labels = label_series.loc[top25.index]
-    top25_fig = go.Figure(
-        go.Bar(
-            x=top25["days_old"],
-            y=top25_labels,
-            orientation="h",
-            marker_color="#60a5fa",
-            text=top25["days_old"],
-            textposition="outside",
-        )
-    )
-    top25_fig.update_layout(
-        title="Top 25 Oldest Open Tickets",
-        xaxis_title="Days Old",
-        yaxis_title="Ticket",
-        yaxis=dict(autorange="reversed"),
-        height=700,
-        margin=dict(l=10, r=10, t=60, b=20),
-    )
-
-    detail_cols = [c for c in ["key", "status", "assignee_name", "priority_name", "days_old", "summary"] if c in df_old.columns]
-    details_df = df_old[detail_cols].copy()
+    detail_cols = [
+        c
+        for c in ["key", "issuetype", "status", "assignee_name", "priority_name", "days_old", "summary"]
+        if c in df_subset.columns
+    ]
+    details_df = df_subset[detail_cols].copy()
     rename_map = {
-        "key": "Ticket",
+        "key": "Issue",
+        "issuetype": "Issue Type",
         "status": "Status",
         "assignee_name": "Assignee",
         "priority_name": "Priority",
@@ -132,16 +69,41 @@ def build_tickets_older_than_90_days_visuals(df_issues: pd.DataFrame) -> dict:
         "summary": "Summary",
     }
     details_df.rename(columns=rename_map, inplace=True)
-    if "Ticket" in details_df.columns:
-        details_df["Ticket"] = details_df["Ticket"].astype(str).apply(
-            lambda ticket: f"{JIRA_BROWSE_BASE_URL}{ticket}"
+    if "Issue" in details_df.columns:
+        details_df["Issue"] = details_df["Issue"].astype(str).apply(
+            lambda issue_key: f"{JIRA_BROWSE_BASE_URL}{issue_key}"
         )
+    return details_df
+
+
+def build_tickets_older_than_90_days_visuals(df_issues: pd.DataFrame) -> dict:
+    """Build KPI values and split details for stale epics vs tickets."""
+    df_old = get_tickets_older_than_days(df_issues, min_days=90)
+
+    if df_old.empty:
+        return {
+            "epics_count": 0,
+            "tickets_count": 0,
+            "epics_df": pd.DataFrame(),
+            "tickets_df": pd.DataFrame(),
+        }
+
+    issuetype_series = (
+        df_old["issuetype"].fillna("").astype(str).str.strip().str.casefold()
+        if "issuetype" in df_old.columns
+        else pd.Series("", index=df_old.index)
+    )
+
+    epic_mask = issuetype_series.isin(EPIC_ISSUE_TYPES)
+    df_epics = df_old[epic_mask].copy()
+    df_tickets = df_old[~epic_mask].copy()
+
+    epics_df = _build_details_table(df_epics)
+    tickets_df = _build_details_table(df_tickets)
 
     return {
-        "total_old": total_old,
-        "avg_age": avg_age,
-        "hist_fig": hist_fig,
-        "pie_fig": pie_fig,
-        "top25_fig": top25_fig,
-        "details_df": details_df,
+        "epics_count": int(len(df_epics)),
+        "tickets_count": int(len(df_tickets)),
+        "epics_df": epics_df,
+        "tickets_df": tickets_df,
     }
