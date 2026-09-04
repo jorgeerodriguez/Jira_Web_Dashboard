@@ -10,6 +10,7 @@ EXCLUDED_ASSIGNEES = {
     "cullen philippson",
     "emmanuel adjei",
 }
+SIZE_ORDER = ["Small", "Medium", "Large", "XL", "Unestimated"]
 
 
 def _empty_payload() -> dict:
@@ -34,6 +35,12 @@ def _harmonic_estimate(avg_days: float, tickets: int) -> float:
 
 def _normalize_assignee(series: pd.Series) -> pd.Series:
     return series.fillna("Unassigned").astype(str).str.strip()
+
+
+def _normalize_size(series: pd.Series) -> pd.Series:
+    norm = series.fillna("Unestimated").astype(str).str.strip()
+    norm = norm.replace("", "Unestimated")
+    return norm.where(norm.isin(SIZE_ORDER[:-1]), "Unestimated")
 
 
 def _get_done_window(df: pd.DataFrame) -> pd.DataFrame:
@@ -90,6 +97,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     )
     days_old_col = _first_existing_column(in_progress_df, ["days_old", "Days Old"])
     summary_col = _first_existing_column(in_progress_df, ["summary", "Summary"])
+    size_col = _first_existing_column(in_progress_df, ["estimated_size_name", "Estimated Size"])
 
     if key_col is None:
         in_progress_df["key"] = in_progress_df.index.astype(str)
@@ -112,6 +120,10 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     if summary_col is None:
         in_progress_df["summary"] = ""
         summary_col = "summary"
+    if size_col is None:
+        in_progress_df["estimated_size_name"] = "Unestimated"
+        size_col = "estimated_size_name"
+    in_progress_df["size_group"] = _normalize_size(in_progress_df[size_col])
 
     today = pd.Timestamp.now(tz="UTC").normalize()
     today_date_only = today.date()
@@ -151,6 +163,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
             target_start_select_col,
             days_old_col,
             "days_left",
+            "size_group",
             summary_col,
         ]
     ].copy()
@@ -164,6 +177,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
         "Target Start Date",
         "Days Old",
         "Days Left",
+        "Estimated Size",
         "Summary",
     ]
     tickets_df["Ticket"] = tickets_df["Ticket"].astype(str).apply(
@@ -180,6 +194,14 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
 
     if backlog_counts.empty:
         return _empty_payload()
+
+    size_breakdown = (
+        in_progress_df.groupby(["assignee_name", "size_group"])
+        .size()
+        .unstack(fill_value=0)
+        .reindex(columns=SIZE_ORDER, fill_value=0)
+        .reset_index()
+    )
 
     done_df = _get_done_window(df)
     done_df["velocity_days"] = pd.to_numeric(done_df["velocity_days"], errors="coerce")
@@ -287,6 +309,8 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     ]
 
     summary = velocity_comparison_df.rename(columns={"total_tickets_in_backlog": "total_tickets_in_progress"})
+    summary = summary.merge(size_breakdown, on="assignee_name", how="left")
+    summary[SIZE_ORDER] = summary[SIZE_ORDER].fillna(0).astype(int)
 
     def load_bucket(days: float) -> str:
         if days > 90:
@@ -363,6 +387,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
         [
             "assignee_name",
             "total_tickets_in_progress",
+            *SIZE_ORDER,
             "complexity_days",
             "load_bucket",
         ]
@@ -370,6 +395,11 @@ def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
     detail_df.columns = [
         "Assignee",
         "Backlog Tickets",
+        "Small",
+        "Medium",
+        "Large",
+        "XL",
+        "Unestimated",
         "Complexity Days",
         "Load",
     ]
