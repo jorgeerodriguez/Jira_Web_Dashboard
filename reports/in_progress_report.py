@@ -10,6 +10,7 @@ EXCLUDED_ASSIGNEES = {
     "cullen philippson",
     "emmanuel adjei",
 }
+SIZE_ORDER = ["Small", "Medium", "Large", "XL", "Unestimated"]
 
 
 def _empty_payload() -> dict:
@@ -50,6 +51,12 @@ def _harmonic_estimate(avg_days: float, tickets: int) -> float:
 
 def _normalize_assignee(series: pd.Series) -> pd.Series:
     return series.fillna("Unassigned").astype(str).str.strip()
+
+
+def _normalize_size(series: pd.Series) -> pd.Series:
+    norm = series.fillna("Unestimated").astype(str).str.strip()
+    norm = norm.replace("", "Unestimated")
+    return norm.where(norm.isin(SIZE_ORDER[:-1]), "Unestimated")
 
 
 def _safe_weighted_mean(values: pd.Series, weights: pd.Series) -> float:
@@ -144,6 +151,8 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     target_end_col = _first_existing_column(in_progress_df, ["target_end_date", "project_due_date", "Target End Date"])
     days_old_col = _first_existing_column(in_progress_df, ["days_old", "Days Old"])
     summary_col = _first_existing_column(in_progress_df, ["summary", "Summary"])
+    size_col = _first_existing_column(in_progress_df, ["estimated_size_name", "Estimated Size"])
+    issue_type_col = _first_existing_column(in_progress_df, ["issuetype", "issue_type", "Issue Type"])
 
     if key_col is None:
         in_progress_df["key"] = in_progress_df.index.astype(str)
@@ -166,6 +175,13 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     if summary_col is None:
         in_progress_df["summary"] = ""
         summary_col = "summary"
+    if size_col is None:
+        in_progress_df["estimated_size_name"] = "Unestimated"
+        size_col = "estimated_size_name"
+    in_progress_df["size_group"] = _normalize_size(in_progress_df[size_col])
+    if issue_type_col is None:
+        in_progress_df["issuetype"] = "Unknown"
+        issue_type_col = "issuetype"
 
     today = pd.Timestamp.now(tz="UTC").normalize()
     today_date_only = today.date()
@@ -194,6 +210,8 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
         [
             key_col,
             priority_col_src,
+            "size_group",
+            issue_type_col,
             lead_col,
             creator_col,
             assignee_col,
@@ -208,6 +226,8 @@ def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
     tickets_df.columns = [
         "Ticket",
         "Priority",
+        "Size",
+        "Issue Type",
         "Business Lead",
         "Creator",
         "Assognee Name",

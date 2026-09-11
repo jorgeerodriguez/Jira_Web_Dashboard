@@ -247,6 +247,92 @@ def _normalize_text(value: str) -> str:
     return str(value).strip().casefold().replace("_", " ").replace("-", " ")
 
 
+def _normalize_ticket_size(series: pd.Series) -> pd.Series:
+    valid_sizes = ["Small", "Medium", "Large", "XL"]
+    norm = series.fillna("Unestimated").astype(str).str.strip()
+    norm = norm.replace("", "Unestimated")
+    return norm.where(norm.isin(valid_sizes), "Unestimated")
+
+
+# Apparent Tardiness Cost (Vepsalainen & Morton, 1987) sequencing inputs.
+ATC_SIZE_EFFORT_DAYS = {"Small": 1, "Medium": 3, "Large": 5, "XL": 10}
+ATC_DEFAULT_EFFORT_DAYS = 2  # Unestimated / no size
+ATC_PRIORITY_BASE_WEIGHT = {"no priority": 1, "low": 2, "medium": 4, "high": 8, "urgent": 16, "critical": 16}
+ATC_URGENT_PRIORITIES = {"urgent", "critical"}  # always-first tier, soonest due date first; weight shown for reference only
+ATC_DEFAULT_DAYS_LEFT = 30  # ticket has no target date
+ATC_K = 2.0  # look-ahead sensitivity (typical range 1.5-3)
+
+
+def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
+    """Order open tickets by the Apparent Tardiness Cost rule.
+
+    Urgent/Critical priority tickets are a separate first tier (soonest due date
+    first) so a big Urgent ticket can't lose to a small Medium one on value per
+    day. Everything else is ordered by Score = (w / p) * exp(-slack / (K * p_bar)),
+    recomputed after each pick since p_bar and the clock both move.
+    Expects pool_df with "Ticket", "Priority", "Size", "Days Left", "Days Old" columns.
+    """
+    if pool_df is None or pool_df.empty:
+        return pd.DataFrame()
+
+    rows = pool_df.copy()
+    priority_norm = rows["Priority"].astype(str).map(_normalize_text)
+
+    rows["_effort"] = rows["Size"].astype(str).map(ATC_SIZE_EFFORT_DAYS).fillna(ATC_DEFAULT_EFFORT_DAYS)
+    rows["_due"] = pd.to_numeric(rows["Days Left"], errors="coerce").fillna(ATC_DEFAULT_DAYS_LEFT)
+    base_weight = priority_norm.map(ATC_PRIORITY_BASE_WEIGHT).fillna(ATC_PRIORITY_BASE_WEIGHT["no priority"])
+    days_old = pd.to_numeric(rows["Days Old"], errors="coerce").fillna(0)
+    rows["_weight"] = base_weight * (1 + days_old / 30.0)
+    rows["_urgent_tier"] = priority_norm.isin(ATC_URGENT_PRIORITIES)
+
+    urgent = rows[rows["_urgent_tier"]].sort_values("_due", ascending=True)
+    remaining = rows[~rows["_urgent_tier"]].copy()
+
+    sequence_rows = []
+    t = 0.0
+
+    def _append(r: pd.Series, tier: str, score) -> None:
+        nonlocal t
+        p = float(r["_effort"])
+        start, finish = t, t + p
+        sequence_rows.append({
+            "Seq": len(sequence_rows) + 1,
+            "Ticket": r["Ticket"],
+            "Priority": r["Priority"],
+            "Size": r["Size"],
+            "Effort (Days)": p,
+            "Weight": round(float(r["_weight"]), 2),
+            "Days Left": round(float(r["_due"]), 1),
+            "ATC Score": round(score, 3) if score is not None else None,
+            "Tier": tier,
+            "Projected Start (Day)": round(start, 1),
+            "Projected Finish (Day)": round(finish, 1),
+            "Projected Tardiness (Days)": round(max(finish - float(r["_due"]), 0.0), 1),
+        })
+        t = finish
+
+    for _, r in urgent.iterrows():
+        _append(r, "Urgent", None)
+
+    remaining_idx = list(remaining.index)
+    while remaining_idx:
+        p_bar = float(remaining.loc[remaining_idx, "_effort"].mean()) or 1.0
+
+        best_idx, best_score = None, -np.inf
+        for idx in remaining_idx:
+            r = remaining.loc[idx]
+            p, d, w = float(r["_effort"]), float(r["_due"]), float(r["_weight"])
+            slack = max(d - p - t, 0.0)
+            score = (w / p) * np.exp(-slack / (ATC_K * p_bar)) if p > 0 else 0.0
+            if score > best_score:
+                best_idx, best_score = idx, score
+
+        _append(remaining.loc[best_idx], "ATC", best_score)
+        remaining_idx.remove(best_idx)
+
+    return pd.DataFrame(sequence_rows)
+
+
 def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> dict:
     empty_payload = {
         "assigned_tickets": 0,
@@ -268,6 +354,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
         "priority_fig": None,
         "focus_df": pd.DataFrame(),
         "summary_df": pd.DataFrame(),
+        "atc_df": pd.DataFrame(),
     }
 
     if df_issues is None or df_issues.empty:
@@ -284,6 +371,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     updated_col = _pick_col(df_issues, ["updated", "Updated"])
     target_end_col = _pick_col(df_issues, ["target_end_date", "project_due_date", "duedate", "Target End Date"])
     days_old_col = _pick_col(df_issues, ["days_old", "Days Old"])
+    size_col = _pick_col(df_issues, ["estimated_size_name", "Estimated Size"])
 
     required = [status_col, assignee_col, key_col]
     if any(col is None for col in required):
@@ -412,6 +500,9 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     work["Ticket"] = work[key_col].astype(str).apply(lambda ticket: f"{JIRA_BROWSE_BASE_URL}{ticket}")
     work["Status"] = work[status_col].astype(str)
     work["Priority"] = work[priority_col].astype(str)
+    work["Size"] = (
+        _normalize_ticket_size(work[size_col]) if size_col is not None else "Unestimated"
+    )
     work["Business Lead"] = work[lead_col].astype(str)
     work["Summary"] = work[summary_col].astype(str)
     work["Days Old"] = pd.to_numeric(work[days_old_col], errors="coerce").fillna(0)
@@ -470,18 +561,21 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     )
     priority_fig.update_layout(height=340, xaxis_title="Priority", yaxis_title="Count")
 
-    focus_df = work[open_mask & ~feature_mask].copy()
-    focus_df = focus_df.sort_values(
+    attention_pool_df = work[open_mask & ~feature_mask].copy()
+    attention_pool_df = attention_pool_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
     )
-    focus_df = focus_df[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].head(15).copy()
+    focus_cols = ["Ticket", "Status", "Priority", "Size", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]
+    focus_df = attention_pool_df[focus_cols].head(15).copy()
 
     summary_df = work[feature_mask].copy()
     summary_df = summary_df.sort_values(
         by=["_attention_rank", "Days Left", "_priority_rank", "Days Old"],
         ascending=[True, True, True, False],
-    )[["Ticket", "Status", "Priority", "Attention", "Days Left", "Days Old", "Business Lead", "Summary"]].copy()
+    )[focus_cols].copy()
+
+    atc_df = _build_atc_sequence(attention_pool_df[["Ticket", "Priority", "Size", "Days Left", "Days Old"]])
 
     return {
         "assigned_tickets": total_assigned,
@@ -503,6 +597,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
         "priority_fig": priority_fig,
         "focus_df": focus_df,
         "summary_df": summary_df,
+        "atc_df": atc_df,
     }
 
 
@@ -1493,6 +1588,29 @@ elif selected == "🧑‍💼  Personal Dashboard":
             )
         },
     )
+
+    st.subheader("Apparent Tardiness Cost / Suggested Sequence")
+    st.caption(
+        "Suggested work order from the Apparent Tardiness Cost rule (Vepsalainen & Morton, 1987): "
+        "Urgent/Critical tickets are scheduled first, soonest due date first; everything else is ranked by "
+        "Score = (Weight / Effort) × exp(−slack / (K × avg. remaining effort)), K = 2. "
+        "Effort is days from Size (Small=1, Medium=3, Large=5, XL=10, Unestimated=2); "
+        "Weight doubles per priority tier and again every 30 days of ticket age; tickets with no due date default to 30 days out."
+    )
+    if personal["atc_df"].empty:
+        st.success("No active tickets need sequencing for this assignee.")
+    else:
+        st.dataframe(
+            personal["atc_df"],
+            width="stretch",
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )
 
 
 # ── Distribution of Ticket by Estimated Size ────────────────────────────────────
