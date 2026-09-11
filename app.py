@@ -333,6 +333,150 @@ def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(sequence_rows)
 
 
+# Calendar cell codes, low -> high severity (drives the discrete Heatmap colorscale).
+ATC_CAL_CODE_COLORS = {
+    0: "#eef1f5",  # weekend
+    1: "#fcfcfb",  # working day, nothing scheduled
+    2: "#94a3b8",  # no priority
+    3: "#16a34a",  # low
+    4: "#facc15",  # medium
+    5: "#f97316",  # high
+    6: "#dc2626",  # urgent / critical
+}
+ATC_CAL_PRIORITY_CODE = {
+    "no priority": 2,
+    "low": 3,
+    "medium": 4,
+    "high": 5,
+    "urgent": 6,
+    "critical": 6,
+}
+ATC_CAL_LEGEND_LABELS = {2: "No Priority", 3: "Low", 4: "Medium", 5: "High", 6: "Urgent / Critical"}
+ATC_CAL_MAX_WORKING_DAYS = 90  # ~18 weeks; keeps the grid readable for a large backlog
+
+
+def _build_atc_calendar_fig(atc_df: pd.DataFrame, max_working_days: int = ATC_CAL_MAX_WORKING_DAYS):
+    """Working-day calendar for the ATC sequence: 'Projected Start (Day)' = today (offset 0),
+    each later offset the next business day. A ticket fills every working day between its
+    projected start and finish, skipping weekends."""
+    if atc_df is None or atc_df.empty:
+        return None, False
+
+    rows = atc_df.dropna(subset=["Projected Start (Day)", "Projected Finish (Day)"]).copy()
+    if rows.empty:
+        return None, False
+
+    priority_norm = rows["Priority"].astype(str).map(_normalize_text)
+    rows["_code"] = priority_norm.map(ATC_CAL_PRIORITY_CODE).fillna(2).astype(int)
+    rows["_key"] = rows["Ticket"].astype(str).str.rstrip("/").str.rsplit("/", n=1).str[-1]
+
+    slots = []
+    truncated = False
+    for _, r in rows.iterrows():
+        start = int(round(r["Projected Start (Day)"]))
+        finish = int(round(r["Projected Finish (Day)"]))
+        for offset in range(start, max(finish, start + 1)):
+            if offset >= max_working_days:
+                truncated = True
+                break
+            slots.append({"offset": offset, **r.to_dict()})
+
+    if not slots:
+        return None, truncated
+
+    offsets = sorted({s["offset"] for s in slots})
+    today = np.datetime64(pd.Timestamp.today().normalize().date())
+    dates = np.busday_offset(today, offsets, roll="forward")
+    offset_to_date = {o: pd.Timestamp(d) for o, d in zip(offsets, dates)}
+    for s in slots:
+        s["date"] = offset_to_date[s["offset"]]
+    slot_by_date = {s["date"].normalize(): s for s in slots}
+
+    min_date = min(s["date"] for s in slots)
+    max_date = max(s["date"] for s in slots)
+    grid_start = min_date - pd.Timedelta(days=int(min_date.dayofweek))
+    grid_end = max_date + pd.Timedelta(days=int(6 - max_date.dayofweek))
+    all_days = pd.date_range(grid_start, grid_end, freq="D")
+    num_weeks = len(all_days) // 7
+
+    weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    week_labels = [all_days[w * 7].strftime("Week of %b %d") for w in range(num_weeks)]
+
+    z = [[0] * 7 for _ in range(num_weeks)]
+    text = [[""] * 7 for _ in range(num_weeks)]
+    customdata = [[""] * 7 for _ in range(num_weeks)]
+
+    for i, day in enumerate(all_days):
+        week_idx, weekday_idx = divmod(i, 7)
+        is_weekend = weekday_idx >= 5
+        info = slot_by_date.get(day.normalize())
+        if info is not None:
+            z[week_idx][weekday_idx] = info["_code"]
+            text[week_idx][weekday_idx] = f"{day.day}<br><b>{info['_key']}</b>"
+            customdata[week_idx][weekday_idx] = (
+                f"{info['_key']} — {day.strftime('%a %b %d, %Y')}<br>"
+                f"Priority: {info['Priority']} · Size: {info['Size']} · Tier: {info['Tier']}<br>"
+                f"Seq #{info['Seq']} · Days Left (due): {info['Days Left']}<br>"
+                f"Projected Tardiness: {info['Projected Tardiness (Days)']} days"
+            )
+        else:
+            z[week_idx][weekday_idx] = 0 if is_weekend else 1
+            text[week_idx][weekday_idx] = str(day.day)
+            customdata[week_idx][weekday_idx] = day.strftime("%A, %b %d, %Y") + (
+                " — weekend" if is_weekend else " — nothing scheduled"
+            )
+
+    n_codes = len(ATC_CAL_CODE_COLORS)
+    colorscale = []
+    for code, color in ATC_CAL_CODE_COLORS.items():
+        colorscale.append([code / n_codes, color])
+        colorscale.append([(code + 1) / n_codes, color])
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=weekday_labels,
+            y=week_labels,
+            text=text,
+            texttemplate="%{text}",
+            textfont={"size": 11},
+            customdata=customdata,
+            hovertemplate="%{customdata}<extra></extra>",
+            colorscale=colorscale,
+            zmin=0,
+            zmax=n_codes,
+            showscale=False,
+            xgap=3,
+            ygap=3,
+        )
+    )
+
+    present_codes = sorted({v for row in z for v in row} & set(ATC_CAL_LEGEND_LABELS))
+    for code in present_codes:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker={"size": 12, "color": ATC_CAL_CODE_COLORS[code], "symbol": "square"},
+                name=ATC_CAL_LEGEND_LABELS[code],
+                showlegend=True,
+                hoverinfo="skip",
+            )
+        )
+
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_xaxes(side="top", showgrid=False)
+    fig.update_layout(
+        title="Suggested Working-Day Calendar",
+        height=110 * num_weeks + 160,
+        margin=dict(l=10, r=10, t=60, b=10),
+        plot_bgcolor="#ffffff",
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="left", x=0),
+    )
+    return fig, truncated
+
+
 def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> dict:
     empty_payload = {
         "assigned_tickets": 0,
@@ -355,6 +499,8 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
         "focus_df": pd.DataFrame(),
         "summary_df": pd.DataFrame(),
         "atc_df": pd.DataFrame(),
+        "atc_calendar_fig": None,
+        "atc_calendar_truncated": False,
     }
 
     if df_issues is None or df_issues.empty:
@@ -576,6 +722,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     )[focus_cols].copy()
 
     atc_df = _build_atc_sequence(attention_pool_df[["Ticket", "Priority", "Size", "Days Left", "Days Old"]])
+    atc_calendar_fig, atc_calendar_truncated = _build_atc_calendar_fig(atc_df)
 
     return {
         "assigned_tickets": total_assigned,
@@ -598,6 +745,8 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
         "focus_df": focus_df,
         "summary_df": summary_df,
         "atc_df": atc_df,
+        "atc_calendar_fig": atc_calendar_fig,
+        "atc_calendar_truncated": atc_calendar_truncated,
     }
 
 
@@ -1611,6 +1760,22 @@ elif selected == "🧑‍💼  Personal Dashboard":
                 )
             },
         )
+
+        st.subheader("Suggested Working-Day Calendar")
+        st.caption(
+            "Same sequence, laid out on the calendar. 'Projected Start (Day)' 0 is today; each ticket then "
+            "fills its Effort in consecutive **working days** (weekends skipped) up to 'Projected Finish (Day)'. "
+            "Hover a day for the ticket, priority, size, and projected tardiness."
+        )
+        if personal["atc_calendar_fig"] is None:
+            st.info("Not enough scheduled data to draw a calendar.")
+        else:
+            st.plotly_chart(personal["atc_calendar_fig"], width="stretch")
+            if personal["atc_calendar_truncated"]:
+                st.caption(
+                    f"⚠️ Sequence extends beyond {ATC_CAL_MAX_WORKING_DAYS} working days — "
+                    "the calendar shows only that horizon."
+                )
 
 
 # ── Distribution of Ticket by Estimated Size ────────────────────────────────────
