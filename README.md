@@ -10,7 +10,13 @@ It supports:
 	- fractional-day validation delays with outlier trimming
 	- Bayesian-smoothed assignee/priority on-time rates
 	- continuous schedule-adherence feature to capture how late a ticket is
+	- target-date-aware predictions, on-time/past-due pie breakdowns, and a rolling trend chart
 - **Personal Dashboard** with prioritized attention and Epic-only view
+	- **Apparent Tardiness Cost (ATC)** ticket sequencing: suggests a work order that minimizes weighted tardiness across a person's open tickets
+	- a suggested working-day calendar visualizing that sequence, color-coded by priority
+- **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
+- **Tickets Older Than 90 Days** split into Epics vs. Tickets
+- Trend report includes completed-ticket trend per PE team member
 
 ---
 
@@ -50,6 +56,7 @@ Jira_Web_Dashboard/
 │   ├── tickets_older_than_90_days.py
 │   ├── distribution_of_tickets_report.py
 │   ├── distribution_by_business_leader.py
+│   ├── estimated_size_distribution_report.py
 │   ├── word_of_the_month_report.py
 │   ├── service_level_agreement_report.py
 │   ├── forecast_report.py
@@ -124,14 +131,89 @@ Templates provided:
 	- restricts to active statuses (Triage, To Do, In Progress, On Hold, Validating, Tech Discovery Required, Blocked, Staged CAR)
 	- excludes `Feature` tickets from **Tickets Requiring Attention**
 	- shows only `Feature` tickets in **Epic Ticket Only** table
+	- sequences a person's open tickets with the **Apparent Tardiness Cost (ATC)** rule and shows projected start/finish/tardiness per ticket — see [How ticket sequencing works](#how-ticket-sequencing-works-apparent-tardiness-cost)
+	- visualizes that sequence as a **Suggested Working-Day Calendar** heatmap, color-coded by priority tier
+- Added **Distribution of Ticket by Estimated Size** menu: In Progress vs. Backlog counts/pies by size, plus a Priority × Size risk heatmap
+- Added estimated ticket **Size** column to the Backlog and In Progress reports
+- Split **Tickets Older Than 90 Days** into separate Epics and Tickets tables (was a single mixed list)
+- Added a per-PE-team-member completed-ticket trend chart to the Trend report
 - Improved probability model workflow:
 	- assignee/priority-aware validation-time offsets
 	- training detail table aligned with selected filters
 	- smoothed historical on-time rates for assignee and priority
 	- continuous schedule-adherence feature for lateness severity
+	- added target-date awareness, on-time/past-due pie visualizations, and a rolling completion trend chart
+	- normalized heatmap ordering to a consistent priority sequence across reports
 - Updated Streamlit layout API usage (`width="stretch"` / `width="content"`)
 - Fixed Jira fetch JQL lookback syntax (`created >= -730d`)
 - Improved config fallback path resolution so root `config.json` is detected
+
+---
+
+## How ticket sequencing works (Apparent Tardiness Cost)
+
+The **Personal Dashboard**'s suggested sequence and calendar are built with this method.
+
+### How to frame it
+
+Treat each person as one worker doing one ticket at a time. Every ticket has three numbers:
+
+- **Effort (p)**: days needed, taken from Size. We use the upper limit of each range so plans come out conservative: Small = 1, Medium = 3, Large = 5, Extra Large = 10, no size = 2.
+- **Due (d)**: Days Left.
+- **Weight (w)**: how much it matters, from Priority, bumped up for older tickets.
+
+The goal is an order that keeps the most important tickets from finishing late. Formally that's "minimize total weighted tardiness" (tardiness is how many days a ticket finishes past its due date). That problem has no fast exact solution once you have more than a few tickets. The standard practical answer is a rule called **Apparent Tardiness Cost (ATC)** (Vepsalainen & Morton, 1987).
+
+### The ATC rule
+
+Start at day `t = 0`. Repeat until every ticket is placed:
+
+1. For each remaining ticket, compute:
+
+   `Score = (w / p) × exp( −max(d − p − t, 0) / (K · p̄) )`
+
+2. Put the ticket with the highest score next in the list, then move the clock forward: `t = t + p`.
+
+In plain terms:
+
+- `w / p` favors high value per day of effort. Ordering by this ratio alone is the classic rule for finishing important work early.
+- `d − p − t` is the ticket's slack: how many days you could wait and still finish it on time. The exponential term stays near zero while there's plenty of slack and rises to 1 as slack runs out. Overdue tickets get the full 1.
+- `p̄` is the average effort of the remaining tickets.
+- `K` sets how far ahead the rule looks. Values of 1.5–3 are typical; we start at 2.
+
+### Inputs used
+
+| Input | Starting value |
+| --- | --- |
+| Priority weight | None 1, Low 2, Medium 4, High 8. Each level counts double the one below. |
+| Urgent | A separate first tier: always at the top, soonest due date first. Otherwise a big Urgent ticket could lose to a small Medium one on value per day. |
+| Age | Effective weight = w × (1 + DaysOld / 30), so weight doubles every 30 days. This keeps old, low-priority tickets from waiting forever. |
+| No target date | Given a default due date of 30 days out, so aging alone decides when it comes up. |
+
+### Worked example
+
+Six tickets run through the rule, compared with the obvious approach of sorting by priority, then due date:
+
+| Ticket | Priority / Size | Due in (days) | ATC finishes on day | Simple sort finishes on day |
+| --- | --- | --- | --- | --- |
+| T6 | Urgent / S | 1 | 1 ✅ | 1 ✅ |
+| T2 | Medium / S | 2 | 2 ✅ | 17 ❌ (15 days late) |
+| T5 | High / L | 7 | 7 ✅ | 6 ✅ |
+| T3 | Low / M (40 days old) | 6 | 10 ❌ (4 days late) | 20 ❌ (14 days late) |
+| T1 | High / XL | 20 | 20 ✅ | 16 ✅ |
+| T4 | None / no size (60 days old) | 30 | 22 ✅ | 22 ✅ |
+
+This workload can't all be done on time: 10 days of work are due within 7 days. ATC still limits the damage to one Low ticket, 4 days late. The simple sort lets a Medium ticket due in 2 days sit behind a 10-day ticket that isn't due for 20.
+
+### Two extras that make it useful
+
+- **Projected dates.** Each ticket in the list gets a projected start and finish, so people can see which ones will run late before it happens.
+- **Overload alert.** Sort a person's tickets by due date. If the running total of effort ever exceeds a ticket's Days Left, no order can meet every date. That's the signal for a manager to move dates or reassign work.
+
+### Assumptions to confirm
+
+- Days Left is counted in working days. If it's calendar days, this will need to be converted.
+- One ticket at a time, and a ticket isn't split once started.
 
 ---
 
@@ -157,6 +239,35 @@ The on-time completion model uses historical Jira tickets to estimate whether a 
 In practical terms, this means the model now uses both binary history and lateness severity instead of relying only on simple averages.
 
 ## Release notes
+
+### 2026-09-11
+- Added **Apparent Tardiness Cost (ATC)** ticket sequencing to the Personal Dashboard — suggested work order, ATC score, and projected start/finish/tardiness per ticket (see [How ticket sequencing works](#how-ticket-sequencing-works-apparent-tardiness-cost))
+- Added a **Suggested Working-Day Calendar** heatmap visualizing the ATC sequence, color-coded by priority tier, with weekend skipping and an overload warning when the sequence exceeds the visible horizon
+
+### 2026-09-04
+- Added estimated ticket **Size** column to the Backlog report
+
+### 2026-09-03
+- Split **Tickets Older Than 90 Days** into separate Epics and Tickets tables instead of one mixed list
+
+### 2026-07-17
+- Fixed Backlog report columns to display Target Start Date instead of Target End Date
+- Fixed typos in the Backlog report
+
+### 2026-07-16
+- Added **Distribution of Ticket by Estimated Size** menu: In Progress vs. Backlog counts and pie charts by size
+- Added a Priority × Size risk heatmap to flag ticket combinations most likely to miss resolution targets
+
+### 2026-07-06
+- Added a completed-ticket trend chart per PE team member to the Trend report
+
+### 2026-06-25
+- Added a rolling completion trend chart (past-due days and on-time rate over time) to the Probability of Completion report
+- Normalized heatmap ordering to a consistent priority sequence across reports
+
+### 2026-06-24
+- Added due-date awareness and pie-chart breakdowns to the Probability of Completion on time report
+- Adjusted the completion-of-work pie chart and refined several probability calculations for a better-fitting model
 
 ### 2026-05-27
 - Added Personal Dashboard table split:

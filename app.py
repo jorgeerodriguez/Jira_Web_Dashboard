@@ -263,19 +263,36 @@ ATC_DEFAULT_DAYS_LEFT = 30  # ticket has no target date
 ATC_K = 2.0  # look-ahead sensitivity (typical range 1.5-3)
 
 
+ATC_HELD_BACK_STATUSES = {"on hold", "blocked"}  # excluded from scoring, appended at the end
+ATC_HELD_BACK_TIER_ORDER = ["On Hold", "Blocked"]  # On Hold first, then Blocked
+
+
 def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
     """Order open tickets by the Apparent Tardiness Cost rule.
 
-    Urgent/Critical priority tickets are a separate first tier (soonest due date
-    first) so a big Urgent ticket can't lose to a small Medium one on value per
-    day. Everything else is ordered by Score = (w / p) * exp(-slack / (K * p_bar)),
-    recomputed after each pick since p_bar and the clock both move.
-    Expects pool_df with "Ticket", "Priority", "Size", "Days Left", "Days Old" columns.
+    "Validating" tickets are dropped entirely — they're waiting on the end user,
+    not on the assignee, so they shouldn't consume a slot in the sequence.
+    "On Hold" and "Blocked" tickets can't be actively worked right now, so they're
+    held out of ATC scoring and appended at the end instead (On Hold first, then
+    Blocked, each soonest due date first) rather than competing for a slot.
+
+    Urgent/Critical priority tickets among the schedulable ones are a separate
+    first tier (soonest due date first) so a big Urgent ticket can't lose to a
+    small Medium one on value per day. Everything else is ordered by
+    Score = (w / p) * exp(-slack / (K * p_bar)), recomputed after each pick since
+    p_bar and the clock both move.
+    Expects pool_df with "Ticket", "Priority", "Size", "Days Left", "Days Old",
+    "Status" columns.
     """
     if pool_df is None or pool_df.empty:
         return pd.DataFrame()
 
-    rows = pool_df.copy()
+    status_norm = pool_df["Status"].astype(str).map(_normalize_text)
+    rows = pool_df[~status_norm.eq("validating")].copy()
+    if rows.empty:
+        return pd.DataFrame()
+
+    status_norm = rows["Status"].astype(str).map(_normalize_text)
     priority_norm = rows["Priority"].astype(str).map(_normalize_text)
 
     rows["_effort"] = rows["Size"].astype(str).map(ATC_SIZE_EFFORT_DAYS).fillna(ATC_DEFAULT_EFFORT_DAYS)
@@ -284,9 +301,15 @@ def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
     days_old = pd.to_numeric(rows["Days Old"], errors="coerce").fillna(0)
     rows["_weight"] = base_weight * (1 + days_old / 30.0)
     rows["_urgent_tier"] = priority_norm.isin(ATC_URGENT_PRIORITIES)
+    rows["_held_back_tier"] = status_norm.map(
+        {"on hold": "On Hold", "blocked": "Blocked"}
+    )
 
-    urgent = rows[rows["_urgent_tier"]].sort_values("_due", ascending=True)
-    remaining = rows[~rows["_urgent_tier"]].copy()
+    held_back = rows[rows["_held_back_tier"].notna()]
+    schedulable = rows[rows["_held_back_tier"].isna()].copy()
+
+    urgent = schedulable[schedulable["_urgent_tier"]].sort_values("_due", ascending=True)
+    remaining = schedulable[~schedulable["_urgent_tier"]].copy()
 
     sequence_rows = []
     t = 0.0
@@ -329,6 +352,11 @@ def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
 
         _append(remaining.loc[best_idx], "ATC", best_score)
         remaining_idx.remove(best_idx)
+
+    for tier in ATC_HELD_BACK_TIER_ORDER:
+        tier_rows = held_back[held_back["_held_back_tier"].eq(tier)].sort_values("_due", ascending=True)
+        for _, r in tier_rows.iterrows():
+            _append(r, tier, None)
 
     return pd.DataFrame(sequence_rows)
 
@@ -721,7 +749,7 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
         ascending=[True, True, True, False],
     )[focus_cols].copy()
 
-    atc_df = _build_atc_sequence(attention_pool_df[["Ticket", "Priority", "Size", "Days Left", "Days Old"]])
+    atc_df = _build_atc_sequence(attention_pool_df[["Ticket", "Priority", "Size", "Days Left", "Days Old", "Status"]])
     atc_calendar_fig, atc_calendar_truncated = _build_atc_calendar_fig(atc_df)
 
     return {
@@ -1744,7 +1772,9 @@ elif selected == "🧑‍💼  Personal Dashboard":
         "Urgent/Critical tickets are scheduled first, soonest due date first; everything else is ranked by "
         "Score = (Weight / Effort) × exp(−slack / (K × avg. remaining effort)), K = 2. "
         "Effort is days from Size (Small=1, Medium=3, Large=5, XL=10, Unestimated=2); "
-        "Weight doubles per priority tier and again every 30 days of ticket age; tickets with no due date default to 30 days out."
+        "Weight doubles per priority tier and again every 30 days of ticket age; tickets with no due date default to 30 days out. "
+        "**Validating** tickets are excluded (waiting on the end user); **On Hold** and **Blocked** tickets are excluded "
+        "from scoring and appended at the end, On Hold first, then Blocked."
     )
     if personal["atc_df"].empty:
         st.success("No active tickets need sequencing for this assignee.")
