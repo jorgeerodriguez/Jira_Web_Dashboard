@@ -866,11 +866,16 @@ retuned without another crawl.
 
 - **Store** (`store.py`) — one DuckDB file (on a PVC in prod). Tables: `issues`,
   `transitions` (append-only status changes from changelogs), `sync_meta`, and — for the SME
-  matrix — `merge_requests` + `mr_files`. All timestamps are naive UTC.
+  matrix — `merge_requests` + `mr_files`. All timestamps are naive UTC. `issues.estimated_size`
+  holds Jira's Estimated Size (`customfield_10968`) as its option label — `Small`/`Medium`/`Large`/
+  `XL`, or `NULL` where Jira holds none — never a numeric weight: the ratio between sizes is a
+  property of whatever consumes it and nothing has measured one yet (DEVOPS-10567).
 - **Jira poller** (`ingest.py`) — a one-time full crawl on the first run, then **incremental only**
   (`updated >= watermark`, no periodic full reconcile) plus a per-changed-issue changelog;
   completion is measured as the earliest transition to `Done` (resolutiondate is null on ~85% of
-  issues), attributed to the business month (`metrics.BUSINESS_TZ`).
+  issues), attributed to the business month (`metrics.BUSINESS_TZ`). Adding a field to
+  `_ISSUE_FIELDS` needs `_FIELDS_VERSION` bumped with it — see **Adding a Jira field to a store that
+  already exists** below.
 - **GitLab ingest** (`gitlab_ingest.py`) — a one-time full **6-month** crawl on the first run, then
   **incremental** pulls of only the MRs updated since the last sync (watermark in `gitlab_sync_meta`,
   minus a small margin), from the PE groups `audacy-inc/devops` + `audacy-inc/gcp`, plus a few
@@ -888,6 +893,48 @@ retuned without another crawl.
   (not the diff contents or the MR description) — a far denser signal than Jira titles.
 - **App** (`app.py`) — read-only `/api/*` endpoints, `/health`, and the one write path,
   `POST /api/overrides` (shared SME overrides, see below).
+
+## Adding a Jira field to a store that already exists
+
+The poller is watermark-driven: it asks Jira only for issues that **changed**. That is what keeps a
+15-minute poll cheap, and it means a row nobody edits again is never revisited. Add a column and
+every pre-existing row keeps `NULL` in it forever — not because Jira holds nothing, but because
+darkstar never went back to ask. On the deploy that added the link columns this left all 9,811
+stored issues empty.
+
+`backfill_link_fields` is the repair: one field-only re-read of the window, no changelogs, ~15
+requests instead of ~9,800. The only real question is **how it knows to run**, and that is where
+this keeps going wrong.
+
+The original trigger counts rows with `dev_has_pr IS NULL`. It works, but only by accident of that
+column's shape: `apply_dev_panel_flags` writes `False` for every issue it queries, so `NULL` there
+unambiguously means "never asked". **Most columns have no such sentinel.** An issue with no
+Estimated Size set has a legitimately `NULL` `estimated_size` — true of about 71% of DEVOPS — so a
+`NULL` count never reaches zero, and the backfill re-crawls the whole window every cycle, forever.
+This is the third appearance of the same trap; `mr_field_url` and `events_fetched_at` each hit it,
+and both are called out elsewhere in this file.
+
+So the marker is not inferred from the data at all. `sync_meta.fields_version` records the
+`_ISSUE_FIELDS` version the store was last filled with. Code ahead of the stamp → one backfill, then
+stamp. Unambiguous whatever the field itself holds, and the next column added gets it for free:
+
+```python
+_FIELDS_VERSION: int = 1   # bump whenever _ISSUE_FIELDS gains a column
+```
+
+Two details that are load-bearing:
+
+- **`set_sync_meta` uses `ON CONFLICT DO UPDATE`, not `INSERT OR REPLACE`.** `REPLACE` rewrites the
+  whole row, and the poller writes `sync_meta` every cycle without passing `fields_version` — so
+  under `REPLACE` the stamp blanked each pass and re-armed the backfill forever. That is the exact
+  failure the column exists to prevent, and it is invisible except as a permanently slow poll.
+- **The floor stays `SELF_SERVICE_EPOCH`**, the same one the link-field backfill already used,
+  because no panel displays anything older. Worth stating because the obvious alternative is wrong:
+  Estimated Size only came into team use around August 2026, but the field itself has carried values
+  since **January 2021** (DEVOPS-1152), and 141 sized issues have not been touched since before
+  August. A floor picked from when the team adopted a field is not the same as a floor picked from
+  when the field could hold data — and neither is what the backfill wants, which is simply "as far
+  back as anything is displayed".
 
 ## How intake works
 

@@ -193,12 +193,17 @@ def test_a_sync_cycle_self_heals_issues_the_incremental_slice_never_touches(monk
 
 
 def test_the_backfill_is_skipped_once_the_window_is_filled(monkeypatch):
-    """Otherwise every cycle pays 13 extra pages forever."""
+    """Otherwise every cycle pays 13 extra pages forever.
+
+    "Caught up" now means both triggers are satisfied: the link-field window is filled AND the store
+    is stamped with the current _ISSUE_FIELDS version. Either one alone re-arms the pass.
+    """
     from zoneinfo import ZoneInfo
     conn = duckdb.connect(":memory:")
     store.initialize_schema(conn)
     _stored_issue(conn, "DEVOPS-11", datetime(2026, 6, 1, 12, 0))
     conn.execute("UPDATE issues SET dev_has_pr = FALSE, dev_has_commits = FALSE")
+    store.set_fields_version(conn, ingest._FIELDS_VERSION)
 
     calls: list[str] = []
     monkeypatch.setattr(ingest, "fetch_issues", lambda jira, jql: (calls.append(jql) or []))
