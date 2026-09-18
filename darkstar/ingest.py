@@ -55,8 +55,22 @@ _ISSUE_FIELDS: str = (
     # field (customfield_10400) is deliberately NOT fetched: it serves a stale cache that omitted a
     # merged pull request on DEVOPS-10117 and disagreed with its own panel on build count. The dev
     # panel is read through JQL instead -- see fetch_dev_panel_keys.
-    "customfield_11534"
+    # customfield_10968 = "Estimated Size" (Small/Medium/Large/XL). Bump _FIELDS_VERSION whenever
+    # this list gains a column, or existing rows keep a NULL there forever.
+    "customfield_11534,customfield_10968"
 )
+
+# Version of _ISSUE_FIELDS above. A store stamped below this has rows that predate a column, so the
+# next cycle runs one field-only backfill and stamps the new value.
+#
+# Why a version and not a NULL count: `issues_missing_link_fields` can key on `dev_has_pr IS NULL`
+# only because `apply_dev_panel_flags` writes False for every issue it queries, making NULL mean
+# "never asked". Most of the fields added since have no such sentinel -- an issue with no Estimated
+# Size set has a legitimately NULL `estimated_size`, true of ~71% of DEVOPS -- so a NULL count never
+# reaches zero and the backfill re-crawls the store every cycle, forever. The version is the one
+# marker that is unambiguous regardless of what the field itself holds, and it costs one integer for
+# every column added after this one.
+_FIELDS_VERSION: int = 1
 
 @dataclass(frozen=True)
 class SyncPlan:
@@ -173,6 +187,11 @@ def _map_issue(issue: Issue, fetched_at: datetime) -> store.IssueRow:
         target_end=_parse_date(fields.get("customfield_10947")),
         labels=list(fields.get("labels") or []),
         mr_field_url=(fields.get("customfield_11534") or None),
+        # A select field: Jira sends {"value": "Small", ...} or null. "Unestimated" is deliberately
+        # NOT substituted here -- that label is a presentation choice (it matches
+        # reports/backlog_report.py's SIZE_ORDER) and the store records what Jira holds, which is
+        # nothing.
+        estimated_size=((fields.get("customfield_10968") or {}).get("value") or None),
         # Filled by fetch_dev_panel_keys after the batch is mapped; unknown until then.
         dev_has_pr=None,
         dev_has_commits=None,
@@ -350,11 +369,15 @@ def run_sync(
     store.upsert_issues(connection, issues)
     store.replace_transitions(connection, keys, transitions)
 
-    # Self-heal the columns an incremental plan can never reach. Gated on the count, so it runs once
-    # after a column is added and is skipped on every cycle after.
+    # Self-heal the columns an incremental plan can never reach: it only fetches issues *updated*
+    # since the watermark, so a row untouched since a column was added keeps NULL there forever.
+    # Two independent triggers, both self-terminating, and the floor is SELF_SERVICE_EPOCH for the
+    # same reason the link-field backfill already used it -- no panel displays anything older.
     backfilled = 0
-    if issues_missing_link_fields(connection, SELF_SERVICE_EPOCH):
+    stale_fields = store.get_fields_version(connection) < _FIELDS_VERSION
+    if stale_fields or issues_missing_link_fields(connection, SELF_SERVICE_EPOCH):
         backfilled = backfill_link_fields(jira, connection, SELF_SERVICE_EPOCH)
+        store.set_fields_version(connection, _FIELDS_VERSION)
 
     total_issues = connection.execute("SELECT count(*) FROM issues").fetchone()[0]
     total_transitions = connection.execute("SELECT count(*) FROM transitions").fetchone()[0]

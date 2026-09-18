@@ -58,6 +58,13 @@ class IssueRow:
     # None means the flag has not been queried yet, which is not the same as False.
     dev_has_pr: bool | None
     dev_has_commits: bool | None
+    # "Estimated Size" (customfield_10968), a Small/Medium/Large/XL select. Held as the option string
+    # rather than a number: the numeric weight is a property of whatever consumes it, and baking one
+    # in here would freeze a ratio nothing has measured yet.
+    # None is ambiguous on its own -- it means EITHER "Jira holds no size for this issue" (true for
+    # ~71% of DEVOPS) OR "this row predates the column". That is why the backfill is driven by
+    # sync_meta.fields_version and never by a NULL count over this column; see ingest._FIELDS_VERSION.
+    estimated_size: str | None
     fetched_at: datetime
 
 
@@ -150,7 +157,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "fetched_at",
+    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "estimated_size", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
@@ -184,6 +191,7 @@ CREATE TABLE IF NOT EXISTS issues (
     mr_field_url        VARCHAR,
     dev_has_pr          BOOLEAN,
     dev_has_commits     BOOLEAN,
+    estimated_size      VARCHAR,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -201,7 +209,8 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     last_full_sync        TIMESTAMP,
     issue_count           INTEGER NOT NULL,
     transition_count      INTEGER NOT NULL,
-    updated_at            TIMESTAMP NOT NULL
+    updated_at            TIMESTAMP NOT NULL,
+    fields_version        INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS merge_requests (
@@ -283,6 +292,8 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS mr_field_url VARCHAR")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS estimated_size VARCHAR")
+    connection.execute("ALTER TABLE sync_meta ADD COLUMN IF NOT EXISTS fields_version INTEGER")
     logger.debug("schema initialized")
 
 
@@ -341,12 +352,46 @@ def set_sync_meta(
     transition_count: int,
     updated_at: datetime,
 ) -> None:
-    """Write the single sync_meta row (id = 1), replacing any existing values."""
+    """Write the poll-loop columns of the single sync_meta row (id = 1).
+
+    Deliberately ON CONFLICT DO UPDATE rather than INSERT OR REPLACE. REPLACE rewrites the whole
+    row, so it would blank any column this function does not name -- and the poller calls this every
+    cycle while `fields_version` is written separately. Under REPLACE the version would reset to
+    NULL each pass, re-arming the field backfill forever, which is the exact failure the version
+    column exists to prevent.
+    """
     connection.execute(
-        "INSERT OR REPLACE INTO sync_meta "
+        "INSERT INTO sync_meta "
         "(id, last_incremental_sync, last_full_sync, issue_count, transition_count, updated_at) "
-        "VALUES (1, ?, ?, ?, ?, ?)",
+        "VALUES (1, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (id) DO UPDATE SET "
+        "last_incremental_sync = excluded.last_incremental_sync, "
+        "last_full_sync = excluded.last_full_sync, "
+        "issue_count = excluded.issue_count, "
+        "transition_count = excluded.transition_count, "
+        "updated_at = excluded.updated_at",
         [last_incremental_sync, last_full_sync, issue_count, transition_count, updated_at],
+    )
+
+
+def get_fields_version(connection: duckdb.DuckDBPyConnection) -> int:
+    """The _ISSUE_FIELDS version this store was last filled with; 0 if never stamped.
+
+    0 covers both a brand-new store and one written before this column existed, and both want the
+    same thing: one field-only re-read.
+    """
+    row = connection.execute("SELECT fields_version FROM sync_meta WHERE id = 1").fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def set_fields_version(connection: duckdb.DuckDBPyConnection, version: int) -> None:
+    """Stamp the store with the _ISSUE_FIELDS version it now holds."""
+    connection.execute(
+        "INSERT INTO sync_meta "
+        "(id, last_incremental_sync, last_full_sync, issue_count, transition_count, updated_at, "
+        " fields_version) "
+        "VALUES (1, NULL, NULL, 0, 0, now(), ?) "
+        "ON CONFLICT (id) DO UPDATE SET fields_version = excluded.fields_version", [version]
     )
 
 
