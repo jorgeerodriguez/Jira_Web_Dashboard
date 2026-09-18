@@ -945,6 +945,44 @@ independent per-engineer signals and routing on skill first, availability second
 
 `spare = max(0, velocity - done_this_month) - WIP`
 
+**WIP is summed by size weight, not counted.** A plain count said an engineer holding two XLs was
+exactly as free as one holding two Smalls, which was the largest single source of bad routing
+suggestions on this page.
+
+The weights are a **team convention, and the page says so** — they are not derived. DEVOPS-10567
+tried to derive them from observed cycle time and returned a negative result worth recording,
+because the numbers look convincing until you check them. The sizes *do* order monotonically
+(2.0 / 5.5 / 14.0 / 31.0 median days, Mar–Aug 2026) but Large has n=4 and XL n=3 in the joinable
+set, and decisively: **only 1 of 7 Large/XL issues was sized before work started.** Six were sized
+mid-flight or later, every observed revision was upward, and DEVOPS-9239 was upgraded to Large two
+months after it closed. "Large took 3× as long as Small" is therefore substantially tautological —
+they were called Large *because* they were running long — and a multiplier derived from that
+restates its own input.
+
+A convention is sufficient here, because of what this number is for. Weighted WIP compares
+engineers **against each other at one instant**, not against a historical baseline, so it needs a
+*monotone* scale rather than a calibrated one; any sane increasing weights rank the roster the same
+way. By the same token, late sizing cannot corrupt it: WIP is read at the moment of the routing
+decision, so a mid-flight bump makes the load estimate *more* accurate, and a size set after a
+ticket closes never enters the sum at all.
+
+`_SIZE_RATIOS` (S 0.7 / M 1.6 / L 2.8 / XL 4.5) are scaled by `_NORMALISATION` so that
+`_REFERENCE_MIX` — the sized DEVOPS completions in the 180 days to 2026-09-18 — averages exactly
+**1.0**. Three things follow, and the first is why this shipped at 59% coverage rather than waiting:
+
+- **An unsized ticket weighs 1.0**, so a roster with nothing sized produces numbers identical to
+  the count-based version. No threshold, no fallback branch, no caveat text — it degrades
+  continuously as sizing fills in. (Pinned by a regression test.)
+- **The units survive.** `velocity` and `done_this_month` are ticket counts; without the
+  normalization `spare` would subtract a weighted sum from a count.
+- **The mix is pinned, not live.** Recomputing it each poll would make every engineer's capacity
+  drift for reasons unrelated to their own workload.
+
+What this does *not* do is match an incoming ticket's size to an engineer's remaining headroom.
+Queue tickets are unsized (0 of the current queue, against 59% of WIP — sizing happens once someone
+understands the work, not at triage, which is the point of minimum information about a ticket). So
+this makes the **denominator** honest, not the match, and the page copy claims only that.
+
 - **velocity** is each engineer's typical monthly output — the recency-weighted average of their
   completed Jira tickets over the last three complete months (`velocity._forecast`'s `baseline`).
   The velocity dashboard additionally blends this toward the current month's pace for its own

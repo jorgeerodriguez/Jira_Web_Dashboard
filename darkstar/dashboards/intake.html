@@ -206,9 +206,10 @@
   <div id="queue"></div>
 
   <h2>Team capacity</h2>
-  <p class="h2sub">Spare capacity = predicted July velocity − current active WIP — delivery tickets only (Story/Task/Bug/Hotfix/Sub-task), excluding epics/initiatives. Sorted by most headroom. This is the basis for the suggestions above.</p>
+  <p class="h2sub">Spare capacity = predicted monthly velocity − completions so far this month − current active WIP — delivery tickets only (Story/Task/Bug/Hotfix/Sub-task), excluding epics/initiatives. Sorted by most headroom. This is the basis for the suggestions above.</p>
+  <p class="h2sub"><b>WIP is weighted by Estimated Size</b>, so someone holding an XL no longer reads as free as someone holding a Small. The weights (S&nbsp;0.68 · M&nbsp;1.55 · L&nbsp;2.71 · XL&nbsp;4.36) are a <b>team convention, not a measurement</b> — sizes are usually set after work starts, which makes them useless as a historical estimate of effort and perfectly good as a statement of current load. They are scaled so the average ticket weighs 1.0, so a ticket with no size set weighs exactly one ticket and an unsized team sees the same numbers as before. This makes the <i>denominator</i> honest; it does not match an incoming ticket's size to anyone's headroom, because queue tickets are not sized.</p>
   <div class="caps" id="capacity"></div>
-  <div class="cap-legend">bar = <b>done</b> (solid) + active <b>WIP</b> (dotted) this month · tick = predicted monthly <b>capacity</b> · <span style="color:var(--pos)">+N</span> = spare (velocity − done − WIP)</div>
+  <div class="cap-legend">bar = <b>done</b> (solid) + active <b>WIP</b> (dotted, size-weighted) this month · tick = predicted monthly <b>capacity</b> · <span style="color:var(--pos)">+N</span> = spare (velocity − done − WIP)</div>
 
   <h2>Domain SMEs</h2>
   <p class="h2sub">Top contributors per domain, blending Jira ticket titles (656; 63% tagged) with GitLab merge-request authorship over the trailing 30 days — additive counts; the muted <b>(N mr)</b> is the GitLab-MR portion of the total. This drives the SME suggestion in the queue above.</p>
