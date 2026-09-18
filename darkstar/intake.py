@@ -123,7 +123,13 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
     # WIP is summed by size weight, not counted: an engineer holding an XL is not as free as one
     # holding a Small, and a plain count said they were. Grouped by size so the weighting happens
     # here rather than in SQL, keeping the weight table the single place sizes turn into numbers.
+    # Unsized WIP is tracked alongside the weight, not derived from it: once a ticket is folded
+    # into a float there is no way back out, and the count is what says how much of the weight is
+    # informed. ~41% of WIP carries no size and silently weighs 1.0, which is a defensible default
+    # and an indefensible thing to hide.
     wip_by_key: dict[str, float] = {}
+    unsized_by_key: dict[str, int] = {}
+    sized_by_key: dict[str, int] = {}
     for account_id, estimated_size, count in connection.execute(
         f"SELECT assignee_account_id, estimated_size, count(*) FROM issues "
         f"WHERE issuetype IN ({delivery}) AND status IN ({wip_statuses}) "
@@ -133,6 +139,12 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
         key = _KEY_BY_ACCOUNT.get(account_id)
         if key:
             wip_by_key[key] = wip_by_key.get(key, 0.0) + weight_of(estimated_size) * count
+            # An unrecognised size is counted as unsized for the same reason weight_of falls back:
+            # it is a size darkstar cannot price, so the weight is a guess and the page should say so.
+            if estimated_size in SIZE_WEIGHTS:
+                sized_by_key[key] = sized_by_key.get(key, 0) + count
+            else:
+                unsized_by_key[key] = unsized_by_key.get(key, 0) + count
 
     roster = {
         # wip is rounded to one decimal: the gauge and the spare arithmetic read better in whole-ish
@@ -140,7 +152,10 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
         # 4.300000000000001 (the same reason velocity's forecast rounds).
         name.lower(): {"name": name, "vel": vel_by_key.get(name.lower(), 0),
                        "wip": round(wip_by_key.get(name.lower(), 0.0), 1),
-                       "done": done_by_key.get(name.lower(), 0)}
+                       "done": done_by_key.get(name.lower(), 0),
+                       "unsized": unsized_by_key.get(name.lower(), 0),
+                       "tickets": (unsized_by_key.get(name.lower(), 0)
+                                   + sized_by_key.get(name.lower(), 0))}
         for name in ROSTER.values()
     }
 

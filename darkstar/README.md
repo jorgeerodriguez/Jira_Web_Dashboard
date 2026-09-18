@@ -978,6 +978,15 @@ ticket closes never enters the sum at all.
 - **The mix is pinned, not live.** Recomputing it each poll would make every engineer's capacity
   drift for reasons unrelated to their own workload.
 
+**Coverage is shown, not assumed.** Each capacity row carries an `N unsized` note when any of that
+engineer's active tickets has no size, highlighted once it is most of them — at which point their
+spare figure is largely the old ticket count wearing a decimal point. It is absent at full
+coverage, because a callout that is always on stops being read. The counts (`unsized`, `tickets`)
+ride alongside the weight in the API rather than being derived from it: once tickets are folded
+into a float there is no way back out, and "3 of 5" is the whole message. An unrecognised size —
+one added in Jira that darkstar does not price — counts as unsized, consistent with `weight_of`
+falling back to the average-ticket weight.
+
 What this does *not* do is match an incoming ticket's size to an engineer's remaining headroom.
 Queue tickets are unsized (0 of the current queue, against 59% of WIP — sizing happens once someone
 understands the work, not at triage, which is the point of minimum information about a ticket). So

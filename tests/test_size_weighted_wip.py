@@ -137,3 +137,59 @@ def test_an_engineer_with_no_wip_is_zero_not_missing():
     """The client indexes the roster by key and would render undefined for a missing entry."""
     conn = _store([_issue("DEVOPS-1", _ADAM, "Small")])
     assert _wip(conn, "vlad") == 0
+
+
+# --- unsized-WIP visibility (DEVOPS-10569) -------------------------------------------------------
+# The weighting above is only as good as its coverage, and an unsized ticket weighs 1.0 silently.
+# These pin the counts the page needs to say so out loud.
+
+def _row(conn, key):
+    return intake.intake_report(conn, _NOW)["roster"][key]
+
+
+def test_unsized_wip_is_counted_per_engineer_not_just_team_wide():
+    """A team-level coverage figure hides the row that is actually wrong."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, None), _issue("DEVOPS-2", _ADAM, None),
+                   _issue("DEVOPS-3", _VLAD, "Small")])
+    assert _row(conn, "adam")["unsized"] == 2
+    assert _row(conn, "vlad")["unsized"] == 0
+
+
+def test_the_ticket_count_survives_alongside_the_weight():
+    """`wip` is a float once weighted, so the raw count has to be carried separately or the page
+    cannot say "3 of 5" — and 3-of-5 is the whole message."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, None), _issue("DEVOPS-2", _ADAM, "Large"),
+                   _issue("DEVOPS-3", _ADAM, "XL")])
+    row = _row(conn, "adam")
+    assert row["tickets"] == 3 and row["unsized"] == 1
+
+
+def test_a_fully_sized_engineer_reports_zero_unsized():
+    """Zero is what makes the callout disappear; a missing key would render undefined."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Medium")])
+    assert _row(conn, "adam")["unsized"] == 0
+
+
+def test_an_unrecognised_size_counts_as_unsized():
+    """It is priced at the fallback weight, so the page must not claim that row is informed.
+
+    Consistent with weight_of: a size added in Jira that darkstar does not know degrades to the
+    average-ticket weight, and this is the disclosure that goes with it.
+    """
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Enormous")])
+    row = _row(conn, "adam")
+    assert row["unsized"] == 1 and row["tickets"] == 1
+    assert row["wip"] == round(intake.UNSIZED_WEIGHT, 1)
+
+
+def test_done_tickets_are_excluded_from_the_coverage_figures_too():
+    """Coverage describes current load. Closed work is not load and not this row's problem."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, None, status="Done"),
+                   _issue("DEVOPS-2", _ADAM, "Small")])
+    row = _row(conn, "adam")
+    assert row["tickets"] == 1 and row["unsized"] == 0
+
+
+def test_an_engineer_with_no_wip_reports_zero_rather_than_missing():
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Small")])
+    assert _row(conn, "vlad")["unsized"] == 0 and _row(conn, "vlad")["tickets"] == 0
