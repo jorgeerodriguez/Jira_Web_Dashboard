@@ -193,3 +193,49 @@ def test_done_tickets_are_excluded_from_the_coverage_figures_too():
 def test_an_engineer_with_no_wip_reports_zero_rather_than_missing():
     conn = _store([_issue("DEVOPS-1", _ADAM, "Small")])
     assert _row(conn, "vlad")["unsized"] == 0 and _row(conn, "vlad")["tickets"] == 0
+
+
+# --- per-engineer size mix (DEVOPS-10570) --------------------------------------------------------
+# The weighted total says a row moved; the mix says why. These pin the shape the gauge reads.
+
+def test_the_mix_breaks_wip_down_by_size():
+    """Without this the page can show that a row is heavy but not what is making it heavy."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, "XL"), _issue("DEVOPS-2", _ADAM, "Medium"),
+                   _issue("DEVOPS-3", _ADAM, "Medium")])
+    assert _row(conn, "adam")["mix"] == {"XL": 1, "Medium": 2}
+
+
+def test_unsized_is_its_own_bucket_never_folded_into_a_size():
+    """"No size recorded" is a different statement from "small".
+
+    Folding them would let a coverage gap read as a light workload — the precise misreading the
+    unsized callout exists to prevent, so the mix must not reintroduce it.
+    """
+    conn = _store([_issue("DEVOPS-1", _ADAM, None), _issue("DEVOPS-2", _ADAM, "Small")])
+    assert _row(conn, "adam")["mix"] == {intake.UNSIZED_LABEL: 1, "Small": 1}
+
+
+def test_the_mix_counts_reconcile_with_the_weighted_total():
+    """The gauge sizes each segment from these counts, so a drift here silently mis-draws the bar."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Large"), _issue("DEVOPS-2", _ADAM, "Large"),
+                   _issue("DEVOPS-3", _ADAM, None)])
+    row = _row(conn, "adam")
+    rebuilt = sum(n * intake.weight_of(None if s == intake.UNSIZED_LABEL else s)
+                  for s, n in row["mix"].items())
+    assert round(rebuilt, 1) == row["wip"]
+    assert sum(row["mix"].values()) == row["tickets"]
+
+
+def test_an_engineer_with_no_wip_has_an_empty_mix_not_a_missing_key():
+    """The client iterates it directly; undefined would throw rather than render nothing."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Small")])
+    assert _row(conn, "vlad")["mix"] == {}
+
+
+def test_the_weight_table_is_published_so_the_client_need_not_restate_it():
+    """The gauge sizes segments by weight. A second copy in the dashboard would drift the moment
+    the convention is retuned, so the payload carries the one table."""
+    conn = _store([_issue("DEVOPS-1", _ADAM, "Small")])
+    report = intake.intake_report(conn, _NOW)
+    assert report["weights"] == intake.SIZE_WEIGHTS
+    assert report["unsized_label"] == intake.UNSIZED_LABEL
