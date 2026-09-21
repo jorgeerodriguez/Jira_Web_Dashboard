@@ -1131,10 +1131,42 @@ GCP Core and Terraform/Terragrunt, which is a separate decision.
 `tf-amperwave-nonprod` each carry a `kms/` unit and all three are AWS; the bare form would relabel
 real AWS work as GCP and quietly make whoever does it look like a GCP SME.
 
-**Known drift, not fixed here:** `firestore` and `secret-manager` appear in the client
-`DOMAIN_PATTERNS` and not in `gitlab_domains`. Since the path tagger is the dense signal (97% match
-rate against 63% for Jira titles), a client-only pattern contributes almost nothing — those two are
-effectively unmapped despite looking mapped. Nothing checks the two lists against each other.
+**`tf-gcp-` is the largest single fix in this pass.** GCP Core keyed on the `/gcp/` path segment,
+which catches repos inside the GCP group — but the GCP *modules* live at
+`devops/terraform/modules/tf-gcp-*`, where there is no such segment. **49 repos, 63 MRs** —
+`tf-gcp-project`, `tf-gcp-organization`, `tf-gcp-folder`, `tf-gcp-eventarc`,
+`tf-gcp-document-ai-processor` and forty more — read as plain Terraform. The prefix catches all of
+them at once.
+
+**Four domains split out because the work is growing, not because it has volume yet** —
+**Firebase**, **Firestore**, **Looker** and **GCP Agent Platform**. Firestore leaves `Databases`
+and Looker leaves `BigQuery/Data`, the way EKS came out of `Kubernetes/GitOps`; leaving them in
+both would double-count the same work and let the coarse bucket keep claiming the specialist.
+Volume today is near zero (Firebase has no repos at all), and that is fine: the matrix hides a
+domain until somebody has history in it, so an empty row costs nothing — where a *missing* domain
+files the work as generic GCP for however long it takes anyone to notice.
+
+**AgentCore is treated as Bedrock.** `agentcore` and `devops-agent` now match **AWS Bedrock
+Agents**: the AgentCore modules and the deployed PE agent are the same competency the domain
+already named, and 33 MRs across the `tf-aws-agentcore/*` submodules read as plain AWS Core
+before this.
+
+**Never a bare `agent`.** `tf-gcp-sts-agent-pool`, `tf-aws-datasync-agent` and
+`tf-gcp-service-agents` are a storage-transfer agent pool, a DataSync agent and GCP service
+agents — nothing to do with agentic AI. Matching the bare word would credit that expertise to
+whoever wired up a transfer job. The patterns name `agentcore`, `devops-agent`, `agent-platform`
+and `agentspace` instead, and a test pins the three negatives.
+
+**The two taggers are now checked against each other.** They are supposed to share domain names so
+the path signal and the title signal land in one bucket, and they had already drifted — `firestore`
+and `secret-manager` were in the client list and absent from the server one. Since the path tagger
+is the dense signal (97% match rate against 63% for Jira titles), a client-only pattern contributes
+almost nothing, so that drift meant "mapped" domains that were effectively unmapped. A test now
+asserts every server domain exists on the client and appears in `DOMAIN_PRIORITY`.
+
+**Still unmapped on the server side:** `secret-manager` (client-only). Left alone here rather than
+folded in blind — `Secrets/Vault` already matches `/secrets?/`, so the overlap wants a look before
+another pattern is added.
 
 ### Domains and overrides
 

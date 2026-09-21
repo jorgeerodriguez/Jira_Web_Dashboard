@@ -18,14 +18,18 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubernetes/GitOps": r"clusters/|namespaces/|helmrelease|kustomization|/helm/|\bk8s\b|karpenter|nodepool|nodeclass|kube-system|argocd|/flux|gitrepository|daemonset|statefulset|\bcrds?\b",
     "Terraform/Terragrunt": r"terragrunt\.hcl|\.tf$|\.tftpl|\.tfvars|/tf-|terraform|\.hcl$",
     "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b|cloudfront",
-    # Named services as well as the /gcp/ path segment. The segment already catches every tf-gcp-*
-    # repo, so these add no tags today -- they make the mapping intentional instead of an accident
-    # of where the repos happen to live, and they catch a GCP service provisioned from anywhere else.
+    # Named services and the tf-gcp- prefix as well as the /gcp/ path segment. The segment catches
+    # repos inside the GCP group; the prefix catches the 49 tf-gcp-* MODULES that live under
+    # devops/terraform/modules/ and so read as plain Terraform without it.
     # cloud-?kms, never a bare \bkms\b: tf-coreservices, tf-aardvark2-prod and tf-amperwave-nonprod
     # all have kms/ units and all three are AWS, so the bare form would relabel AWS KMS as GCP.
     "GCP Core": (r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/"
-                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"),
-    "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|looker|\bedp\b",
+                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"
+                 # tf-gcp-* modules live under devops/terraform/modules/, which has no /gcp/
+                 # segment, so 49 GCP module repos (63 MRs) read as plain Terraform without this.
+                 r"|tf-gcp-"),
+    # looker moved to its own domain: Looker Core is a BI platform deployment, not a warehouse.
+    "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|\bedp\b",
     "Grafana": r"grafana|dashboards?/|prometheus|\bloki\b|\btempo\b|alerting|servicemonitor|scrape",
     "GitLab": r"\.gitlab-ci|/\.gitlab/|(^|/)ci/|\bpipeline",
     "IAM/RBAC": r"\biam\b|/rbac|service-?account|workload-?identity|/roles?/|policies?/|clusterrole|\bsso\b|okta|tf-org\b",
@@ -38,7 +42,7 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Storage Transfer": r"storage-?transfer|\bsts\b",
     "VDI/WorkSpaces": r"workspace|\bvdi\b|gcve|vsphere|citrix",
     "AI Plugins": r"audacy-ai-plugins",
-    "AWS Bedrock Agents": r"pe-agent|claude-sdk-pe-agent|bedrock",
+    "AWS Bedrock Agents": r"pe-agent|claude-sdk-pe-agent|bedrock|agentcore|devops-agent",
     # specialized services pulled out of the core buckets (per Adam) — not everyday skills.
     "EKS": r"\beks\b|eks-node|eks-cluster",
     "ECS": r"\becs\b|fargate",
@@ -49,6 +53,15 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubeflow Pipelines": r"kubeflow|\bkfp\b",
     "Route53": r"tf-sharedservices|route\s?53|\br53\b",
     "Fastly": r"fastly",  # 3rd-party CDN (distinct from AWS CloudFront) — specialized, called out on its own
+    # Four called out on their own because all are expected to grow. Low or zero volume today is
+    # fine: the matrix hides a domain until somebody has history in it, so an empty row costs
+    # nothing, while a missing domain silently files the work as generic GCP for however long it
+    # takes anyone to notice. firestore and looker are pulled OUT of Databases and BigQuery/Data
+    # respectively, the way EKS came out of Kubernetes/GitOps.
+    "GCP Agent Platform": r"agent-?platform|agent[-_ ]?space",
+    "Firestore": r"firestore",
+    "Firebase": r"firebase",
+    "Looker": r"looker",
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {

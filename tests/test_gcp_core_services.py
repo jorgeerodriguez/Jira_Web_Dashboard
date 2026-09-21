@@ -68,3 +68,92 @@ def test_the_client_tagger_knows_the_same_services():
         assert any(term in p.lower() for p in patterns), f"client GCP Core is missing {term!r}"
     assert not any(re.fullmatch(r"\\\\bkms\\\\b", p) for p in patterns), \
         "a bare kms pattern would sweep AWS KMS into GCP Core on the Jira side too"
+
+
+# --- domains added because the work is growing, not because it has volume yet --------------------
+# Firebase, Firestore, Looker and GCP Agent Platform are called out on Adam's direction: all four
+# are expected to grow. A domain with no history is hidden by the matrix, so an empty row costs
+# nothing, where a MISSING domain files the work as generic GCP until somebody notices.
+
+_NEW = {
+    "GCP Agent Platform": ["tf-gcp-agent-platform", "agentspace", "agent-space"],
+    "Firestore": ["tf-gcp-firestore", "firestore"],
+    "Firebase": ["tf-gcp-firebase", "firebase"],
+    "Looker": ["tf-gcp-looker-core", "looker"],
+}
+
+
+@pytest.mark.parametrize("domain,samples", list(_NEW.items()))
+def test_each_new_domain_matches_its_own_work(domain, samples):
+    for s in samples:
+        assert domain in _domains("audacy-inc/devops/terraform/modules", s), f"{s} -> {domain}"
+
+
+def test_firestore_and_looker_left_the_buckets_they_were_folded_into():
+    """Pulled out the way EKS came out of Kubernetes/GitOps. Leaving them in both would double-count
+    the same work and let the coarse bucket keep claiming the specialist."""
+    assert "Databases" not in _domains("x", "firestore")
+    assert "BigQuery/Data" not in _domains("x", "looker")
+
+
+# --- agentcore is bedrock -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("repo", [
+    "audacy-inc/devops/terraform/modules/tf-aws-agentcore/runtime",
+    "audacy-inc/devops/terraform/modules/tf-aws-devops-agent",
+    "audacy-inc/devops/agentcore/pe-agent",
+])
+def test_agentcore_work_lands_in_aws_bedrock_agents(repo):
+    """Same competency, so the same domain (Adam's call). 33 MRs across the tf-aws-agentcore
+    submodules alone read as plain AWS Core before this."""
+    assert "AWS Bedrock Agents" in gitlab_domains.domains_for(repo, [])
+
+
+@pytest.mark.parametrize("repo", [
+    "audacy-inc/devops/terraform/modules/tf-gcp-sts-agent-pool",
+    "audacy-inc/devops/terraform/modules/tf-aws-datasync-agent",
+    "audacy-inc/devops/terraform/modules/tf-gcp-service-agents",
+])
+def test_unrelated_agents_are_not_swept_into_an_agent_domain(repo):
+    """Why the patterns name `agentcore`/`devops-agent`/`agent-platform` and never a bare `agent`.
+
+    A storage-transfer agent pool, a DataSync agent and GCP service agents have nothing to do with
+    agentic AI, and matching them would credit that expertise to whoever wired up a transfer job.
+    """
+    found = gitlab_domains.domains_for(repo, [])
+    assert "AWS Bedrock Agents" not in found and "GCP Agent Platform" not in found
+
+
+# --- the tf-gcp- prefix, which is the largest single gap the sweep found -------------------------
+
+def test_gcp_modules_outside_the_gcp_group_are_still_gcp():
+    """49 repos / 63 MRs. GCP Core keyed on the `/gcp/` path segment, but the modules live under
+    devops/terraform/modules/tf-gcp-*, so every one of them read as plain Terraform."""
+    for repo in ("audacy-inc/devops/terraform/modules/tf-gcp-project",
+                 "audacy-inc/devops/terraform/modules/tf-gcp-organization",
+                 "audacy-inc/devops/terraform/modules/tf-gcp-eventarc"):
+        assert "GCP Core" in gitlab_domains.domains_for(repo, [])
+
+
+def test_the_tf_prefix_does_not_make_aws_modules_gcp():
+    """`tf-gcp-` is anchored on the gcp segment; `tf-aws-*` must be untouched by it."""
+    assert "GCP Core" not in gitlab_domains.domains_for(
+        "audacy-inc/devops/terraform/modules/tf-aws-datasync-agent", [])
+
+
+# --- the two taggers must agree on names ----------------------------------------------------------
+
+def test_every_server_domain_exists_on_the_client_too():
+    """The two lists are supposed to share names so the path signal and the title signal land in
+    one bucket. They had already drifted, and nothing checked it — so this checks it."""
+    import json
+    import re
+    from pathlib import Path
+    page = (Path(__file__).resolve().parents[1]
+            / "darkstar" / "dashboards" / "intake.html").read_text(encoding="utf-8")
+    client = set(json.loads(re.search(r"const DOMAIN_PATTERNS = (\{.*?\});", page, re.S).group(1)))
+    priority = set(json.loads(re.search(r"const DOMAIN_PRIORITY = (\[.*?\]);", page, re.S).group(1)))
+    server = set(gitlab_domains._DOMAIN_PATTERNS)
+
+    assert not server - client, f"domains the client cannot name: {server - client}"
+    assert not client - priority, f"domains missing from DOMAIN_PRIORITY: {client - priority}"
