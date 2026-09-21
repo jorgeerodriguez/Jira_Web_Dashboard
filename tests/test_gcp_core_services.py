@@ -124,21 +124,26 @@ def test_unrelated_agents_are_not_swept_into_an_agent_domain(repo):
     assert "AWS Bedrock Agents" not in found and "GCP Agent Platform" not in found
 
 
-# --- the tf-gcp- prefix, which is the largest single gap the sweep found -------------------------
+# --- the tf-gcp-* modules ------------------------------------------------------------------------
+# These 49 repos were the largest gap the sweep found, and the first attempt fixed them the wrong
+# way: a `tf-gcp-` pattern pulled them into GCP Core. They are module repos, so they belong to
+# Terraform Modules instead — the cloud in the name is what the module targets, not what the
+# author was operating.
 
-def test_gcp_modules_outside_the_gcp_group_are_still_gcp():
-    """49 repos / 63 MRs. GCP Core keyed on the `/gcp/` path segment, but the modules live under
-    devops/terraform/modules/tf-gcp-*, so every one of them read as plain Terraform."""
+def test_gcp_modules_are_module_work_not_gcp_work():
     for repo in ("audacy-inc/devops/terraform/modules/tf-gcp-project",
                  "audacy-inc/devops/terraform/modules/tf-gcp-organization",
                  "audacy-inc/devops/terraform/modules/tf-gcp-eventarc"):
-        assert "GCP Core" in gitlab_domains.domains_for(repo, [])
+        found = gitlab_domains.domains_for(repo, [])
+        assert found == {gitlab_domains.MODULES_DOMAIN}, found
 
 
-def test_the_tf_prefix_does_not_make_aws_modules_gcp():
-    """`tf-gcp-` is anchored on the gcp segment; `tf-aws-*` must be untouched by it."""
-    assert "GCP Core" not in gitlab_domains.domains_for(
-        "audacy-inc/devops/terraform/modules/tf-aws-datasync-agent", [])
+def test_the_gcp_service_names_do_not_drag_modules_into_gcp_core():
+    """tf-gcp-kms and tf-gcp-logging match the GCP Core service patterns on their names; the
+    modules rule has to win, or the cloud bucket creeps back in through the side door."""
+    for repo in ("audacy-inc/devops/terraform/modules/tf-gcp-kms",
+                 "audacy-inc/devops/terraform/modules/tf-gcp-logging"):
+        assert "GCP Core" not in gitlab_domains.domains_for(repo, [])
 
 
 # --- the two taggers must agree on names ----------------------------------------------------------
@@ -157,3 +162,51 @@ def test_every_server_domain_exists_on_the_client_too():
 
     assert not server - client, f"domains the client cannot name: {server - client}"
     assert not client - priority, f"domains missing from DOMAIN_PRIORITY: {client - priority}"
+
+
+# --- module authoring is its own competency ------------------------------------------------------
+# Per Adam: anything under devops/terraform/modules/ is raw Terraform, one domain, whatever cloud
+# the module targets. Writing tf-gcp-firestore is writing reusable HCL — variables, validation,
+# examples, a release — not running Firestore in production, and it is frequently a different person.
+
+_MODULES = "audacy-inc/devops/terraform/modules"
+
+
+def test_a_module_repo_is_terraform_modules():
+    assert gitlab_domains.MODULES_DOMAIN in gitlab_domains.domains_for(f"{_MODULES}/tf-gcp-project", [])
+
+
+@pytest.mark.parametrize("repo,cloud", [("tf-gcp-project", "GCP Core"),
+                                        ("tf-aws-datasync-agent", "AWS Core")])
+def test_a_module_repo_loses_its_cloud_bucket(repo, cloud):
+    """The point of the domain: module skill does not depend on which cloud the module targets."""
+    assert cloud not in gitlab_domains.domains_for(f"{_MODULES}/{repo}", [])
+
+
+def test_a_module_repo_does_not_also_claim_plain_terraform():
+    """Terraform Modules is the more specific claim; keeping both says nothing extra."""
+    assert "Terraform/Terragrunt" not in gitlab_domains.domains_for(f"{_MODULES}/tf-gcp-project", [])
+
+
+@pytest.mark.parametrize("repo,kept", [
+    ("tf-gcp-looker-core", "Looker"),
+    ("tf-gcp-firestore", "Firestore"),
+    ("tf-gcp-agent-platform", "GCP Agent Platform"),
+    ("tf-aws-agentcore/runtime", "AWS Bedrock Agents"),
+])
+def test_a_module_repo_keeps_its_service_domain(repo, kept):
+    """Service domains survive the suppression, and they have to.
+
+    Every repo behind Looker, Firestore and GCP Agent Platform is a module — suppressing these
+    would leave all three domains with no evidence at all, days after they were created.
+    """
+    found = gitlab_domains.domains_for(f"{_MODULES}/{repo}", [])
+    assert kept in found and gitlab_domains.MODULES_DOMAIN in found
+
+
+def test_an_estate_repo_is_untouched_by_the_modules_rule():
+    """tf-coreservices and the tf-gcp-* estate repos are operations, not module authoring."""
+    assert gitlab_domains.MODULES_DOMAIN not in gitlab_domains.domains_for(
+        "audacy-inc/devops/terraform/tf-coreservices", [])
+    gcp = gitlab_domains.domains_for("audacy-inc/gcp/devops/tf-gcp-ai-traffic-prod", [])
+    assert "GCP Core" in gcp and gitlab_domains.MODULES_DOMAIN not in gcp

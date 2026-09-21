@@ -18,16 +18,13 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubernetes/GitOps": r"clusters/|namespaces/|helmrelease|kustomization|/helm/|\bk8s\b|karpenter|nodepool|nodeclass|kube-system|argocd|/flux|gitrepository|daemonset|statefulset|\bcrds?\b",
     "Terraform/Terragrunt": r"terragrunt\.hcl|\.tf$|\.tftpl|\.tfvars|/tf-|terraform|\.hcl$",
     "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b|cloudfront",
-    # Named services and the tf-gcp- prefix as well as the /gcp/ path segment. The segment catches
-    # repos inside the GCP group; the prefix catches the 49 tf-gcp-* MODULES that live under
-    # devops/terraform/modules/ and so read as plain Terraform without it.
+    # Named services as well as the /gcp/ path segment, so a GCP service provisioned from outside
+    # the GCP group still resolves. Deliberately NOT a tf-gcp- prefix: those are module repos, and
+    # authoring one is module work rather than operating that cloud (see MODULES_DOMAIN below).
     # cloud-?kms, never a bare \bkms\b: tf-coreservices, tf-aardvark2-prod and tf-amperwave-nonprod
     # all have kms/ units and all three are AWS, so the bare form would relabel AWS KMS as GCP.
     "GCP Core": (r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/"
-                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"
-                 # tf-gcp-* modules live under devops/terraform/modules/, which has no /gcp/
-                 # segment, so 49 GCP module repos (63 MRs) read as plain Terraform without this.
-                 r"|tf-gcp-"),
+                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"),
     # looker moved to its own domain: Looker Core is a BI platform deployment, not a warehouse.
     "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|\bedp\b",
     "Grafana": r"grafana|dashboards?/|prometheus|\bloki\b|\btempo\b|alerting|servicemonitor|scrape",
@@ -64,15 +61,38 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Looker": r"looker",
 }
 
+# Everything under devops/terraform/modules/ is module authoring, and that is one competency
+# whatever cloud the module happens to target (per Adam). Writing tf-gcp-firestore is writing
+# reusable HCL -- variables, validation, examples, a release -- not running Firestore in
+# production, and the person who does one is frequently not the person who does the other.
+MODULES_DOMAIN: str = "Terraform Modules"
+_MODULES_PATH = re.compile(r"/terraform/modules/|/terraform/modules$", re.IGNORECASE)
+
+# Dropped from a module repo's tags. The cloud buckets because the whole point is that module work
+# is cloud-agnostic; Terraform/Terragrunt because MODULES_DOMAIN is the more specific claim and
+# keeping both would say nothing the other does not. Service-specific domains are KEPT: a Looker
+# module is still the Looker signal this team has, and suppressing it would leave the domain with
+# no evidence at all -- every repo behind Looker, Firestore and GCP Agent Platform is a module.
+_MODULE_SUPPRESSED: frozenset[str] = frozenset({"AWS Core", "GCP Core", "Terraform/Terragrunt"})
+
 _COMPILED: dict[str, re.Pattern[str]] = {
     domain: re.compile(pattern, re.IGNORECASE) for domain, pattern in _DOMAIN_PATTERNS.items()
 }
 
 
 def domains_for(project_path: str, paths: list[str]) -> set[str]:
-    """The set of domains an MR touches, matched over its repo path and changed file paths."""
+    """The set of domains an MR touches, matched over its repo path and changed file paths.
+
+    A merge request against devops/terraform/modules/ is module authoring: it takes MODULES_DOMAIN
+    and loses the cloud buckets, because that skill does not depend on which cloud the module
+    targets. It keeps any service-specific domain it matched -- a Looker module is still evidence
+    about Looker.
+    """
     haystack = project_path + "\n" + "\n".join(paths)
-    return {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
+    found = {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
+    if _MODULES_PATH.search(project_path):
+        return (found - _MODULE_SUPPRESSED) | {MODULES_DOMAIN}
+    return found
 
 
 # -- Deployment environment, read from the repo name ------------------------------------------

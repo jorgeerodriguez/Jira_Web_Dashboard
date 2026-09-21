@@ -1131,12 +1131,26 @@ GCP Core and Terraform/Terragrunt, which is a separate decision.
 `tf-amperwave-nonprod` each carry a `kms/` unit and all three are AWS; the bare form would relabel
 real AWS work as GCP and quietly make whoever does it look like a GCP SME.
 
-**`tf-gcp-` is the largest single fix in this pass.** GCP Core keyed on the `/gcp/` path segment,
-which catches repos inside the GCP group — but the GCP *modules* live at
-`devops/terraform/modules/tf-gcp-*`, where there is no such segment. **49 repos, 63 MRs** —
-`tf-gcp-project`, `tf-gcp-organization`, `tf-gcp-folder`, `tf-gcp-eventarc`,
-`tf-gcp-document-ai-processor` and forty more — read as plain Terraform. The prefix catches all of
-them at once.
+**Module authoring is its own domain: `Terraform Modules`.** Everything under
+`devops/terraform/modules/` — **69 repos, 135 MRs, 9% of PE's output** — takes it, and that is one
+competency whatever cloud the module targets. Writing `tf-gcp-firestore` is writing reusable HCL
+(variables, validation, examples, a release); it is not running Firestore in production, and it is
+frequently not the same person.
+
+A module repo therefore **loses the cloud buckets** (`AWS Core`, `GCP Core`) and `Terraform/
+Terragrunt` — the first two because the skill is cloud-agnostic, the third because
+`Terraform Modules` is the more specific claim and keeping both says nothing extra. This is a
+suppression rule in `domains_for`, not a pattern, because it has to beat patterns that would
+otherwise match: `tf-gcp-kms` and `tf-gcp-logging` hit the GCP Core service names, and without the
+rule the cloud bucket creeps back in through the side door.
+
+Service-specific domains are **kept**. A Looker module is still the Looker signal this team has —
+and it has to be, because every repo behind `Looker`, `Firestore` and `GCP Agent Platform` is a
+module. Suppressing those too would leave all three with no evidence at all.
+
+*Superseded:* an earlier pass added a `tf-gcp-` pattern to GCP Core to catch these 49 module repos.
+That was the wrong fix — the cloud in a module's name is what it targets, not what its author was
+operating.
 
 **Four domains split out because the work is growing, not because it has volume yet** —
 **Firebase**, **Firestore**, **Looker** and **GCP Agent Platform**. Firestore leaves `Databases`
