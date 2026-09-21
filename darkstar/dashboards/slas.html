@@ -126,6 +126,10 @@
   td.num{font-family:var(--mono)}
   tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
   tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
+  /* Added authors with nothing in the window. Muted and fenced off above, so they read as "listed,
+     nothing measured" rather than as a measured zero sitting in the ranking. */
+  tbody tr.zrow td{color:var(--muted)}
+  tbody tr.zfirst td{border-top:1px dashed var(--line2); padding-top:10px}
   tbody tr.sum.first td{padding-top:14px}
   .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
 
@@ -767,9 +771,12 @@ function authorColours(d){
 function renderMrTable(d){
   const colour = authorColours(d);
   const terms = mrFilterTerms();
-  const shown = terms.length
-    ? d.authors.filter(a=>terms.some(t=>a.name.toLowerCase().includes(t)))
-    : d.authors;
+  /* The filter round-trips to the server -- the daily medians cannot be re-derived in the page --
+     so both lists arrive already filtered, and the server is the only side that knows a row's
+     aliases. Re-filtering here on `a.name` alone threw away exactly the rows the alias match had
+     just admitted: you searched "Trevor Atchley", the server found him, and the page dropped him
+     again because the row renders under his roster name, "Trevor". */
+  const shown = d.authors;
   const head=`<thead><tr><th>Author</th><th>Merged</th><th>Median</th>`+
              `<th>p90</th><th></th></tr></thead>`;
   const seriesKey = new Map((d.series || []).map((sr, i) => [sr.name, String(i)]));
@@ -787,6 +794,21 @@ function renderMrTable(d){
   if(mrPage < 0) mrPage = 0;
   const from = mrPage * mrPerPage;
   const rows = shown.slice(from, from + mrPerPage).map(a=>row(a,"")).join("");
+  /* Added authors who merged no self-service MR in this window. Deliberately OUTSIDE the pager:
+     they are the answer to "I added someone and nothing happened", which a person will not go
+     looking for on page 3. No data-k either -- they have no series, so nothing to link to the
+     chart. Filtered and hidden names are already excluded server-side. */
+  const absent = d.absent || [];
+  const zrow=(a,first)=>`<tr class="zrow${first?" zfirst":""}" title="${a.last_self_service
+       ? `Last merged self-service work on ${esc(a.last_self_service)}`
+       : "Has never merged a self-service MR"}">
+     <td>${esc(a.name)}${a.tracked?' <span class="na">·&nbsp;non-roster</span>':''}</td>
+     <td class="num">0</td>
+     <td class="num">${dur(null)}</td>
+     <td class="num">${dur(null)}</td>
+     <td class="num"><button class="rowx" type="button" data-hide="${esc(a.name)}" title="Hide ${esc(a.name)}">\u00d7</button></td>
+   </tr>`;
+  const zrows = absent.map((a,i)=>zrow(a, i===0)).join("");
   // The team row describes every author the filter admits, not the five on this page. Paging is a
   // view, not a population: a total that changed as you clicked Next would mean nothing at all.
   const team = row(Object.assign({name:"Team (all authors)", tracked:false}, d.team), "sum");
@@ -798,9 +820,17 @@ function renderMrTable(d){
       ? '<tr><td colspan="5" class="na">Nobody in this view merged a self-service MR in the window.</td></tr>'
       : '<tr><td colspan="5" class="na">This view is empty. Search for someone above and add them '
         + 'to compare their turnaround &mdash; the adoption panels higher up already count everyone.</td></tr>';
+  // The "nobody merged anything" empty state is wrong when the zero rows are about to say exactly
+  // who and why, so it only stands in when there is nothing at all to show.
+  const recent = absent.find(a => a.last_self_service);
+  const zeroNote = absent.length
+    ? `<b>${absent.length}</b> added author${absent.length===1?"":"s"} merged no self-service MR in `+
+      `this window${recent?`; ${esc(recent.name)} last did on ${esc(recent.last_self_service)}`:""}. `
+    : "";
   document.getElementById("mrTbl").innerHTML = head +
-    `<tbody>${rows || empty}${d.authors.length?team:''}</tbody>` +
-    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · showing ${shown.length} of ${d.authors.length} authors in this view`:''}. `+
+    `<tbody>${rows || (zrows ? "" : empty)}${zrows}${d.authors.length?team:''}</tbody>` +
+    `<caption>Merged MRs since ${esc(d.window_start)}${terms.length?` · filtered to ${esc(terms.join(", "))}`:''}. `+
+    zeroNote +
     `<b>Team (all authors)</b> covers every self-service author in the window, not just this view.</caption>`;
 
   const pager = document.getElementById("mrPager");

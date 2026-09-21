@@ -12,6 +12,7 @@ from darkstar import mrflow, store
 from darkstar.roster import GITLAB_USERNAMES, ROSTER
 
 _ADAM = "600ece193b1af000697f339d"
+_OMAR = "712020:58e4121c-dadd-4c34-99a9-92dc31ee039b"
 _BEN = "audacy-ben.bonora"
 _NOW = datetime(2026, 8, 18, 12, 0, 0)
 
@@ -708,3 +709,68 @@ def test_adding_a_roster_member_works_despite_the_two_key_spaces():
         conn, mrflow.default_window_start(_NOW),
         {"added": {"audacy-adam.shero": "Adam"}}, [], "all")
     assert [a["name"] for a in report["authors"]] == ["Adam"]
+
+
+def test_an_added_author_with_nothing_in_the_window_is_listed_as_a_zero():
+    """An add that took must not look like an add that failed.
+
+    Adam merged inside the window; Omar's only self-service MR predates it. Omar was previously
+    absent from the response altogether, which on the page is indistinguishable from the add never
+    having saved -- no row, no message, nothing. He is now a zero row carrying the date he last
+    merged self-service work, because "never" and "not lately" have different remedies: widen the
+    lookback, or go and ask why the work is not going through a workflow.
+
+    This is the bug Trevor surfaced. He was added, saved and attributed, with his last self-service
+    MR on 2026-07-09, so every recent lookback showed nothing and the page never said why.
+    """
+    conn = _seed([
+        _mr(1, _ADAM, _NOW - timedelta(days=3), _NOW - timedelta(days=2)),
+        _mr(2, _OMAR, datetime(2026, 1, 6, 16, 0), datetime(2026, 1, 6, 17, 0)),
+    ])
+    report = _report(conn)
+
+    assert [a["name"] for a in report["authors"]] == ["Adam"]
+    absent = {a["name"]: a for a in report["absent"]}
+    assert absent["Omar"]["merged"] == 0
+    assert absent["Omar"]["biz_hours_median"] is None
+    assert absent["Omar"]["last_self_service"] == "2026-01-06"
+    # Ben was added and has never merged anything at all: still listed, distinguished by a null date.
+    assert absent["Ben Bonora"]["last_self_service"] is None
+    # Kept out of `authors`, so the counts, paging and per-author series still describe measured work.
+    assert "Omar" not in {s["name"] for s in report["series"]}
+    assert report["team"]["merged"] == 1
+
+
+def test_a_hidden_or_filtered_out_author_is_not_reintroduced_as_a_zero():
+    """The zero rows obey the same two view rules the measured rows do.
+
+    Otherwise x-ing someone out would bring them straight back as a zero, and a filter would widen
+    the table instead of narrowing it -- the opposite of what both controls promise.
+    """
+    conn = _seed([_mr(1, _ADAM, _NOW - timedelta(days=3), _NOW - timedelta(days=2))])
+
+    hidden = _report(conn, roster={"hidden": ["Omar"]})
+    assert "Omar" not in {a["name"] for a in hidden["absent"]}
+
+    filtered = _report(conn, name_filter=["ben"])
+    assert {a["name"] for a in filtered["absent"]} == {"Ben Bonora"}
+
+
+def test_the_filter_matches_the_name_the_add_control_showed_you():
+    """Filtering by the display name you typed has to find the row it created.
+
+    A roster member's merge requests are keyed by Jira accountId, so the username-keyed "added"
+    overlay is never consulted for them and they render under their roster short name: you add
+    "Trevor Atchley", the table says "Trevor", and searching for what you typed matched nothing.
+    The filter therefore also matches the added display name and the GitLab username.
+    """
+    conn = _seed([_mr(1, _ADAM, _NOW - timedelta(days=3), _NOW - timedelta(days=2))])
+    assert _report(conn)["authors"][0]["name"] == "Adam"       # renders under the roster name
+
+    for term in ("adam", "adam shero", "audacy-adam.shero"):
+        report = _report(conn, roster={"added": {"audacy-adam.shero": "Adam Shero"}},
+                         name_filter=[term])
+        assert [a["name"] for a in report["authors"]] == ["Adam"], f"{term!r} found nothing"
+
+    # And it is still a filter: a term matching nobody must not admit everybody.
+    assert _report(conn, name_filter=["nobody"])["authors"] == []
