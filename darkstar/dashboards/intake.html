@@ -146,6 +146,9 @@
   .ov-status{font-family:var(--mono); font-size:10.5px; color:var(--muted)}
   .ov-status.agree{color:#7db0ff}
   .ov-status.stale{color:var(--neg)}
+  /* unsized-WIP callout: same voice as .ov-status — this is a data-quality note, not a metric */
+  .dq{font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-left:7px; white-space:nowrap}
+  .dq.most{color:var(--warn)}
   .ownerbox{display:flex; align-items:flex-start; gap:12px}
   .owner-col{min-width:150px; flex:none}
   .sugg-row{display:flex; flex-direction:column; align-items:flex-start; gap:5px; border-left:1px solid var(--line2); padding-left:12px}
@@ -207,7 +210,7 @@
 
   <h2>Team capacity</h2>
   <p class="h2sub">Spare capacity = predicted monthly velocity − completions so far this month − current active WIP — delivery tickets only (Story/Task/Bug/Hotfix/Sub-task), excluding epics/initiatives. Sorted by most headroom. This is the basis for the suggestions above.</p>
-  <p class="h2sub"><b>WIP is weighted by Estimated Size</b>, so someone holding an XL no longer reads as free as someone holding a Small. The weights (S&nbsp;0.68 · M&nbsp;1.55 · L&nbsp;2.71 · XL&nbsp;4.36) are a <b>team convention, not a measurement</b> — sizes are usually set after work starts, which makes them useless as a historical estimate of effort and perfectly good as a statement of current load. They are scaled so the average ticket weighs 1.0, so a ticket with no size set weighs exactly one ticket and an unsized team sees the same numbers as before. This makes the <i>denominator</i> honest; it does not match an incoming ticket's size to anyone's headroom, because queue tickets are not sized.</p>
+  <p class="h2sub"><b>WIP is weighted by Estimated Size</b>, so someone holding an XL no longer reads as free as someone holding a Small. The weights (S&nbsp;0.68 · M&nbsp;1.55 · L&nbsp;2.71 · XL&nbsp;4.36) are a <b>team convention, not a measurement</b> — sizes are usually set after work starts, which makes them useless as a historical estimate of effort and perfectly good as a statement of current load. They are scaled so the average ticket weighs 1.0, so a ticket with no size set weighs exactly one ticket and an unsized team sees the same numbers as before. This makes the <i>denominator</i> honest; it does not match an incoming ticket's size to anyone's headroom, because queue tickets are not sized. Rows carrying unsized work say so, so you can see how much of a figure is informed.</p>
   <div class="caps" id="capacity"></div>
   <div class="cap-legend">bar = <b>done</b> (solid) + active <b>WIP</b> (dotted, size-weighted) this month · tick = predicted monthly <b>capacity</b> · <span style="color:var(--pos)">+N</span> = spare (velocity − done − WIP)</div>
 
@@ -389,6 +392,20 @@ function renderQueue(){
 }
 
 /* ---- team capacity gauges ---- */
+// How much of this person's WIP weight is a guess. Absent entirely at full coverage: a callout
+// that is always on stops being read, and "0 unsized" is not news. Highlighted once most of their
+// load is unpriced, which is the point at which their spare figure is mostly the old ticket count
+// wearing a decimal point.
+function unsizedNote(m){
+  if(!m.unsized) return "";
+  const most = m.tickets && m.unsized / m.tickets > 0.5;
+  const one = m.unsized === 1;
+  const tip = `${m.unsized} of ${m.tickets} active ticket${m.tickets===1?"":"s"} `
+            + `${one?"has":"have"} no Estimated Size, so ${one?"it is":"each is"} weighed as one `
+            + `average ticket. Size ${one?"it":"them"} to sharpen this row.`;
+  return `<span class="dq${most?" most":""}" title="${tip}">${m.unsized} unsized</span>`;
+}
+
 function renderCapacity(){
   const keys = Object.keys(ROSTER).sort((a,b) => spareOf(b)-spareOf(a) || ROSTER[b].vel-ROSTER[a].vel);
   const scaleMax = Math.max(...keys.map(k => Math.max(ROSTER[k].vel, ROSTER[k].done + ROSTER[k].wip))) * 1.05;  // 5% headroom so the top-velocity capacity tick isn't clipped at the track's right edge
@@ -397,7 +414,7 @@ function renderCapacity(){
     const m = ROSTER[k], sp = spareOf(k), over = (m.done + m.wip) > m.vel;
     const donePct = (m.done/scaleMax*100).toFixed(1), wipPct = (m.wip/scaleMax*100).toFixed(1);
     html += `<div class="caprow">`+
-      `<div class="capname"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}${m.lead?'<span class="tag">lead</span>':''}</div>`+
+      `<div class="capname"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}${m.lead?'<span class="tag">lead</span>':''}${unsizedNote(m)}</div>`+
       `<div class="capgauge">`+
         `<div class="capdone" style="width:${donePct}%; background:${m.color}"></div>`+
         `<div class="capfill" style="left:${donePct}%; width:${wipPct}%; color:${over?'var(--neg)':m.color}"></div>`+
@@ -506,7 +523,8 @@ async function init(){
     const data = await res.json();
     ROSTER = {};
     for(const [k,v] of Object.entries(data.roster))
-      ROSTER[k] = { name:v.name, color:COLORS[k] || "#8891a7", vel:v.vel, wip:v.wip, done:v.done, lead: k===LEAD };
+      ROSTER[k] = { name:v.name, color:COLORS[k] || "#8891a7", vel:v.vel, wip:v.wip, done:v.done,
+                    unsized:v.unsized || 0, tickets:v.tickets || 0, lead: k===LEAD };
     INTAKE = data.queue;
     MR_DOMAINS = data.mr_domains || {};
     SME_OVERRIDES = (data.overrides && data.overrides.overrides) || {};
