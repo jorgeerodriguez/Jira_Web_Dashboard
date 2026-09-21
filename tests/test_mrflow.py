@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import duckdb
 
 from darkstar import mrflow, store
-from darkstar.roster import GITLAB_USERNAMES, ROSTER
+from darkstar.roster import GITLAB_USERNAMES, PE_EVER, ROSTER
 
 _ADAM = "600ece193b1af000697f339d"
 _OMAR = "712020:58e4121c-dadd-4c34-99a9-92dc31ee039b"
@@ -67,8 +67,8 @@ def test_a_non_roster_author_cannot_reach_the_roster_gated_views():
     assert "audacy-ben.bonora" not in ROSTER
     assert "brand-new-person" not in ROSTER
     for username, account_id in GITLAB_USERNAMES.items():
-        assert account_id in ROSTER, f"{username} is PE and must be nameable"
-        assert username not in ROSTER, "a username must never double as an accountId"
+        assert account_id in PE_EVER, f"{username} is PE and must be nameable"
+        assert username not in PE_EVER, "a username must never double as an accountId"
 
 
 def test_overnight_wait_is_not_charged():

@@ -1,13 +1,15 @@
 """Platform Engineering roster: Jira accountId -> display name.
 
-Velocity and capacity views count only these 14 people (completions by anyone else —
-e.g. non-team assignees — are excluded). Ported from the audacy-jira-reports pipeline.
+Two maps, because "who is PE" has two different answers. `ROSTER` is who is on the team *now*, and
+gates every forward-looking view: velocity, capacity, intake and the SME matrix count only these
+people (completions by anyone else — non-team assignees — are excluded). `ALUMNI` is who has left,
+and still counts as PE wherever the question is historical rather than predictive. `PE_EVER` is the
+union, for exactly those historical questions. Ported from the audacy-jira-reports pipeline.
 """
 from __future__ import annotations
 
 ROSTER: dict[str, str] = {
     "600ece193b1af000697f339d": "Adam",
-    "5aa3365d29118e2c1375d5ea": "Randall",
     "712020:58e4121c-dadd-4c34-99a9-92dc31ee039b": "Omar",
     "5af1bbd7999f392c4882ea62": "Tom",
     "712020:ff85e042-9fc6-4019-9fda-590317ad40a1": "Vlad",
@@ -22,8 +24,28 @@ ROSTER: dict[str, str] = {
     "712020:1afb2e28-5f9e-4e68-acf6-68f7e68f7e54": "Zack",
 }
 
-# GitLab username -> Jira accountId, for attributing merged MRs to roster members.
-# Contributors not in this map (other teams, bots) are ignored by the GitLab ingest.
+# Departed PE members. A departure is a move to this map, never a deletion, because the two things
+# a leaver should do to the numbers point in opposite directions.
+#
+# Out of ROSTER, so nothing forward-looking counts on them: no capacity row offering spare capacity
+# nobody has, no suggestion routing new work to them, no throughput of theirs in the team forecast.
+#
+# Still PE via PE_EVER, so nothing historical is rewritten: they were PE when they authored and
+# approved that work, and deleting them reclassifies it as "outside PE", which moves the
+# self-service adoption headline UP for a reason that has nothing to do with adoption. Randall's 96
+# self-service merge requests alone take it from 21% to 37%.
+ALUMNI: dict[str, str] = {
+    "5aa3365d29118e2c1375d5ea": "Randall",
+}
+
+# Everyone who has ever been PE. Use this to attribute work that already happened (who authored it,
+# who approved it); use ROSTER for anything about capacity or the month ahead.
+PE_EVER: dict[str, str] = {**ROSTER, **ALUMNI}
+
+# GitLab username -> Jira accountId, for keying merged MRs to a person. Covers ROSTER and ALUMNI:
+# the ingest keeps every author it finds, and this map only decides whether they are keyed by
+# accountId (PE, past or present) or by their bare username (everyone else). Alumni keep their entry
+# so their already-crawled merge requests stay nameable and their approvals stay on the PE side.
 GITLAB_USERNAMES: dict[str, str] = {
     "audacy-adam.shero":       "600ece193b1af000697f339d",
     "randall.puterbaugh":      "5aa3365d29118e2c1375d5ea",
@@ -43,13 +65,15 @@ GITLAB_USERNAMES: dict[str, str] = {
 
 # Direct members of the audacy-inc/devops GitLab group that are NOT people. Maintained by hand and
 # asserted against the live group by tests/test_roster_membership.py, so the roster cannot drift
-# unnoticed: a human who joins or leaves PE appears in neither this list nor GITLAB_USERNAMES and
-# fails the test, which is the point. An exclusion list rather than a name heuristic because
-# "looks like a bot" silently reclassifies a person whose account happens to match.
+# unnoticed: a human who joins PE appears in neither this list nor GITLAB_USERNAMES and fails the
+# test, which is the point. An exclusion list rather than a name heuristic because "looks like a
+# bot" silently reclassifies a person whose account happens to match.
 #
 # Drift matters beyond this page. ROSTER gates velocity, capacity, intake and the SME matrix, and on
-# /slas it decides PE vs non-PE authorship — where a missing member counts as OUTSIDE PE and
-# inflates the adoption headline, the direction that flatters the metric.
+# /slas PE_EVER decides PE vs non-PE authorship — where a missing member counts as OUTSIDE PE and
+# inflates the adoption headline, the direction that flatters the metric. Group access usually
+# outlives the departure, so alumni are exempted from the has-left check rather than being required
+# to leave the group first.
 NON_HUMAN_GROUP_MEMBERS: frozenset[str] = frozenset({
     "DevOps-agent",                                          # AWS-DevOps-agent
     "agentcore-pe",                                          # agentcore-pe

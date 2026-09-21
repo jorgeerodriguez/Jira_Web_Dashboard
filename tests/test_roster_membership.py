@@ -2,7 +2,11 @@
 
 `roster.ROSTER` is a hardcoded list ported from the audacy-jira-reports pipeline. Nothing derives or
 refreshes it, and it gates far more than one panel: velocity, capacity, intake and the SME matrix all
-count roster members only, and /slas uses it to decide PE vs non-PE authorship.
+count current roster members only, and /slas uses `roster.PE_EVER` to decide PE vs non-PE authorship.
+
+Departures are the awkward half. Group access routinely outlives the departure, so these checks fire
+only once access is revoked — and what they then demand is a move to `roster.ALUMNI`, not a deletion,
+because the two maps answer different questions (see roster.py and tests/test_adoption.py).
 
 The failure is silent and biased. A new PE hire is in no list, so their merge requests are attributed
 to "outside PE" and the self-service adoption headline goes UP — a number moving in the flattering
@@ -25,8 +29,10 @@ import urllib.request
 import pytest
 
 from darkstar.roster import (
+    ALUMNI,
     GITLAB_USERNAMES,
     NON_HUMAN_GROUP_MEMBERS,
+    PE_EVER,
     PE_GROUP_ID,
     ROSTER,
 )
@@ -57,16 +63,26 @@ def test_every_human_group_member_is_on_the_roster(members):
     missing = humans - set(GITLAB_USERNAMES)
     assert not missing, (
         "these audacy-inc/devops members are on no list — add them to roster.GITLAB_USERNAMES and "
-        "roster.ROSTER if they are PE, or to roster.NON_HUMAN_GROUP_MEMBERS if they are service "
-        f"accounts: {sorted(f'{u} ({members[u]})' for u in missing)}")
+        "roster.ROSTER if they are PE, roster.ALUMNI if they have left, or "
+        "roster.NON_HUMAN_GROUP_MEMBERS if they are service accounts: "
+        f"{sorted(f'{u} ({members[u]})' for u in missing)}")
 
 
-def test_nobody_on_the_roster_has_left_the_group(members):
-    """A departed member keeps absorbing merge requests into the PE side of every comparison."""
-    departed = set(GITLAB_USERNAMES) - set(members)
-    assert not departed, (
-        "these roster entries are no longer direct members of audacy-inc/devops; remove them from "
-        f"roster.GITLAB_USERNAMES and roster.ROSTER: {sorted(departed)}")
+def test_anyone_who_has_left_the_group_is_declared_alumni(members):
+    """Losing group access means ROSTER must stop offering that person work.
+
+    A departure is a move to `ALUMNI`, not a deletion. They stay in `GITLAB_USERNAMES` and `PE_EVER`
+    so their authorship keeps counting as PE — deleting them lifts the adoption share for a
+    bookkeeping reason (tests/test_adoption.py asserts that end). What must not survive is `ROSTER`
+    membership, which is what puts a capacity row and a velocity forecast on somebody who has gone.
+
+    This only fires once access is revoked, so it is a backstop, not the notification.
+    """
+    gone = {username for username in GITLAB_USERNAMES if username not in members}
+    still_current = {u for u in gone if GITLAB_USERNAMES[u] in ROSTER}
+    assert not still_current, (
+        "these roster entries are no longer direct members of audacy-inc/devops; move them from "
+        f"roster.ROSTER to roster.ALUMNI: {sorted(still_current)}")
 
 
 def test_the_exclusion_list_still_describes_real_members(members):
@@ -85,12 +101,27 @@ def test_no_account_is_both_excluded_and_rostered():
     assert not (NON_HUMAN_GROUP_MEMBERS & set(GITLAB_USERNAMES))
 
 
-def test_the_two_roster_maps_describe_the_same_people():
-    """Offline: GITLAB_USERNAMES maps to accountIds that ROSTER must be able to name.
+def test_alumni_are_past_pe_and_not_current_pe():
+    """Offline: an accountId in both maps would be counted as PE *and* handed a capacity row.
 
-    A username added without its ROSTER entry attributes merge requests to an accountId no view can
-    resolve, so the author silently vanishes from every panel rather than erroring.
+    The whole value of the split is that one map answers "who can take work next month" and the
+    other "who did this work", so an overlap collapses it back to the single list that made a
+    departure a choice between rewriting history and forecasting a month somebody will not work.
     """
-    unnameable = {u: a for u, a in GITLAB_USERNAMES.items() if a not in ROSTER}
-    assert not unnameable, f"GITLAB_USERNAMES entries with no ROSTER name: {unnameable}"
+    assert not (set(ALUMNI) & set(ROSTER)), "an accountId cannot be both current PE and alumni"
+    assert set(PE_EVER) == set(ROSTER) | set(ALUMNI)
+    unnameable = {a for a in ALUMNI if a not in GITLAB_USERNAMES.values()}
+    assert not unnameable, (
+        "alumni need their GITLAB_USERNAMES entry kept, or their merged MRs stop resolving to a "
+        f"person: {sorted(unnameable)}")
+
+
+def test_the_two_roster_maps_describe_the_same_people():
+    """Offline: GITLAB_USERNAMES maps to accountIds that PE_EVER must be able to name.
+
+    A username added without its ROSTER or ALUMNI entry attributes merge requests to an accountId no
+    view can resolve, so the author silently vanishes from every panel rather than erroring.
+    """
+    unnameable = {u: a for u, a in GITLAB_USERNAMES.items() if a not in PE_EVER}
+    assert not unnameable, f"GITLAB_USERNAMES entries with no PE_EVER name: {unnameable}"
     assert len(set(GITLAB_USERNAMES.values())) == len(GITLAB_USERNAMES), "an accountId is mapped twice"

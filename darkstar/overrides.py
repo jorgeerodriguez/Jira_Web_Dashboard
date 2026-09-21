@@ -21,8 +21,8 @@ _LOCK = threading.Lock()
 _SEED: dict = {
     "overrides": {
         "VDI/WorkSpaces": {"order": ["adam", "zack", "omar"], "why": "Adam created the WorkSpaces epic and did the research; Zack is building it out", "set": "2026-07"},
-        "GCP Core": {"order": ["trevor", "omar", "randall"], "why": "Trevor has 6 years of GCP experience but is new to the team, so no ticket history yet", "set": "2026-07"},
-        "Composer": {"order": ["trevor", "randall"], "why": "Trevor owns the in-flight Cloud Composer 3 upgrade and has deep prior Composer experience", "set": "2026-07"},
+        "GCP Core": {"order": ["trevor", "omar"], "why": "Trevor has 6 years of GCP experience but is new to the team, so no ticket history yet", "set": "2026-07"},
+        "Composer": {"order": ["trevor"], "why": "Trevor owns the in-flight Cloud Composer 3 upgrade and has deep prior Composer experience", "set": "2026-07"},
         "IAM/RBAC": {"order": ["simon", "tom"], "why": "Simon is a staff-level engineer in an advisory role; his guidance is heavy on IAM/RBAC work", "set": "2026-07"},
         "Kubernetes/GitOps": {"order": ["simon", "adam", "vlad", "bolanle"], "why": "Simon (staff, advisory) guides most k8s work; Adam, Vlad and Bolanle are the top hands-on contributors", "set": "2026-07"},
     },
