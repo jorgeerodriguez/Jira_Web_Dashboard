@@ -1030,21 +1030,18 @@ ticket closes never enters the sum at all.
 - **The mix is pinned, not live.** Recomputing it each poll would make every engineer's capacity
   drift for reasons unrelated to their own workload.
 
-**The gauge shows the mix, not just the total.** The WIP portion splits into one block per size,
-heaviest first with Unsized last, each block as wide as that size *weighs*. So a row can be longer
-than the one below it while carrying fewer tickets — which is the whole point, and the bar says why
-without a second chart. Hovering a block gives its count.
+**The bar is one block, in the engineer's own colour, as wide as their load weighs.** WIP was
+briefly split into one block per size (DEVOPS-10570) and that is reverted. The mix is not an input
+to the question this page answers — *who should take this ticket* needs spare capacity and domain
+skill, and the weighted figure already accounts for the sizes. Re-encoding its inputs as a picture
+restated what the number says, and cost a page-down plus a legend nobody could read.
 
-Size is **ordinal**, so it is encoded as a sequential ramp of the engineer's existing colour
-(opacity stepped XL → S) rather than as new hues: size is magnitude *within* one entity, and the
-row already spends its hue on who the person is. Adjacent blocks are separated by ordering, width
-and a 2px surface gap, not by hue — so there is no categorical palette here to CVD-validate.
-Unsized drops the hue entirely for muted ink, because it is an absence rather than a small ticket.
+The bar also no longer recolours red when someone is over capacity. That fact is stated once, by
+the red spare figure on the right; a second channel for it consumed a legend key and, once the bar
+was segmented, read as a size category rather than a state.
 
-`SIZE_WEIGHTS` travels in the `/api/intake` payload rather than being restated in the dashboard;
-the gauge needs the weights to size its segments, and a second copy would drift the first time the
-convention is retuned. A payload without `mix` falls back to the old undifferentiated fill, so a
-stale cached response degrades to the previous bar rather than an empty track.
+Spare is formatted rather than printed: it became a float when WIP became weighted and rendered as
+`+0.5999999999999996`. One decimal, whole numbers left whole, `-0` collapsed to `+0`.
 
 **Coverage is shown, not assumed.** Each capacity row carries an `N unsized` note when any of that
 engineer's active tickets has no size, highlighted once it is most of them — at which point their

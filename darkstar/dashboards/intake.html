@@ -110,8 +110,6 @@
      engineer's own colour (opacity stepped by size) rather than new hues — size is magnitude within
      one entity, not a second identity, and the row already spends its hue on who the person is.
      Unsized drops the hue entirely for muted ink: it is an absence, not a small ticket. */
-  .capseg{position:absolute; top:0; bottom:0; background-image:radial-gradient(currentColor 0.85px, transparent 1.15px), radial-gradient(currentColor 0.85px, transparent 1.15px); background-size:4px 4px; background-position:0 0, 2px 2px}
-  .capseg.unsized{color:var(--muted); opacity:.55}
   .capdone{position:absolute; top:0; bottom:0; left:0; border-radius:4px 0 0 4px}
   .capmark{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--ink2)}
   .capnums{font-family:var(--mono); font-size:12px; color:var(--ink2); text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
@@ -121,6 +119,13 @@
   .cap-legend b{color:var(--ink2); font-weight:600}
   .cap-legend .cnt{margin-left:0}
   .cap-legend .sig{margin-left:0; padding-left:0; vertical-align:middle}
+  /* Legend keys drawn with the bar's own fills, so they cannot drift from what is rendered. */
+  .caplegend-keys{display:flex; flex-wrap:wrap; gap:6px 18px}
+  .legkey{display:inline-flex; align-items:center; gap:6px}
+  .legsw{width:22px; height:11px; border-radius:3px; flex:none; color:var(--ink2)}
+  .legsw.solid{background:var(--ink2)}
+  .legsw.dots{background-image:radial-gradient(currentColor 0.85px, transparent 1.15px), radial-gradient(currentColor 0.85px, transparent 1.15px); background-size:4px 4px; background-position:0 0, 2px 2px; border:1px solid var(--line)}
+  .legsw.tick{width:2px; height:15px; background:var(--ink2); border-radius:0}
 
   .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:82ch}
   .foot b{color:var(--ink2); font-weight:600}
@@ -218,8 +223,12 @@
   <p class="h2sub">Spare capacity = predicted monthly velocity − completions so far this month − current active WIP — delivery tickets only (Story/Task/Bug/Hotfix/Sub-task), excluding epics/initiatives. Sorted by most headroom. This is the basis for the suggestions above.</p>
   <p class="h2sub"><b>WIP is weighted by Estimated Size</b>, so someone holding an XL no longer reads as free as someone holding a Small. The weights (S&nbsp;0.68 · M&nbsp;1.55 · L&nbsp;2.71 · XL&nbsp;4.36) are a <b>team convention, not a measurement</b> — sizes are usually set after work starts, which makes them useless as a historical estimate of effort and perfectly good as a statement of current load. They are scaled so the average ticket weighs 1.0, so a ticket with no size set weighs exactly one ticket and an unsized team sees the same numbers as before. This makes the <i>denominator</i> honest; it does not match an incoming ticket's size to anyone's headroom, because queue tickets are not sized. Rows carrying unsized work say so, so you can see how much of a figure is informed.</p>
   <div class="caps" id="capacity"></div>
-  <div class="cap-legend">bar = <b>done</b> (solid) + active <b>WIP</b> (dotted) this month · tick = predicted monthly <b>capacity</b> · <span style="color:var(--pos)">+N</span> = spare (velocity − done − WIP)</div>
-  <div class="cap-legend">WIP splits into one block per <b>Estimated Size</b>, heaviest first, each block as wide as that size weighs — so a row can be longer than the next with fewer tickets on it. Denser = larger (XL → S); <span style="color:var(--muted)">grey</span> = no size recorded. Hover a block for its count.</div>
+  <div class="cap-legend caplegend-keys">
+    <span class="legkey"><i class="legsw solid"></i><b>done</b> this month</span>
+    <span class="legkey"><i class="legsw dots"></i>active <b>WIP</b>, weighted by Estimated Size</span>
+    <span class="legkey"><i class="legsw tick"></i>predicted monthly <b>capacity</b></span>
+  </div>
+  <div class="cap-legend">The WIP block is as wide as that person's load <i>weighs</i>, so a row can run longer than the next while carrying fewer tickets. The empty track to its right is spare; <span style="color:var(--neg)">a red spare figure</span> means over capacity.</div>
 
   <h2>Domain SMEs</h2>
   <p class="h2sub">Top contributors per domain, blending Jira ticket titles (656; 63% tagged) with GitLab merge-request authorship over the trailing 30 days — additive counts; the muted <b>(N mr)</b> is the GitLab-MR portion of the total. This drives the SME suggestion in the queue above.</p>
@@ -310,6 +319,13 @@ const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","
 
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const spareOf = k => Math.max(0, ROSTER[k].vel - ROSTER[k].done) - ROSTER[k].wip;
+// Spare is a float since WIP became size-weighted, so it printed binary noise: +0.5999999999999996.
+// One decimal, and a whole number stays whole — matching how the WIP column already reads.
+const fmtSpare = v => {
+  // `|| 0` collapses -0, which a tiny negative rounds to and which would print as "-0".
+  const r = (Math.round(v * 10) / 10) || 0;
+  return (r >= 0 ? "+" : "") + (Number.isInteger(r) ? r : r.toFixed(1));
+};
 const ageOf = iso => Math.round((Date.parse(ASOF) - Date.parse(iso)) / 864e5);
 const fmtDate = iso => { const [,m,d] = iso.split("-"); return MON[+m-1] + " " + (+d); };
 
@@ -430,61 +446,21 @@ function unsizedNote(m){
   return `<span class="dq${most?" most":""}" title="${tip}">${m.unsized} unsized</span>`;
 }
 
-// Size order for the gauge, heaviest first so the eye meets the biggest chunk of a person's load
-// first, with Unsized last because it is the unknown bucket rather than the smallest one.
-const MIX_ORDER = ["XL", "Large", "Medium", "Small", "Unsized"];
-// Sequential ramp: one hue (the engineer's), stepped by magnitude. Not a categorical palette —
-// adjacent steps are separated by ordering, width and a 2px surface gap, not by hue alone.
-const MIX_OPACITY = {XL: 1, Large: .82, Medium: .64, Small: .46};
-// Filled from /api/intake. The weights are defined once, server-side in intake.py, and travel with
-// the payload — a second copy here would drift the moment the convention is retuned.
-let SIZE_WEIGHTS = {};
-
-// The WIP portion of the gauge, split into one segment per size. Segment width IS that size's
-// contribution to the weight, so the bar answers "why is this row heavier than its ticket count"
-// without a second chart. Falls back to a single undifferentiated fill when the mix is absent, so
-// an older store or a stale cached payload still renders the old bar rather than an empty track.
-function wipSegments(m, donePct, scaleMax, over){
-  const colour = over ? "var(--neg)" : m.color;
-  const startPct = Number(donePct) || 0;
-  const mix = m.mix || {};
-  const present = MIX_ORDER.filter(s => mix[s]);
-  if(!present.length)
-    return `<div class="capfill" style="left:${startPct.toFixed(1)}%; width:${(m.wip/scaleMax*100).toFixed(1)}%; color:${colour}"></div>`;
-
-  let left = startPct, out = "";
-  present.forEach((size, i) => {
-    const n = mix[size];
-    const weight = n * (size === "Unsized" ? 1 : (SIZE_WEIGHTS[size] || 1));
-    const pct = weight / scaleMax * 100;
-    // 2px surface gap between fills, per the stacked-segment spec — but only between segments, and
-    // never wider than the segment, or a run of 1-ticket slivers collapses into nothing.
-    const gap = i < present.length - 1 ? 2 : 0;
-    const unsized = size === "Unsized";
-    const style = `left:${left.toFixed(2)}%; width:max(0px, calc(${pct.toFixed(2)}% - ${gap}px))`
-                + (unsized ? "" : `; color:${colour}; opacity:${MIX_OPACITY[size]}`);
-    out += `<div class="capseg${unsized?" unsized":""}" style="${style}" `
-         + `title="${n} ${unsized ? "unsized ticket" : size + " ticket"}${n===1?"":"s"}"></div>`;
-    left += pct;
-  });
-  return out;
-}
-
 function renderCapacity(){
   const keys = Object.keys(ROSTER).sort((a,b) => spareOf(b)-spareOf(a) || ROSTER[b].vel-ROSTER[a].vel);
   const scaleMax = Math.max(...keys.map(k => Math.max(ROSTER[k].vel, ROSTER[k].done + ROSTER[k].wip))) * 1.05;  // 5% headroom so the top-velocity capacity tick isn't clipped at the track's right edge
   let html = `<div class="caprow caphead"><div>Engineer</div><div>done vs. load vs. capacity</div><div class="capnums">done / WIP / vel · spare</div></div>`;
   for(const k of keys){
-    const m = ROSTER[k], sp = spareOf(k), over = (m.done + m.wip) > m.vel;
+    const m = ROSTER[k], sp = spareOf(k);
     const donePct = m.done/scaleMax*100, wipPct = m.wip/scaleMax*100;
     html += `<div class="caprow">`+
       `<div class="capname"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}${m.lead?'<span class="tag">lead</span>':''}${unsizedNote(m)}</div>`+
       `<div class="capgauge">`+
         `<div class="capdone" style="width:${donePct.toFixed(1)}%; background:${m.color}"></div>`+
-        wipSegments(m, donePct, scaleMax, over)+
+        `<div class="capfill" style="left:${donePct.toFixed(1)}%; width:${wipPct.toFixed(1)}%; color:${m.color}"></div>`+
         `<div class="capmark" style="left:${(m.vel/scaleMax*100).toFixed(1)}%"></div>`+
       `</div>`+
-      `<div class="capnums">${m.done} / ${m.wip} / ${m.vel} · <span class="sp ${sp<0?'neg':'pos'}">${sp>=0?'+':''}${sp}</span></div>`+
+      `<div class="capnums">${m.done} / ${m.wip} / ${m.vel} · <span class="sp ${sp<0?'neg':'pos'}">${fmtSpare(sp)}</span></div>`+
     `</div>`;
   }
   document.getElementById("capacity").innerHTML = html;
@@ -591,7 +567,6 @@ async function init(){
                     unsized:v.unsized || 0, tickets:v.tickets || 0, mix:v.mix || {}, lead: k===LEAD };
     INTAKE = data.queue;
     MR_DOMAINS = data.mr_domains || {};
-    SIZE_WEIGHTS = data.weights || {};
     SME_OVERRIDES = (data.overrides && data.overrides.overrides) || {};
     SME_ADD = (data.overrides && data.overrides.add) || {};
     const built = buildSME(data.corpus, MR_DOMAINS);
