@@ -429,12 +429,13 @@ let SIZE_WEIGHTS = {};
 // an older store or a stale cached payload still renders the old bar rather than an empty track.
 function wipSegments(m, donePct, scaleMax, over){
   const colour = over ? "var(--neg)" : m.color;
+  const startPct = Number(donePct) || 0;
   const mix = m.mix || {};
   const present = MIX_ORDER.filter(s => mix[s]);
   if(!present.length)
-    return `<div class="capfill" style="left:${donePct}%; width:${(m.wip/scaleMax*100).toFixed(1)}%; color:${colour}"></div>`;
+    return `<div class="capfill" style="left:${startPct.toFixed(1)}%; width:${(m.wip/scaleMax*100).toFixed(1)}%; color:${colour}"></div>`;
 
-  let left = donePct, out = "";
+  let left = startPct, out = "";
   present.forEach((size, i) => {
     const n = mix[size];
     const weight = n * (size === "Unsized" ? 1 : (SIZE_WEIGHTS[size] || 1));
@@ -458,11 +459,11 @@ function renderCapacity(){
   let html = `<div class="caprow caphead"><div>Engineer</div><div>done vs. load vs. capacity</div><div class="capnums">done / WIP / vel · spare</div></div>`;
   for(const k of keys){
     const m = ROSTER[k], sp = spareOf(k), over = (m.done + m.wip) > m.vel;
-    const donePct = (m.done/scaleMax*100).toFixed(1), wipPct = (m.wip/scaleMax*100).toFixed(1);
+    const donePct = m.done/scaleMax*100, wipPct = m.wip/scaleMax*100;
     html += `<div class="caprow">`+
       `<div class="capname"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}${m.lead?'<span class="tag">lead</span>':''}${unsizedNote(m)}</div>`+
       `<div class="capgauge">`+
-        `<div class="capdone" style="width:${donePct}%; background:${m.color}"></div>`+
+        `<div class="capdone" style="width:${donePct.toFixed(1)}%; background:${m.color}"></div>`+
         wipSegments(m, donePct, scaleMax, over)+
         `<div class="capmark" style="left:${(m.vel/scaleMax*100).toFixed(1)}%"></div>`+
       `</div>`+
