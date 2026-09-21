@@ -65,6 +65,10 @@ SIZE_WEIGHTS: dict[str, float] = {
 # of ~41% of current WIP, so this is the common path and not an error case.
 UNSIZED_WEIGHT: float = 1.0
 
+# Its own bucket in the mix, never folded into a size. "No size recorded" is a different statement
+# from "small", and collapsing them would let a coverage gap read as a light workload.
+UNSIZED_LABEL: str = "Unsized"
+
 
 def weight_of(estimated_size: str | None) -> float:
     """Load weight for one ticket. An unrecognised size falls back to the unsized weight.
@@ -130,6 +134,9 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
     wip_by_key: dict[str, float] = {}
     unsized_by_key: dict[str, int] = {}
     sized_by_key: dict[str, int] = {}
+    # Per-size counts, so the gauge can show WHY a row's weight moved rather than only that it did.
+    # Keyed by the Jira option label plus UNSIZED_LABEL; the client owns the ordering and rendering.
+    mix_by_key: dict[str, dict[str, int]] = {}
     for account_id, estimated_size, count in connection.execute(
         f"SELECT assignee_account_id, estimated_size, count(*) FROM issues "
         f"WHERE issuetype IN ({delivery}) AND status IN ({wip_statuses}) "
@@ -143,8 +150,12 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
             # it is a size darkstar cannot price, so the weight is a guess and the page should say so.
             if estimated_size in SIZE_WEIGHTS:
                 sized_by_key[key] = sized_by_key.get(key, 0) + count
+                bucket = estimated_size
             else:
                 unsized_by_key[key] = unsized_by_key.get(key, 0) + count
+                bucket = UNSIZED_LABEL
+            mix = mix_by_key.setdefault(key, {})
+            mix[bucket] = mix.get(bucket, 0) + count
 
     roster = {
         # wip is rounded to one decimal: the gauge and the spare arithmetic read better in whole-ish
@@ -155,7 +166,8 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
                        "done": done_by_key.get(name.lower(), 0),
                        "unsized": unsized_by_key.get(name.lower(), 0),
                        "tickets": (unsized_by_key.get(name.lower(), 0)
-                                   + sized_by_key.get(name.lower(), 0))}
+                                   + sized_by_key.get(name.lower(), 0)),
+                       "mix": mix_by_key.get(name.lower(), {})}
         for name in ROSTER.values()
     }
 
@@ -187,4 +199,8 @@ def intake_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
         weight = _DONE_WEIGHT if status_category == "done" else _ACTIVE_WEIGHT
         corpus.append({"key": key, "sum": summary or "", "w": weight})
 
-    return {"roster": roster, "queue": queue, "corpus": corpus, "mr_domains": _mr_domains_by_key(connection)}
+    # The weight table travels with the payload so the gauge can size its segments without a second
+    # copy of the numbers in the dashboard. It stays defined once, here.
+    return {"roster": roster, "queue": queue, "corpus": corpus,
+            "weights": dict(SIZE_WEIGHTS), "unsized_label": UNSIZED_LABEL,
+            "mr_domains": _mr_domains_by_key(connection)}
