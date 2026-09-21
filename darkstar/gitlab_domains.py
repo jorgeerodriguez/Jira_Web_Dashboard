@@ -68,12 +68,15 @@ _DOMAIN_PATTERNS: dict[str, str] = {
 MODULES_DOMAIN: str = "Terraform Modules"
 _MODULES_PATH = re.compile(r"/terraform/modules/|/terraform/modules$", re.IGNORECASE)
 
-# Dropped from a module repo's tags. The cloud buckets because the whole point is that module work
-# is cloud-agnostic; Terraform/Terragrunt because MODULES_DOMAIN is the more specific claim and
-# keeping both would say nothing the other does not. Service-specific domains are KEPT: a Looker
-# module is still the Looker signal this team has, and suppressing it would leave the domain with
-# no evidence at all -- every repo behind Looker, Firestore and GCP Agent Platform is a module.
-_MODULE_SUPPRESSED: frozenset[str] = frozenset({"AWS Core", "GCP Core", "Terraform/Terragrunt"})
+# A module repo yields MODULES_DOMAIN and NOTHING else. Deploying a service onto an estate is what
+# demonstrates knowing that service; publishing a module able to deploy it demonstrates knowing
+# Terraform. tf-gcp-looker-core is an interface, a variables block and a release -- whoever wrote
+# it need never have run a Looker instance.
+#
+# The cost is accepted deliberately: a domain whose only repo is a module has no evidence until
+# somebody deploys it, which today means GCP Agent Platform. Looker and Firestore are unaffected,
+# because the module was never their real signal -- tf-gcp-edp-* carries 218 PE MRs and a
+# cloud-svc/us-east4/looker-core/ unit, and a unit name inside an estate repo tags normally.
 
 _COMPILED: dict[str, re.Pattern[str]] = {
     domain: re.compile(pattern, re.IGNORECASE) for domain, pattern in _DOMAIN_PATTERNS.items()
@@ -83,16 +86,14 @@ _COMPILED: dict[str, re.Pattern[str]] = {
 def domains_for(project_path: str, paths: list[str]) -> set[str]:
     """The set of domains an MR touches, matched over its repo path and changed file paths.
 
-    A merge request against devops/terraform/modules/ is module authoring: it takes MODULES_DOMAIN
-    and loses the cloud buckets, because that skill does not depend on which cloud the module
-    targets. It keeps any service-specific domain it matched -- a Looker module is still evidence
-    about Looker.
+    A merge request against devops/terraform/modules/ is module authoring and tags MODULES_DOMAIN
+    ALONE -- no cloud, no service. Deploying onto an estate is what shows you know the service;
+    publishing a module that can deploy it shows you know Terraform.
     """
-    haystack = project_path + "\n" + "\n".join(paths)
-    found = {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
     if _MODULES_PATH.search(project_path):
-        return (found - _MODULE_SUPPRESSED) | {MODULES_DOMAIN}
-    return found
+        return {MODULES_DOMAIN}
+    haystack = project_path + "\n" + "\n".join(paths)
+    return {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
 
 
 # -- Deployment environment, read from the repo name ------------------------------------------

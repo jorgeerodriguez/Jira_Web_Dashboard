@@ -1137,16 +1137,26 @@ competency whatever cloud the module targets. Writing `tf-gcp-firestore` is writ
 (variables, validation, examples, a release); it is not running Firestore in production, and it is
 frequently not the same person.
 
-A module repo therefore **loses the cloud buckets** (`AWS Core`, `GCP Core`) and `Terraform/
-Terragrunt` — the first two because the skill is cloud-agnostic, the third because
-`Terraform Modules` is the more specific claim and keeping both says nothing extra. This is a
-suppression rule in `domains_for`, not a pattern, because it has to beat patterns that would
-otherwise match: `tf-gcp-kms` and `tf-gcp-logging` hit the GCP Core service names, and without the
-rule the cloud bucket creeps back in through the side door.
+**A module repo tags `Terraform Modules` and nothing else** — no cloud, no service. The line is
+between the two kinds of repo:
 
-Service-specific domains are **kept**. A Looker module is still the Looker signal this team has —
-and it has to be, because every repo behind `Looker`, `Firestore` and `GCP Agent Platform` is a
-module. Suppressing those too would leave all three with no evidence at all.
+| | tags |
+|---|---|
+| **terragrunt repo** (estate) — `tf-gcp-edp-dev`, `tf-coreservices` | real domain skill: `Looker`, `AWS Bedrock Agents`, `GCP Core`, … |
+| **terraform module repo** — `tf-gcp-looker-core` | `Terraform Modules` only |
+
+Deploying a service onto an estate is what shows you know that service. Publishing a module able
+to deploy it shows you know Terraform: `tf-gcp-looker-core` is an interface, a variables block and
+a release, and whoever wrote it need never have run a Looker instance.
+
+It is an early return in `domains_for`, not a pattern, because it has to **beat** the patterns
+rather than merge with them — `tf-gcp-kms` and `tf-gcp-logging` match the GCP Core service names
+on their own names, so anything additive lets the cloud bucket back in through the side door.
+
+The cost is accepted deliberately: a domain whose only repo is a module has no evidence until
+somebody deploys it. Today that is `GCP Agent Platform`. `Looker` and `Firestore` are unaffected,
+because the module was never their real signal — `tf-gcp-edp-*` carries **218 PE MRs** against 1
+on the Looker module, and its `cloud-svc/us-east4/looker-core/` unit tags `Looker` normally.
 
 *Superseded:* an earlier pass added a `tf-gcp-` pattern to GCP Core to catch these 49 module repos.
 That was the wrong fix — the cloud in a module's name is what it targets, not what its author was

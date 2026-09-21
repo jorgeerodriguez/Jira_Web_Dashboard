@@ -75,18 +75,21 @@ def test_the_client_tagger_knows_the_same_services():
 # are expected to grow. A domain with no history is hidden by the matrix, so an empty row costs
 # nothing, where a MISSING domain files the work as generic GCP until somebody notices.
 
+# Sampled as UNITS inside an estate repo, which is where the tagger has to see them: a module repo
+# of the same name is Terraform Modules and nothing else, by design.
+_ESTATE = "audacy-inc/gcp/devops/tf-gcp-edp-dev"
 _NEW = {
-    "GCP Agent Platform": ["tf-gcp-agent-platform", "agentspace", "agent-space"],
-    "Firestore": ["tf-gcp-firestore", "firestore"],
-    "Firebase": ["tf-gcp-firebase", "firebase"],
-    "Looker": ["tf-gcp-looker-core", "looker"],
+    "GCP Agent Platform": ["agent-platform", "agentspace", "agent-space"],
+    "Firestore": ["firestore"],
+    "Firebase": ["firebase"],
+    "Looker": ["looker-core", "looker"],
 }
 
 
 @pytest.mark.parametrize("domain,samples", list(_NEW.items()))
 def test_each_new_domain_matches_its_own_work(domain, samples):
     for s in samples:
-        assert domain in _domains("audacy-inc/devops/terraform/modules", s), f"{s} -> {domain}"
+        assert domain in _domains(_ESTATE, s), f"{s} -> {domain}"
 
 
 def test_firestore_and_looker_left_the_buckets_they_were_folded_into():
@@ -98,21 +101,26 @@ def test_firestore_and_looker_left_the_buckets_they_were_folded_into():
 
 # --- agentcore is bedrock -------------------------------------------------------------------------
 
-@pytest.mark.parametrize("repo", [
-    "audacy-inc/devops/terraform/modules/tf-aws-agentcore/runtime",
-    "audacy-inc/devops/terraform/modules/tf-aws-devops-agent",
-    "audacy-inc/devops/agentcore/pe-agent",
+@pytest.mark.parametrize("repo,paths", [
+    ("audacy-inc/devops/agentcore/pe-agent", []),
+    ("audacy-inc/devops/terraform/tf-coreservices",
+     ["us-east-1/prod/bedrock-agentcore/terragrunt.hcl"]),
+    ("audacy-inc/devops/terraform/tf-coreservices",
+     ["us-east-1/prod/devops-agent/terragrunt.hcl"]),
 ])
-def test_agentcore_work_lands_in_aws_bedrock_agents(repo):
-    """Same competency, so the same domain (Adam's call). 33 MRs across the tf-aws-agentcore
-    submodules alone read as plain AWS Core before this."""
-    assert "AWS Bedrock Agents" in gitlab_domains.domains_for(repo, [])
+def test_agentcore_work_lands_in_aws_bedrock_agents(repo, paths):
+    """Same competency, so the same domain (Adam's call) — agentcore is bedrock for our purposes.
+
+    Sampled on estate deployments rather than the tf-aws-agentcore modules: those are module work
+    now, and this domain is about having run the thing.
+    """
+    assert "AWS Bedrock Agents" in gitlab_domains.domains_for(repo, paths)
 
 
 @pytest.mark.parametrize("repo", [
-    "audacy-inc/devops/terraform/modules/tf-gcp-sts-agent-pool",
-    "audacy-inc/devops/terraform/modules/tf-aws-datasync-agent",
-    "audacy-inc/devops/terraform/modules/tf-gcp-service-agents",
+    "audacy-inc/devops/terraform/tf-estate/prod/sts-agent-pool",
+    "audacy-inc/devops/terraform/tf-estate/prod/datasync-agent",
+    "audacy-inc/devops/terraform/tf-estate/prod/service-agents",
 ])
 def test_unrelated_agents_are_not_swept_into_an_agent_domain(repo):
     """Why the patterns name `agentcore`/`devops-agent`/`agent-platform` and never a bare `agent`.
@@ -176,32 +184,39 @@ def test_a_module_repo_is_terraform_modules():
     assert gitlab_domains.MODULES_DOMAIN in gitlab_domains.domains_for(f"{_MODULES}/tf-gcp-project", [])
 
 
-@pytest.mark.parametrize("repo,cloud", [("tf-gcp-project", "GCP Core"),
-                                        ("tf-aws-datasync-agent", "AWS Core")])
-def test_a_module_repo_loses_its_cloud_bucket(repo, cloud):
-    """The point of the domain: module skill does not depend on which cloud the module targets."""
-    assert cloud not in gitlab_domains.domains_for(f"{_MODULES}/{repo}", [])
+@pytest.mark.parametrize("repo", ["tf-gcp-looker-core", "tf-gcp-firestore",
+                                  "tf-gcp-agent-platform", "tf-aws-agentcore/runtime",
+                                  "tf-gcp-project", "tf-aws-datasync-agent", "tf-gcp-kms"])
+def test_a_module_repo_tags_nothing_but_terraform_modules(repo):
+    """Exclusive, not additive: no cloud and no service (Adam).
 
+    Deploying a service onto an estate is what shows you know that service; publishing a module
+    able to deploy it shows you know Terraform. `tf-gcp-looker-core` is an interface, a variables
+    block and a release — whoever wrote it need never have run a Looker instance.
 
-def test_a_module_repo_does_not_also_claim_plain_terraform():
-    """Terraform Modules is the more specific claim; keeping both says nothing extra."""
-    assert "Terraform/Terragrunt" not in gitlab_domains.domains_for(f"{_MODULES}/tf-gcp-project", [])
-
-
-@pytest.mark.parametrize("repo,kept", [
-    ("tf-gcp-looker-core", "Looker"),
-    ("tf-gcp-firestore", "Firestore"),
-    ("tf-gcp-agent-platform", "GCP Agent Platform"),
-    ("tf-aws-agentcore/runtime", "AWS Bedrock Agents"),
-])
-def test_a_module_repo_keeps_its_service_domain(repo, kept):
-    """Service domains survive the suppression, and they have to.
-
-    Every repo behind Looker, Firestore and GCP Agent Platform is a module — suppressing these
-    would leave all three domains with no evidence at all, days after they were created.
+    Note `tf-gcp-kms` in the list: it matches the GCP Core service names on its own name, so this
+    also pins that the rule beats the patterns rather than merging with them.
     """
-    found = gitlab_domains.domains_for(f"{_MODULES}/{repo}", [])
-    assert kept in found and gitlab_domains.MODULES_DOMAIN in found
+    assert gitlab_domains.domains_for(f"{_MODULES}/{repo}", []) == {gitlab_domains.MODULES_DOMAIN}
+
+
+def test_a_service_deployed_onto_an_estate_still_counts_as_domain_skill():
+    """The other half of the rule, and where the real signal lives.
+
+    tf-gcp-edp-* carries 218 PE MRs against 1 on the Looker module. A unit name inside an estate
+    repo tags normally, so the distinction costs Looker nothing.
+    """
+    edp = gitlab_domains.domains_for("audacy-inc/gcp/devops/tf-gcp-edp-dev",
+                                     ["cloud-svc/us-east4/looker-core/terragrunt.hcl"])
+    assert "Looker" in edp and gitlab_domains.MODULES_DOMAIN not in edp
+
+    ai = gitlab_domains.domains_for("audacy-inc/gcp/devops/tf-gcp-ai-traffic-prod",
+                                    ["prod/firestore/terragrunt.hcl"])
+    assert "Firestore" in ai
+
+    core = gitlab_domains.domains_for("audacy-inc/devops/terraform/tf-coreservices",
+                                      ["us-east-1/prod/devops-agent/terragrunt.hcl"])
+    assert "AWS Bedrock Agents" in core
 
 
 def test_an_estate_repo_is_untouched_by_the_modules_rule():
