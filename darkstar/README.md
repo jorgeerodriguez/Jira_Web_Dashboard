@@ -1153,17 +1153,20 @@ It is an early return in `domains_for`, not a pattern, because it has to **beat*
 rather than merge with them — `tf-gcp-kms` and `tf-gcp-logging` match the GCP Core service names
 on their own names, so anything additive lets the cloud bucket back in through the side door.
 
-The cost is accepted deliberately: a domain whose only repo is a module has no evidence until
-somebody deploys it. Today that is `GCP Agent Platform`. `Looker` and `Firestore` are unaffected,
-because the module was never their real signal — `tf-gcp-edp-*` carries **218 PE MRs** against 1
-on the Looker module, and its `cloud-svc/us-east4/looker-core/` unit tags `Looker` normally.
+The cost is that a domain whose only repo is a module has no evidence until somebody deploys it.
+In practice that bites nobody here: the `tf-gcp-edp-*` estate carries **218 PE MRs** against 1 on
+the Looker module, and every one of these domains has a unit there —
+`cloud-svc/us-east4/looker-core/`, `edw/us-east4/agent-platform/`,
+`cloud-svc/us-east4/knowledge-catalog/` — so the deployments are where the signal comes from, as
+intended.
 
 *Superseded:* an earlier pass added a `tf-gcp-` pattern to GCP Core to catch these 49 module repos.
 That was the wrong fix — the cloud in a module's name is what it targets, not what its author was
 operating.
 
-**Four domains split out because the work is growing, not because it has volume yet** —
-**Firebase**, **Firestore**, **Looker** and **GCP Agent Platform**. Firestore leaves `Databases`
+**Five domains split out because the work is growing** — **Firebase**, **Firestore**, **Looker**,
+**GCP Agent Platform** and **Knowledge Catalog**. Four of the five have live deployments in the
+`tf-gcp-edp-*` estate; only Firebase has nothing yet. Firestore leaves `Databases`
 and Looker leaves `BigQuery/Data`, the way EKS came out of `Kubernetes/GitOps`; leaving them in
 both would double-count the same work and let the coarse bucket keep claiming the specialist.
 Volume today is near zero (Firebase has no repos at all), and that is fine: the matrix hides a
@@ -1174,6 +1177,10 @@ files the work as generic GCP for however long it takes anyone to notice.
 Agents**: the AgentCore modules and the deployed PE agent are the same competency the domain
 already named, and 33 MRs across the `tf-aws-agentcore/*` submodules read as plain AWS Core
 before this.
+
+**Never a bare `catalog`** either — the same estate carries
+`edw/us-east4/bigquery-datasets/acs-audio-catalog`, which is a BigQuery dataset. The pattern is
+`knowledge-?catalog`, and a test pins that the dataset stays `BigQuery/Data`.
 
 **Never a bare `agent`.** `tf-gcp-sts-agent-pool`, `tf-aws-datasync-agent` and
 `tf-gcp-service-agents` are a storage-transfer agent pool, a DataSync agent and GCP service

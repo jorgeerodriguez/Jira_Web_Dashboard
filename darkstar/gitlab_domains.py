@@ -59,6 +59,10 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Firestore": r"firestore",
     "Firebase": r"firebase",
     "Looker": r"looker",
+    # knowledge-?catalog, never a bare `catalog`: the edp estate also carries
+    # edw/us-east4/bigquery-datasets/acs-audio-catalog, which is a BigQuery dataset and has
+    # nothing to do with the knowledge catalog.
+    "Knowledge Catalog": r"knowledge-?catalog",
 }
 
 # Everything under devops/terraform/modules/ is module authoring, and that is one competency

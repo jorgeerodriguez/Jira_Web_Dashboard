@@ -225,3 +225,36 @@ def test_an_estate_repo_is_untouched_by_the_modules_rule():
         "audacy-inc/devops/terraform/tf-coreservices", [])
     gcp = gitlab_domains.domains_for("audacy-inc/gcp/devops/tf-gcp-ai-traffic-prod", [])
     assert "GCP Core" in gcp and gitlab_domains.MODULES_DOMAIN not in gcp
+
+
+# --- Knowledge Catalog ----------------------------------------------------------------------------
+
+def test_knowledge_catalog_is_its_own_domain():
+    """Real estate presence, not just a module: edp-dev carries cloud-svc/us-east4/knowledge-catalog
+    plus its service accounts and staging bucket, and edp-prod an artifact-registry entry."""
+    for unit in ("cloud-svc/us-east4/knowledge-catalog",
+                 "cloud-svc/iam/service-account/knowledge-catalog-lookml-ci",
+                 "cloud-svc/us-east4/iam/storage/knowledge-catalog-staging"):
+        found = gitlab_domains.domains_for(_ESTATE, [f"{unit}/terragrunt.hcl"])
+        assert "Knowledge Catalog" in found, unit
+
+
+def test_a_bigquery_dataset_that_happens_to_say_catalog_is_not_knowledge_catalog():
+    """Why the pattern is `knowledge-?catalog` and never a bare `catalog`.
+
+    The same estate carries edw/us-east4/bigquery-datasets/acs-audio-catalog, which is a dataset.
+    Matching the bare word would credit knowledge-catalog expertise to whoever added it.
+    """
+    found = gitlab_domains.domains_for(_ESTATE, ["edw/us-east4/bigquery-datasets/acs-audio-catalog/terragrunt.hcl"])
+    assert "Knowledge Catalog" not in found
+    assert "BigQuery/Data" in found
+
+
+def test_agent_platform_has_a_real_deployment():
+    """Corrects a claim made when the domain was added: it is not module-only.
+
+    tf-gcp-edp-dev carries edw/us-east4/agent-platform/terragrunt.hcl, and edp-prod an
+    artifact-registry/agent-platform entry — so the domain has estate evidence from day one.
+    """
+    found = gitlab_domains.domains_for(_ESTATE, ["edw/us-east4/agent-platform/terragrunt.hcl"])
+    assert "GCP Agent Platform" in found
