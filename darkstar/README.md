@@ -1103,6 +1103,22 @@ the top scorer is the **SME** and the next are **runners-up**. The lead can over
 SME/runner-up per domain from the panel above the matrix; overrides persist to a shared JSON on the
 PVC (`overrides.py`) so they are team-wide.
 
+**Only people currently on `ROSTER` can be suggested**, and `smeList` enforces that on every path —
+the curated override order, the derived ranking, and the `add` list alike. The derived side would
+get it for free (the corpus and MR counts are roster-keyed), but **a manual override is a list of
+names in a file**, and it keeps naming whoever was written into it. Randall left PE and was still
+offered as an alternate for GCP Core and Composer: taking him out of `_SEED` fixed nothing, because
+the seed only ever applies on a store's *first* read and the deployed file was seeded months
+earlier.
+
+The filter reads rather than rewrites. The lead's curation stays in the JSON exactly as they left
+it — silently editing it would lose the intent the moment someone rejoins — and the matrix still
+*reports* the stale entry, because `overrideStatus` reads the raw order and flags `⚠ not on
+roster`. What changes is only that work stops being routed to someone who cannot pick it up. An
+override naming nobody current falls through to the derived ranking rather than rendering an empty
+domain, which is both the sensible reading of a stale override and what stops `renderSME` indexing
+`arr[0]` of an empty list.
+
 ### Putting it together
 
 For an unassigned ticket, its summary is tagged to a **primary domain**; the suggestion is that

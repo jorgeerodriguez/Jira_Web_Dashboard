@@ -265,10 +265,27 @@ let MR_DOMAINS = {};   // per-engineer domain counts from GitLab MR authorship (
 // SME_ADD: runner-up(s) appended to the derived list WITHOUT overriding the derived SME. Both from /api/intake.
 let SME_OVERRIDES = {};
 let SME_ADD = {};
+// Only people currently on the roster can be routed to. The derived side gets this for free —
+// the corpus and MR counts are keyed by ROSTER — but a manual override is a curated list living in
+// JSON on the PVC, and it keeps naming whoever was written into it. Randall left the team and was
+// still being offered as an alternate for GCP Core and Composer, because removing him from the
+// seed in overrides.py does nothing to a file that was seeded months ago.
+//
+// Filtered here rather than rewritten in the store: the lead's curation is theirs, and silently
+// editing it would lose the intent the moment someone rejoins. The entry stays in the file and the
+// matrix still reports it — overrideStatus reads the raw order and flags "not on roster" — it just
+// stops steering work to someone who cannot do it.
+const onRoster = k => Boolean(ROSTER[k]);
 const smeList = d => {
-  if(SME_OVERRIDES[d]) return SME_OVERRIDES[d].order.map(k => [k, null]);
-  const base = (SME[d] || []).slice();
-  if(SME_ADD[d]) for(const k of SME_ADD[d]) if(!base.some(e => e[0] === k)) base.push([k, null]);
+  const ov = SME_OVERRIDES[d];
+  if(ov){
+    const curated = ov.order.filter(onRoster);
+    // An override naming ONLY departed people is not an instruction to show nobody; fall through to
+    // the derived ranking, which is what the domain would have had without the override.
+    if(curated.length) return curated.map(k => [k, null]);
+  }
+  const base = (SME[d] || []).filter(e => onRoster(e[0]));
+  if(SME_ADD[d]) for(const k of SME_ADD[d]) if(onRoster(k) && !base.some(e => e[0] === k)) base.push([k, null]);
   return base;
 };
 // review helper: is a manual override load-bearing, redundant (data agrees), or stale (person gone)?
