@@ -1090,6 +1090,52 @@ near-complete and reflects hands-on authorship, not merely who a ticket was assi
 **Tradeoff:** a path tells you *where* a change lives, not *what* it did — a one-line fix in an EKS
 file still counts as EKS work.
 
+### The taxonomy is AWS-shaped, and that is why GCP work looks generic
+
+Swept over PE's merged MRs (1,534 across 190 repos, trailing 6 months to 2026-09-21): only **two**
+repos matched no domain at all. The problem is the opposite of unmapped — **1,108 MRs (72%) match
+only coarse buckets**, and re-tagging a 140-MR sample with changed file paths rescues just 42% of
+those. So roughly **42% of everything PE merges resolves no further than "does Terraform" or "does
+Kubernetes"**, which makes those two domains nearly useless as SME discriminators.
+
+The cause is an asymmetry: every AWS service resolves and almost no GCP counterpart did.
+
+| AWS | mapped | GCP equivalent | mapped before |
+|---|---|---|---|
+| `s3` | yes | `gcs` | no |
+| `ecr` | yes | `artifact-registry` | no |
+| `sqs` / `sns` | yes | `pubsub` | no |
+| `cloudwatch` | yes | `cloud-logging` | no |
+| `kms` | yes | `cloud-kms` | no |
+| `lambda` | yes | `cloud-functions` | no |
+| `codebuild` | yes | `cloudbuild` | no |
+| `dynamodb` | yes | `firestore` | no |
+
+Only `rds`/`cloudsql` was symmetric. GCP is where the volume now is, so the GCP half of the estate
+had nothing to resolve to.
+
+`gcs`, `artifact-registry`, `pubsub`, `cloud-logging` and `cloud-kms` are now named in **GCP Core**
+on both sides. Deliberately folded into the existing bucket rather than given their own domains:
+a repo named for a business initiative is not a technology, and a domain minted from one would tag
+the project rather than the competency — `tf-gcp-ai-*` provisions Cloud Run, Pub/Sub, Firestore and
+Artifact Registry, so an "AI" domain would make whoever staffs that initiative an AI SME for
+writing Pub/Sub topics.
+
+**This adds no tags today**, and that is expected: GCP Core already matches the `/gcp/` path
+segment, so every `tf-gcp-*` repo was tagged regardless of its contents. What changes is that the
+mapping is intentional rather than an accident of repo layout, and a GCP service provisioned from
+outside that tree is now recognised. The 42% figure is untouched — narrowing it means splitting
+GCP Core and Terraform/Terragrunt, which is a separate decision.
+
+**`cloud-?kms`, never a bare `\bkms\b`.** `tf-coreservices`, `tf-aardvark2-prod` and
+`tf-amperwave-nonprod` each carry a `kms/` unit and all three are AWS; the bare form would relabel
+real AWS work as GCP and quietly make whoever does it look like a GCP SME.
+
+**Known drift, not fixed here:** `firestore` and `secret-manager` appear in the client
+`DOMAIN_PATTERNS` and not in `gitlab_domains`. Since the path tagger is the dense signal (97% match
+rate against 63% for Jira titles), a client-only pattern contributes almost nothing — those two are
+effectively unmapped despite looking mapped. Nothing checks the two lists against each other.
+
 ### Domains and overrides
 
 Domains are grouped **AWS / GCP / Other** (alpha-sorted within each, group-collapsible), with

@@ -18,7 +18,13 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubernetes/GitOps": r"clusters/|namespaces/|helmrelease|kustomization|/helm/|\bk8s\b|karpenter|nodepool|nodeclass|kube-system|argocd|/flux|gitrepository|daemonset|statefulset|\bcrds?\b",
     "Terraform/Terragrunt": r"terragrunt\.hcl|\.tf$|\.tftpl|\.tfvars|/tf-|terraform|\.hcl$",
     "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b|cloudfront",
-    "GCP Core": r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/",
+    # Named services as well as the /gcp/ path segment. The segment already catches every tf-gcp-*
+    # repo, so these add no tags today -- they make the mapping intentional instead of an accident
+    # of where the repos happen to live, and they catch a GCP service provisioned from anywhere else.
+    # cloud-?kms, never a bare \bkms\b: tf-coreservices, tf-aardvark2-prod and tf-amperwave-nonprod
+    # all have kms/ units and all three are AWS, so the bare form would relabel AWS KMS as GCP.
+    "GCP Core": (r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/"
+                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"),
     "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|looker|\bedp\b",
     "Grafana": r"grafana|dashboards?/|prometheus|\bloki\b|\btempo\b|alerting|servicemonitor|scrape",
     "GitLab": r"\.gitlab-ci|/\.gitlab/|(^|/)ci/|\bpipeline",
