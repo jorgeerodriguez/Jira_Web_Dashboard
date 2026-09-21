@@ -18,8 +18,15 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubernetes/GitOps": r"clusters/|namespaces/|helmrelease|kustomization|/helm/|\bk8s\b|karpenter|nodepool|nodeclass|kube-system|argocd|/flux|gitrepository|daemonset|statefulset|\bcrds?\b",
     "Terraform/Terragrunt": r"terragrunt\.hcl|\.tf$|\.tftpl|\.tfvars|/tf-|terraform|\.hcl$",
     "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b|cloudfront",
-    "GCP Core": r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/",
-    "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|looker|\bedp\b",
+    # Named services as well as the /gcp/ path segment, so a GCP service provisioned from outside
+    # the GCP group still resolves. Deliberately NOT a tf-gcp- prefix: those are module repos, and
+    # authoring one is module work rather than operating that cloud (see MODULES_DOMAIN below).
+    # cloud-?kms, never a bare \bkms\b: tf-coreservices, tf-aardvark2-prod and tf-amperwave-nonprod
+    # all have kms/ units and all three are AWS, so the bare form would relabel AWS KMS as GCP.
+    "GCP Core": (r"/gcp/|prj-|project-factory|landing.?zone|/folders?/|cloud-?run|/projects?/"
+                 r"|\bgcs\b|artifact-?registry|pub-?sub|cloud-?logging|cloud-?kms"),
+    # looker moved to its own domain: Looker Core is a BI platform deployment, not a warehouse.
+    "BigQuery/Data": r"bigquery|/bq/|\.sql$|dataflow|dataproc|\bedp\b",
     "Grafana": r"grafana|dashboards?/|prometheus|\bloki\b|\btempo\b|alerting|servicemonitor|scrape",
     "GitLab": r"\.gitlab-ci|/\.gitlab/|(^|/)ci/|\bpipeline",
     "IAM/RBAC": r"\biam\b|/rbac|service-?account|workload-?identity|/roles?/|policies?/|clusterrole|\bsso\b|okta|tf-org\b",
@@ -32,7 +39,7 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Storage Transfer": r"storage-?transfer|\bsts\b",
     "VDI/WorkSpaces": r"workspace|\bvdi\b|gcve|vsphere|citrix",
     "AI Plugins": r"audacy-ai-plugins",
-    "AWS Bedrock Agents": r"pe-agent|claude-sdk-pe-agent|bedrock",
+    "AWS Bedrock Agents": r"pe-agent|claude-sdk-pe-agent|bedrock|agentcore|devops-agent",
     # specialized services pulled out of the core buckets (per Adam) — not everyday skills.
     "EKS": r"\beks\b|eks-node|eks-cluster",
     "ECS": r"\becs\b|fargate",
@@ -43,7 +50,37 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubeflow Pipelines": r"kubeflow|\bkfp\b",
     "Route53": r"tf-sharedservices|route\s?53|\br53\b",
     "Fastly": r"fastly",  # 3rd-party CDN (distinct from AWS CloudFront) — specialized, called out on its own
+    # Four called out on their own because all are expected to grow. Low or zero volume today is
+    # fine: the matrix hides a domain until somebody has history in it, so an empty row costs
+    # nothing, while a missing domain silently files the work as generic GCP for however long it
+    # takes anyone to notice. firestore and looker are pulled OUT of Databases and BigQuery/Data
+    # respectively, the way EKS came out of Kubernetes/GitOps.
+    "GCP Agent Platform": r"agent-?platform|agent[-_ ]?space",
+    "Firestore": r"firestore",
+    "Firebase": r"firebase",
+    "Looker": r"looker",
+    # knowledge-?catalog, never a bare `catalog`: the edp estate also carries
+    # edw/us-east4/bigquery-datasets/acs-audio-catalog, which is a BigQuery dataset and has
+    # nothing to do with the knowledge catalog.
+    "Knowledge Catalog": r"knowledge-?catalog",
 }
+
+# Everything under devops/terraform/modules/ is module authoring, and that is one competency
+# whatever cloud the module happens to target (per Adam). Writing tf-gcp-firestore is writing
+# reusable HCL -- variables, validation, examples, a release -- not running Firestore in
+# production, and the person who does one is frequently not the person who does the other.
+MODULES_DOMAIN: str = "Terraform Modules"
+_MODULES_PATH = re.compile(r"/terraform/modules/|/terraform/modules$", re.IGNORECASE)
+
+# A module repo yields MODULES_DOMAIN and NOTHING else. Deploying a service onto an estate is what
+# demonstrates knowing that service; publishing a module able to deploy it demonstrates knowing
+# Terraform. tf-gcp-looker-core is an interface, a variables block and a release -- whoever wrote
+# it need never have run a Looker instance.
+#
+# The cost is accepted deliberately: a domain whose only repo is a module has no evidence until
+# somebody deploys it, which today means GCP Agent Platform. Looker and Firestore are unaffected,
+# because the module was never their real signal -- tf-gcp-edp-* carries 218 PE MRs and a
+# cloud-svc/us-east4/looker-core/ unit, and a unit name inside an estate repo tags normally.
 
 _COMPILED: dict[str, re.Pattern[str]] = {
     domain: re.compile(pattern, re.IGNORECASE) for domain, pattern in _DOMAIN_PATTERNS.items()
@@ -51,7 +88,14 @@ _COMPILED: dict[str, re.Pattern[str]] = {
 
 
 def domains_for(project_path: str, paths: list[str]) -> set[str]:
-    """The set of domains an MR touches, matched over its repo path and changed file paths."""
+    """The set of domains an MR touches, matched over its repo path and changed file paths.
+
+    A merge request against devops/terraform/modules/ is module authoring and tags MODULES_DOMAIN
+    ALONE -- no cloud, no service. Deploying onto an estate is what shows you know the service;
+    publishing a module that can deploy it shows you know Terraform.
+    """
+    if _MODULES_PATH.search(project_path):
+        return {MODULES_DOMAIN}
     haystack = project_path + "\n" + "\n".join(paths)
     return {domain for domain, pattern in _COMPILED.items() if pattern.search(haystack)}
 

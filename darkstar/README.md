@@ -1090,6 +1090,115 @@ near-complete and reflects hands-on authorship, not merely who a ticket was assi
 **Tradeoff:** a path tells you *where* a change lives, not *what* it did — a one-line fix in an EKS
 file still counts as EKS work.
 
+### The taxonomy is AWS-shaped, and that is why GCP work looks generic
+
+Swept over PE's merged MRs (1,534 across 190 repos, trailing 6 months to 2026-09-21): only **two**
+repos matched no domain at all. The problem is the opposite of unmapped — **1,108 MRs (72%) match
+only coarse buckets**, and re-tagging a 140-MR sample with changed file paths rescues just 42% of
+those. So roughly **42% of everything PE merges resolves no further than "does Terraform" or "does
+Kubernetes"**, which makes those two domains nearly useless as SME discriminators.
+
+The cause is an asymmetry: every AWS service resolves and almost no GCP counterpart did.
+
+| AWS | mapped | GCP equivalent | mapped before |
+|---|---|---|---|
+| `s3` | yes | `gcs` | no |
+| `ecr` | yes | `artifact-registry` | no |
+| `sqs` / `sns` | yes | `pubsub` | no |
+| `cloudwatch` | yes | `cloud-logging` | no |
+| `kms` | yes | `cloud-kms` | no |
+| `lambda` | yes | `cloud-functions` | no |
+| `codebuild` | yes | `cloudbuild` | no |
+| `dynamodb` | yes | `firestore` | no |
+
+Only `rds`/`cloudsql` was symmetric. GCP is where the volume now is, so the GCP half of the estate
+had nothing to resolve to.
+
+`gcs`, `artifact-registry`, `pubsub`, `cloud-logging` and `cloud-kms` are now named in **GCP Core**
+on both sides. Deliberately folded into the existing bucket rather than given their own domains:
+a repo named for a business initiative is not a technology, and a domain minted from one would tag
+the project rather than the competency — `tf-gcp-ai-*` provisions Cloud Run, Pub/Sub, Firestore and
+Artifact Registry, so an "AI" domain would make whoever staffs that initiative an AI SME for
+writing Pub/Sub topics.
+
+**This adds no tags today**, and that is expected: GCP Core already matches the `/gcp/` path
+segment, so every `tf-gcp-*` repo was tagged regardless of its contents. What changes is that the
+mapping is intentional rather than an accident of repo layout, and a GCP service provisioned from
+outside that tree is now recognised. The 42% figure is untouched — narrowing it means splitting
+GCP Core and Terraform/Terragrunt, which is a separate decision.
+
+**`cloud-?kms`, never a bare `\bkms\b`.** `tf-coreservices`, `tf-aardvark2-prod` and
+`tf-amperwave-nonprod` each carry a `kms/` unit and all three are AWS; the bare form would relabel
+real AWS work as GCP and quietly make whoever does it look like a GCP SME.
+
+**Module authoring is its own domain: `Terraform Modules`.** Everything under
+`devops/terraform/modules/` — **69 repos, 135 MRs, 9% of PE's output** — takes it, and that is one
+competency whatever cloud the module targets. Writing `tf-gcp-firestore` is writing reusable HCL
+(variables, validation, examples, a release); it is not running Firestore in production, and it is
+frequently not the same person.
+
+**A module repo tags `Terraform Modules` and nothing else** — no cloud, no service. The line is
+between the two kinds of repo:
+
+| | tags |
+|---|---|
+| **terragrunt repo** (estate) — `tf-gcp-edp-dev`, `tf-coreservices` | real domain skill: `Looker`, `AWS Bedrock Agents`, `GCP Core`, … |
+| **terraform module repo** — `tf-gcp-looker-core` | `Terraform Modules` only |
+
+Deploying a service onto an estate is what shows you know that service. Publishing a module able
+to deploy it shows you know Terraform: `tf-gcp-looker-core` is an interface, a variables block and
+a release, and whoever wrote it need never have run a Looker instance.
+
+It is an early return in `domains_for`, not a pattern, because it has to **beat** the patterns
+rather than merge with them — `tf-gcp-kms` and `tf-gcp-logging` match the GCP Core service names
+on their own names, so anything additive lets the cloud bucket back in through the side door.
+
+The cost is that a domain whose only repo is a module has no evidence until somebody deploys it.
+In practice that bites nobody here: the `tf-gcp-edp-*` estate carries **218 PE MRs** against 1 on
+the Looker module, and every one of these domains has a unit there —
+`cloud-svc/us-east4/looker-core/`, `edw/us-east4/agent-platform/`,
+`cloud-svc/us-east4/knowledge-catalog/` — so the deployments are where the signal comes from, as
+intended.
+
+*Superseded:* an earlier pass added a `tf-gcp-` pattern to GCP Core to catch these 49 module repos.
+That was the wrong fix — the cloud in a module's name is what it targets, not what its author was
+operating.
+
+**Five domains split out because the work is growing** — **Firebase**, **Firestore**, **Looker**,
+**GCP Agent Platform** and **Knowledge Catalog**. Four of the five have live deployments in the
+`tf-gcp-edp-*` estate; only Firebase has nothing yet. Firestore leaves `Databases`
+and Looker leaves `BigQuery/Data`, the way EKS came out of `Kubernetes/GitOps`; leaving them in
+both would double-count the same work and let the coarse bucket keep claiming the specialist.
+Volume today is near zero (Firebase has no repos at all), and that is fine: the matrix hides a
+domain until somebody has history in it, so an empty row costs nothing — where a *missing* domain
+files the work as generic GCP for however long it takes anyone to notice.
+
+**AgentCore is treated as Bedrock.** `agentcore` and `devops-agent` now match **AWS Bedrock
+Agents**: the AgentCore modules and the deployed PE agent are the same competency the domain
+already named, and 33 MRs across the `tf-aws-agentcore/*` submodules read as plain AWS Core
+before this.
+
+**Never a bare `catalog`** either — the same estate carries
+`edw/us-east4/bigquery-datasets/acs-audio-catalog`, which is a BigQuery dataset. The pattern is
+`knowledge-?catalog`, and a test pins that the dataset stays `BigQuery/Data`.
+
+**Never a bare `agent`.** `tf-gcp-sts-agent-pool`, `tf-aws-datasync-agent` and
+`tf-gcp-service-agents` are a storage-transfer agent pool, a DataSync agent and GCP service
+agents — nothing to do with agentic AI. Matching the bare word would credit that expertise to
+whoever wired up a transfer job. The patterns name `agentcore`, `devops-agent`, `agent-platform`
+and `agentspace` instead, and a test pins the three negatives.
+
+**The two taggers are now checked against each other.** They are supposed to share domain names so
+the path signal and the title signal land in one bucket, and they had already drifted — `firestore`
+and `secret-manager` were in the client list and absent from the server one. Since the path tagger
+is the dense signal (97% match rate against 63% for Jira titles), a client-only pattern contributes
+almost nothing, so that drift meant "mapped" domains that were effectively unmapped. A test now
+asserts every server domain exists on the client and appears in `DOMAIN_PRIORITY`.
+
+**Still unmapped on the server side:** `secret-manager` (client-only). Left alone here rather than
+folded in blind — `Secrets/Vault` already matches `/secrets?/`, so the overlap wants a look before
+another pattern is added.
+
 ### Domains and overrides
 
 Domains are grouped **AWS / GCP / Other** (alpha-sorted within each, group-collapsible), with
