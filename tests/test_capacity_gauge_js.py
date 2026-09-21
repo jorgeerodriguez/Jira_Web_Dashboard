@@ -77,7 +77,7 @@ def test_rendering_a_sized_roster_does_not_throw():
     Asserting only "does not throw" is the point — the bug was a TypeError, not a wrong number.
     """
     html = _render({"adam": _member()})
-    assert "capseg" in html
+    assert "capfill" in html
 
 
 def test_every_segment_offset_is_a_finite_number():
@@ -92,19 +92,28 @@ def test_every_segment_offset_is_a_finite_number():
     assert offsets == sorted(offsets), f"segments must march left to right: {offsets}"
 
 
-def test_segments_are_ordered_heaviest_first():
-    """The encoding's premise: width is weight, read biggest-first, Unsized last."""
-    html = _render({"adam": _member(wip=6.0, tickets=3, unsized=1,
-                                    mix={"Small": 1, "XL": 1, "Unsized": 1})})
-    # scoped to the gauge segments — the unsized-WIP note beside the name carries a title too
-    titles = re.findall(r'class="capseg[^"]*"[^>]*title="([^"]+)"', html)
-    assert titles == ["1 XL ticket", "1 Small ticket", "1 unsized ticket"], titles
+def test_wip_is_one_block_in_the_engineer_s_own_colour():
+    """WIP is a single block whose WIDTH carries the weighted load — no per-size segments.
+
+    Splitting it by size was reverted: the mix is not an input to "who should take this ticket",
+    which needs spare capacity and domain skill. It cost a page-down and an unreadable legend to
+    restate numbers the spare figure already accounts for.
+    """
+    html = _render({"adam": _member()})
+    assert html.count("capfill") == 1
+    assert "#ef6f9e" in html, "the fill must carry the engineer's assigned colour"
 
 
-def test_an_unmixed_member_still_renders_the_old_single_fill():
-    """A store or cached payload predating `mix` must degrade to the previous bar, not an empty track."""
-    html = _render({"adam": _member(mix={}, unsized=0, tickets=0)})
-    assert "capfill" in html and "capseg" not in html
+def test_the_bar_never_recolours_for_over_capacity():
+    """Over-utilisation is said once, by the red spare figure on the right.
+
+    A second channel for the same fact cost a legend key and, once the bar was segmented, read as
+    a size category rather than a state.
+    """
+    html = _render({"adam": _member(done=30, wip=12.0, vel=8)})   # well past velocity
+    gauge = re.search(r'<div class="capgauge">(.*?)</div></div>', html, re.S).group(1)
+    assert "--neg" not in gauge, f"the bar itself must not turn red: {gauge}"
+    assert "#ef6f9e" in gauge, "and must still carry the engineer's colour"
 
 
 def test_a_roster_with_no_wip_at_all_renders_cleanly():
