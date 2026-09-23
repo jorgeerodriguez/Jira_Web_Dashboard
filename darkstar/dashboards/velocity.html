@@ -101,21 +101,7 @@
   .tbar-lbl{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
   .tbar-lbl.proj{fill:var(--muted)}
   .tbar-ax{font-family:var(--mono); font-size:11px; fill:var(--muted)}
-  .tbl-wrap{width:100%; overflow-x:auto}
-  table{border-collapse:collapse; width:100%; font-size:14px; min-width:520px}
-  caption{caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; margin-top:10px; font-family:var(--mono)}
-  th,td{padding:8px 11px; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
-  th:first-child,td:first-child{text-align:left}
-  thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
-        color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line2); padding-bottom:9px}
-  tbody tr{transition:background .12s}
-  tbody tr:hover td{background:rgba(255,255,255,.03)}
-  tbody td{border-bottom:1px solid var(--line)}
-  td.num{font-family:var(--mono)}
-  tr.proj td{color:var(--ink2)} tr.proj td:first-child{font-style:italic}
-  tbody tr.sum td{border-top:2px solid var(--line2); border-bottom:none; font-weight:640; padding-top:12px}
-  tbody tr.sum.first td{padding-top:14px}
-  .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640} .na{color:var(--muted)}
+  .pos{color:var(--pos); font-weight:640} .neg{color:var(--neg); font-weight:640}
 
   .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:6px}
   .fc{border:1px solid var(--line); border-radius:11px; padding:14px 16px; background:var(--well);
@@ -159,15 +145,18 @@
 <main class="card">
   <p class="eyebrow">Platform Engineering · Ticket Velocity</p>
   <h1>Completed Tickets by Month</h1>
-  <p class="dek">Delivery work (Story, Task, Bug, Hotfix, Sub-task), each ticket counted once in its first-completion month. Actuals for the last six complete months, with this month's forecast for every member. Toggle members to isolate or compare — pick exactly two for a head-to-head %, or one for month-over-month.</p>
+  <p class="dek">Delivery work (Story, Task, Bug, Hotfix, Sub-task), each ticket counted once in its first-completion month. Actuals for the last six complete months, with this month's forecast for every member. Toggle members under By engineer to isolate or compare them.</p>
 
   <h2>Team throughput</h2>
   <p class="h2sub">All roster engineers combined — completed tickets per month (each ticket counted once) over the last six complete months, with this month's forecast. This is the team-level trend; the per-engineer breakdown is below.</p>
   <div class="cards" id="teamStats"></div>
   <div class="chart-wrap" style="margin-top:16px"><div id="teamChart"></div></div>
 
-  <h2 id="tblHeading">Month-to-month</h2>
-  <div class="tbl-wrap"><table id="tbl"></table></div>
+  <h2>By ticket size</h2>
+  <p class="h2sub" id="sizeSub"></p>
+  <div class="controls sizes" id="sizeControls" role="group" aria-label="Ticket size"></div>
+  <div class="size-legend" id="sizeLegend" hidden></div>
+  <div class="chart-wrap"><div class="chart-inner" id="sizeInner"><div id="sizeChart"></div><div id="sizeTip" class="tip" hidden></div></div></div>
 
   <h2>By engineer</h2>
   <div class="controls" id="controls">
@@ -180,12 +169,6 @@
 
   <div class="chart-wrap"><div class="chart-inner" id="chartInner"><div id="chart"></div><div id="tip" class="tip" hidden></div></div></div>
   <div id="pinned" class="pinned" hidden></div>
-
-  <h2>By ticket size</h2>
-  <p class="h2sub" id="sizeSub"></p>
-  <div class="controls sizes" id="sizeControls" role="group" aria-label="Ticket size"></div>
-  <div class="size-legend" id="sizeLegend" hidden></div>
-  <div class="chart-wrap"><div class="chart-inner" id="sizeInner"><div id="sizeChart"></div><div id="sizeTip" class="tip" hidden></div></div></div>
 
   <h2>This month's forecast</h2>
   <p class="h2sub" id="fcSub"></p>
@@ -223,14 +206,7 @@ const CARD_BG = "#141922";
 function niceStep(vmax){ for(const t of [5,10,20,25,50,100]) if(vmax/t <= 8) return t; return 200; }
 function total(m){ return m.actuals.reduce((a,b)=>a+b,0); }
 function julVal(m){ return m.forecast ? m.forecast.value : null; }
-function projected(m){ return total(m) + (julVal(m)||0); }
 function valAt(m,i){ return i<=LAST_ACTUAL ? m.actuals[i] : julVal(m); }
-function fmtPct(a,b){
-  if(a==null||b==null||b===0) return {t:"—", c:"na"};
-  const raw=(a-b)/b*100;
-  const val=Math.abs(raw)<10 ? Math.round(raw*10)/10 : Math.round(raw);
-  return {t:(raw>=0?"+":"−")+Math.abs(val)+"%", c: raw>=0?"pos":"neg"};
-}
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function sel(){ return ORDER.filter(k=>selected.has(k)); }
 
@@ -334,48 +310,6 @@ function bindHover(){
   applyBase();
 }
 
-/* ---------- table ---------- */
-function renderTable(){
-  const keys=sel(), pair=keys.length===2, solo=keys.length===1;
-  document.getElementById("tblHeading").textContent =
-    pair ? `Month-to-month · ${MEMBERS[keys[0]].short} vs ${MEMBERS[keys[1]].short}` : "Month-to-month";
-
-  let head=`<thead><tr><th>Month</th>`+keys.map(k=>`<th>${esc(MEMBERS[k].short)}</th>`).join('');
-  if(pair) head+=`<th>${esc(MEMBERS[keys[0]].short)} vs ${esc(MEMBERS[keys[1]].short)}</th>`;
-  if(solo) head+=`<th>MoM</th>`;
-  head+=`</tr></thead>`;
-
-  let body="<tbody>";
-  for(let i=0;i<MONTHS.length;i++){
-    const isFc=i===MONTHS.length-1;
-    let row=`<tr class="${isFc?'proj':''}"><td>${MONTHS[i]}${i===0?' <span style="color:var(--muted)">(start)</span>':''}${isFc?' — forecast':''}</td>`;
-    row+=keys.map(k=>{ const v=valAt(MEMBERS[k],i); return `<td class="num" style="color:${MEMBERS[k].color}">${v==null?'<span class="na">—</span>':(isFc?'≈':'')+v}</td>`; }).join('');
-    if(pair){ const p=fmtPct(valAt(MEMBERS[keys[0]],i), valAt(MEMBERS[keys[1]],i)); row+=`<td class="num"><span class="${p.c}">${p.t}</span></td>`; }
-    if(solo){
-      let cell='<span class="na">—</span>';
-      if(i>0){ const cur=valAt(MEMBERS[keys[0]],i), prev=MEMBERS[keys[0]].actuals[i-1]; const p=fmtPct(cur,prev); cell=`<span class="${p.c}">${p.t}</span>`; }
-      row+=`<td class="num">${cell}</td>`;
-    }
-    body+=row+`</tr>`;
-  }
-  const totRow=(label,fn,cls)=>{
-    let r=`<tr class="sum ${cls}"><td>${label}</td>`;
-    r+=keys.map(k=>{ const v=fn(k); return `<td class="num" style="color:${MEMBERS[k].color}">${v}</td>`; }).join('');
-    if(pair){ const p=fmtPct(fn(keys[0]),fn(keys[1])); r+=`<td class="num"><span class="${p.c}">${p.t}</span></td>`; }
-    if(solo) r+=`<td></td>`;
-    return r+`</tr>`;
-  };
-  body+=totRow(`Total, actual (${MONTHS[0]}–${MONTHS[LAST_ACTUAL]})`, k=>total(MEMBERS[k]), "first");
-  body+=totRow(`Total, projected (${MONTHS[0]}–${MONTHS[LAST_ACTUAL+1]})`, k=>projected(MEMBERS[k]), "");
-  body+="</tbody>";
-
-  const cap = pair
-    ? `<caption>Positive = ${esc(MEMBERS[keys[0]].short)} ahead that month · negative = behind. "—" where a value is 0.</caption>`
-    : (solo ? `<caption>MoM = change vs the previous month.</caption>`
-            : `<caption>Pick exactly two members for a head-to-head %, or one for month-over-month.</caption>`);
-  document.getElementById("tbl").innerHTML = head+body+cap;
-}
-
 /* ---------- forecast cards ---------- */
 function renderCards(){
   const keys=sel().filter(k=>MEMBERS[k].forecast);
@@ -435,7 +369,7 @@ function renderSizes(){
   const pct = closed ? Math.round(unsized/closed*100) : 0;
   const what = sizeView===ALL_SIZES ? "Tickets closed per month by Estimated Size" : `${sizeView} tickets closed per month`;
   document.getElementById("sizeSub").textContent =
-    `${what}, averaged over ${sizeWindow()} (the three months the forecast weights), for the members selected above. ` +
+    `${what}, averaged over ${sizeWindow()} (the three months the forecast weights), for the members selected under By engineer. ` +
     `${pct}% of their ${sizeWindow()} completions have no size` + (sizeView===ALL_SIZES ? " (grey)." : " and count only under All sizes.");
   const legend = document.getElementById("sizeLegend");
   legend.hidden = sizeView!==ALL_SIZES;
@@ -548,7 +482,7 @@ function renderTeam(){
   s+=`</svg>`;
   document.getElementById("teamChart").innerHTML = s;
 }
-function renderAll(){ renderChips(); renderChart(); renderTable(); renderSizes(); renderCards(); }
+function renderAll(){ renderChips(); renderChart(); renderSizes(); renderCards(); }
 document.getElementById("btnAll").addEventListener("click",()=>{ ORDER.forEach(k=>selected.add(k)); renderAll(); });
 document.getElementById("btnNone").addEventListener("click",()=>{ selected.clear(); selected.add(ORDER[0]); renderAll(); });
 document.getElementById("pinned").addEventListener("click",()=>{ locked=null; applyBase(); });
