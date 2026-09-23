@@ -15,6 +15,8 @@
     --head:#202836; --well:#151b25;
     /* Same value as --blue, named for the job: where the eye should land first. */
     --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
+    /* A story summary's widest; fitStories sets it on a table too wide for the screen. */
+    --sum-max:none;
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
@@ -50,17 +52,32 @@
   .h2sub{color:var(--muted); font-size:12.5px; margin:0 0 14px; max-width:74ch}
 
   /* initiative card */
-  .init{border:1px solid var(--line2); border-radius:12px; padding:20px; background:linear-gradient(180deg, rgba(91,157,255,.06), transparent 60%)}
+  /* The --card base under the tint is the colour the card already sits on, so at rest nothing
+     changes; it makes the card opaque, so a card floated over the page covers what is beneath it. */
+  .init{border:1px solid var(--line2); border-radius:12px; padding:20px; background:linear-gradient(180deg, rgba(91,157,255,.06), transparent 60%), var(--card); transition:box-shadow .2s}
+  /* A card with Features or stories opens from a click anywhere on it, as it does from its toggle. */
+  .init:has(> .stories-lbl, > .children-lbl):not(.floating){cursor:pointer}
+  .init:has(> .stories-lbl, > .children-lbl):not(.floating):hover{border-color:rgba(91,157,255,.45)}
   .init .top{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
   .init .name{font-size:18px; font-weight:640}
   .k{font-family:var(--mono); font-size:12.5px; color:var(--muted); text-decoration:none}
   .k:hover{color:var(--ink)}
-  .init .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-top:16px}
+  /* A figure never wraps: the track floor fits the widest one, a 22px date like "Nov 18, 2026", so a
+     half-width card moves a tile to the next row instead of breaking the date across two lines. */
+  .init .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(172px,1fr)); gap:14px; margin-top:16px}
   .metric .lbl{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
-  .metric .v{font-family:var(--mono); font-size:22px; font-weight:600; margin-top:2px}
+  .metric .v{font-family:var(--mono); font-size:22px; font-weight:600; margin-top:2px; white-space:nowrap}
   .metric .v small{font-size:13px; color:var(--muted); font-weight:400}
   .caveat{margin-top:16px; font-size:13px; color:var(--warn); background:rgba(232,194,74,.08); border:1px solid rgba(232,194,74,.25); border-radius:9px; padding:10px 13px}
-  .cardlist{display:flex; flex-direction:column; gap:14px}
+  /* Features sit two to a row. Opening one's child stories floats that card over a dimmed page
+     (width, top and max-height set by the stories toggle) and leaves an outlined slot in its place,
+     so the grid never reflows and nothing below it moves. */
+  .cardlist{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
+  @media (max-width:980px){ .cardlist{grid-template-columns:1fr} }
+  .init-slot{border:1px dashed var(--line2); border-radius:12px}
+  .backdrop{position:fixed; inset:0; z-index:50; background:rgba(4,6,10,.66); backdrop-filter:blur(2px)}
+  .init.floating{position:fixed; z-index:51; left:0; right:0; margin:0 auto; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable;
+                 box-shadow:0 30px 80px -20px rgba(0,0,0,.9), 0 0 0 1px var(--line2)}
   .init .top .conf{margin-left:auto}
   .rnote{margin-top:14px; font-size:13px; border-radius:9px; padding:9px 12px; border:1px solid}
   .rnote.done{color:var(--good); background:rgba(65,201,138,.08); border-color:rgba(65,201,138,.28)}
@@ -69,7 +86,7 @@
   .children-lbl{background:none; border:0; cursor:pointer; font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:16px 0 8px 22px; padding:4px 0; display:inline-flex; align-items:center; gap:7px}
   .children-lbl:hover{color:var(--ink)}
   .children-lbl .caret{display:inline-block; width:9px; text-align:center}
-  .children{margin:0 0 4px 22px; padding-left:18px; border-left:2px solid var(--line2); display:flex; flex-direction:column; gap:12px}
+  .children{margin:0 0 4px 22px; padding-left:18px; border-left:2px solid var(--line2)}
   .children.collapsed{display:none}
   .stories-lbl{background:none; border:0; cursor:pointer; font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:var(--muted); margin:12px 0 2px; padding:4px 0; display:inline-flex; align-items:center; gap:7px}
   .stories-lbl:hover{color:var(--ink)}
@@ -80,8 +97,20 @@
   .stbl th,.stbl td{text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:middle; font-variant-numeric:tabular-nums}
   .stbl tr:last-child td{border-bottom:0}
   .stbl thead th{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line2)}
+  /* A sortable header is a button set in the header's own type. Its arrow's room is kept whether or
+     not the column is sorted, so sorting never widens a column past what fitStories measured. */
+  .stbl th .sort{background:none; border:0; padding:0; cursor:pointer; font:inherit; color:inherit; letter-spacing:inherit; text-transform:inherit; display:inline-flex; align-items:center; gap:4px}
+  .stbl th .sort:hover, .stbl th[aria-sort]{color:var(--ink)}
+  .stbl th .arrow{display:inline-block; width:1em; text-align:center}
+  .stbl th .arrow::after{content:"↕"; opacity:.45}
+  .stbl th[aria-sort="ascending"] .arrow::after{content:"↑"; opacity:1}
+  .stbl th[aria-sort="descending"] .arrow::after{content:"↓"; opacity:1}
   .stbl .keycell{display:inline-flex; align-items:center; gap:8px}
-  .stbl .c-sum{white-space:normal; color:var(--ink2); min-width:220px; max-width:460px}
+  /* No story cell wraps, the summary included: the floating card is sized to the table's full width
+     (fitStories). Only when that is wider than the screen does fitStories set --sum-max, and the
+     summary then ends in an ellipsis with the full text on hover, so every column stays on screen. */
+  .stbl .c-sum{color:var(--ink2)}
+  .stbl .sum{display:inline-block; max-width:var(--sum-max); overflow:hidden; text-overflow:ellipsis; vertical-align:bottom}
   .sdot{width:8px; height:8px; border-radius:50%; flex:0 0 auto; display:inline-block}
   .skey{font-family:var(--mono); font-size:11.5px; color:var(--muted); text-decoration:none}
   .skey:hover{color:var(--ink)}
@@ -90,6 +119,10 @@
   .delta.late{color:var(--bad); border:1px solid rgba(242,112,95,.4)}
   .delta.early{color:var(--good); border:1px solid rgba(65,201,138,.4)}
   .delta.ontime{color:var(--muted); border:1px solid var(--line2)}
+  .delta.risk{color:var(--warn); border:1px solid rgba(232,194,74,.4)}
+  .meta{font-family:var(--mono); font-size:11.5px; color:var(--muted); white-space:nowrap}
+  .meta b{color:var(--ink2); font-weight:600}
+  .top .delta{font-family:var(--mono); font-size:11px}   /* a header verdict matches the pills beside it */
   .age-warn{color:var(--warn)} .age-bad{color:var(--bad)}
 
   .tbl-wrap{width:100%; overflow-x:auto}
@@ -119,6 +152,8 @@
   .chip.prog{border-color:rgba(91,157,255,.5); color:#a9c8ff}
   .chip.blk{border-color:rgba(242,112,95,.55); color:#ffab9e}
   .chip.hold{border-color:rgba(192,132,239,.5); color:#dcbcf5}
+  .chip.done{border-color:rgba(65,201,138,.5); color:#8fe3b9}
+  .chip.dropped{border-color:var(--line2); color:var(--muted)}
   .conf{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:999px}
   .conf.higher{color:var(--good); border:1px solid rgba(65,201,138,.4)}
   .conf.medium{color:var(--warn); border:1px solid rgba(232,194,74,.4)}
@@ -146,12 +181,12 @@
 <main class="card">
   <p class="eyebrow">Platform Engineering · Delivery Forecast</p>
   <h1>Initiative &amp; Feature Target Dates</h1>
-  <p class="dek">Monte Carlo delivery forecast for open Initiatives and Features. Each item's remaining child scope is burned down by simulating its recent weekly completion rate 10,000 times; the dates below are the P50 (coin-flip) and P85 (safer commit) finish dates. As of July 1, 2026.</p>
+  <p class="dek">Monte Carlo delivery forecast for open Initiatives and Features. Each item's remaining child scope is burned down by simulating its recent weekly completion rate 10,000 times; the dates below are the P50 (coin-flip) and P85 (safer commit) finish dates.</p>
   <div class="summary" id="summary"></div>
 
   <h2>Initiative</h2>
   <p class="h2sub">Rolled-up scope and throughput, with its Features nested beneath.</p>
-  <div id="initiatives"></div>
+  <div id="initiatives" class="cardlist"></div>
 
   <h2>Features — forecastable</h2>
   <p class="h2sub">Standalone Features (not under an Initiative above), sorted by P85 (safer) target date. Pace λ = child items completed per week (recent 12 weeks). Confidence reflects how much recent data backs the rate.</p>
@@ -200,6 +235,7 @@ function addWeeks(w){ const d=new Date(ASOF); d.setDate(d.getDate()+Math.round(w
 function fmtDate(d){ return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
 function confOf(it){ const a=ageWeeks(it.created); if(it.recent>=8 && a>=4) return "higher"; if(it.recent>=4) return "medium"; return "low"; }
 function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function escAttr(s){ return esc(s).replace(/"/g, "&quot;"); }
 
 function progressBar(it){ const sc=scope(it), pct= sc? Math.round(it.done/sc*100):0;
   return `<span class="bar"><i style="width:${pct}%"></i></span><span class="barlbl">${it.done}/${sc}</span>`; }
@@ -212,11 +248,11 @@ function chips(it){ let h='<span class="chips">';
 
 /* ---------- render ---------- */
 function renderSummary(){
-  const feats=ITEMS.filter(i=>i.type==="feature");
+  const feats=ITEMS.filter(i=>i.type==="feature"), inits=ITEMS.filter(i=>i.type==="initiative").length;
   const fc=feats.filter(i=>classify(i)==="forecast").length;
   const el=document.getElementById("summary");
   el.innerHTML =
-    `<div class="stat"><b>1</b><span>open Initiative</span></div>`+
+    `<div class="stat"><b>${inits}</b><span>open Initiative${inits===1?"":"s"}</span></div>`+
     `<div class="stat"><b>${feats.filter(i=>i.status!=="Done").length}</b><span>open Features</span></div>`+
     `<div class="stat"><b>${fc}</b><span>forecastable now</span></div>`+
     `<div class="stat"><b>${feats.filter(i=>classify(i)==="unbroken").length}</b><span>not broken down</span></div>`+
@@ -235,19 +271,57 @@ function featCompare(a,b){ const r=featRank(a)-featRank(b); if(r) return r;
   if(featRank(a)===0) return simOf(a).p85-simOf(b).p85;
   const o={complete:0,stalled:1,unbroken:2}; return o[classify(a)]-o[classify(b)]; }
 const NODATA = `<span class="nodata">No Data</span>`;
+// One tone per status -- stories, Features and Initiatives alike -- shared by a story row's dot and
+// every status pill, so they never disagree. Will Not Do is closed but not delivered, so it is muted
+// rather than green; Triage and Reviewing are matched by name first because Jira files Triage under
+// the In Progress category.
+function statusTone(status, category){
+  if(status==="Will Not Do") return "dropped";
+  if(category==="done") return "done";
+  if(status==="Blocked") return "blk";
+  if(status==="On Hold") return "hold";
+  if(status==="Triage" || status==="Reviewing") return "todo";
+  if(category==="indeterminate") return "prog";
+  return "todo";
+}
+const TONE_DOT = {done:"var(--good)", dropped:"var(--muted)", blk:"var(--bad)", hold:"var(--hold)", prog:"var(--blue)", todo:"var(--muted)"};
+function statusPill(status, category){ return `<span class="chip ${statusTone(status, category)}">${esc(status)}</span>`; }
+const SIZE_ABBR = {Small:"S", Medium:"M", Large:"L", XL:"XL"};
+const localDate = iso => new Date(iso + "T00:00:00");
+const dayOf = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+// A card's Size and Due date, with the Due date's verdict against the P85 forecast: overdue once the
+// date has passed, at risk when P85 lands after it, on track otherwise. A delivered item, or one with
+// no forecast (stalled, not broken down), gets the date alone.
+function cardMeta(it, p85){
+  let h = it.size ? `<span class="meta">Size <b>${esc(it.size)}</b></span>` : "";
+  if(!it.due) return h;
+  const due = localDate(it.due);
+  h += `<span class="meta">Due <b>${fmtDate(due)}</b></span>`;
+  if(it.c==="done") return h;
+  if(due < dayOf(ASOF)) return h + `<span class="delta late" title="The due date has passed">overdue</span>`;
+  if(!p85) return h;
+  const late = dayOf(p85) > due;
+  return h + `<span class="delta ${late ? "risk" : "early"}" title="P85 ${fmtDate(p85)} is ${late ? "after" : "on or before"} the due date">${late ? "at risk" : "on track"}</span>`;
+}
+// The "In progress (days)" figure: cycle days for a done story, days since its last update (scd) for
+// one in progress, none for one not started.
+function progressDays(s){
+  if(s.c==="done") return (typeof CYCLE!=="undefined" && CYCLE[s.k]!=null) ? CYCLE[s.k] : null;
+  if(s.c==="indeterminate" && s.scd) return Math.round((ASOF-new Date(s.scd+"T00:00:00"))/864e5);
+  return null;
+}
 function storyRow(s){
-  const dot = s.c==="done" ? "var(--good)" : (s.st==="Blocked" ? "var(--bad)" : (s.st==="On Hold" ? "var(--hold)" : (s.c==="indeterminate" ? "var(--blue)" : "var(--muted)")));
+  const tone = statusTone(s.st, s.c), dot = TONE_DOT[tone];
   const assignee = s.a ? esc(s.a) : NODATA;
   const target = s.te ? fmtDate(new Date(s.te+"T00:00:00")) : NODATA;
-  let age = NODATA;
-  if(s.c==="done"){
-    const cd=(typeof CYCLE!=="undefined" && CYCLE[s.k]!=null)?CYCLE[s.k]:null;
-    if(cd!=null){ const cls=cd>=60?"age-bad":(cd>=30?"age-warn":""); age=`<span class="${cls}">${cd}d</span>`; }
-  } else if(s.c==="indeterminate" && s.scd){
-    const d=Math.round((ASOF-new Date(s.scd+"T00:00:00"))/864e5);
-    const cls=d>=60?"age-bad":(d>=30?"age-warn":"");
-    age=`<span class="${cls}">${d}d</span>`;
+  const size = s.sz ? `<span title="${esc(s.sz)}">${SIZE_ABBR[s.sz] || esc(s.sz)}</span>` : NODATA;
+  let due = NODATA;
+  if(s.dd){
+    const d = localDate(s.dd), past = s.c!=="done" && d < dayOf(ASOF);
+    due = past ? `<span class="age-bad" title="Past due">${fmtDate(d)}</span>` : fmtDate(d);
   }
+  const days = progressDays(s);
+  const age = days==null ? NODATA : `<span class="${days>=60?"age-bad":(days>=30?"age-warn":"")}">${days}d</span>`;
   let delta = NODATA;
   if(s.c==="done" && s.te && s.scd){
     const diff=Math.round((new Date(s.scd+"T00:00:00")-new Date(s.te+"T00:00:00"))/864e5);
@@ -255,18 +329,50 @@ function storyRow(s){
           : diff<0 ? `<span class="delta early">${-diff}d early</span>`
           : `<span class="delta ontime">on time</span>`;
   }
-  return `<tr><td><span class="keycell"><span class="sdot" style="background:${dot}"></span><a class="skey" href="${BASE}${s.k}" target="_blank" rel="noopener">${s.k}</a></span></td><td class="c-sum">${esc(s.s)}</td><td>${esc(s.st)}</td><td>${assignee}</td><td>${target}</td><td>${age}</td><td>${delta}</td></tr>`;
+  return `<tr><td><span class="keycell"><span class="sdot" style="background:${dot}"></span><a class="skey" href="${BASE}${s.k}" target="_blank" rel="noopener">${s.k}</a></span></td><td class="c-sum"><span class="sum" title="${escAttr(s.s)}">${esc(s.s)}</span></td><td>${statusPill(s.st, s.c)}</td><td>${size}</td><td>${assignee}</td><td>${target}</td><td>${due}</td><td>${age}</td><td>${delta}</td></tr>`;
+}
+// A story table sorts on Status, Size, Due and In progress. Size sorts by magnitude (SIZE_ABBR's
+// order) and Status by stage (to do, in progress, blocked, on hold, done, will not do, then by name
+// within a stage), not alphabetically. A row with No Data in the sorted column stays at the bottom
+// whichever way the sort runs, so a sort always leads with real values. Rows re-render from CHILDREN,
+// so ties keep the order the API sent them in.
+const SIZE_RANK = Object.fromEntries(Object.keys(SIZE_ABBR).map((size, rank) => [size, rank]));
+const TONE_RANK = {todo:0, prog:1, blk:2, hold:3, done:4, dropped:5};
+const STORY_SORT = {
+  status: s => `${TONE_RANK[statusTone(s.st, s.c)]} ${s.st}`,
+  size: s => SIZE_RANK[s.sz],
+  due: s => s.dd,
+  age: progressDays,
+};
+function storyOrder(field, dir){
+  const value = STORY_SORT[field];
+  return (a, b) => {
+    const x = value(a), y = value(b);
+    if(x==null || y==null) return (x==null) - (y==null);
+    return x < y ? -dir : x > y ? dir : 0;
+  };
+}
+const sortableTh = (field, label) => `<th><button class="sort" type="button" data-sort="${field}">${label}<span class="arrow" aria-hidden="true"></span></button></th>`;
+// A header click sorts ascending, and a click on the sorted header reverses it. aria-sort marks the
+// sorted column; the CSS draws its arrow from that.
+function sortStories(button){
+  const th = button.closest("th"), table = button.closest(".stbl");
+  const dir = th.getAttribute("aria-sort")==="ascending" ? -1 : 1;
+  const rows = [...CHILDREN[table.dataset.key]].sort(storyOrder(button.dataset.sort, dir));
+  table.tBodies[0].innerHTML = rows.map(storyRow).join('');
+  table.tHead.querySelectorAll("th[aria-sort]").forEach(other => other.removeAttribute("aria-sort"));
+  th.setAttribute("aria-sort", dir===1 ? "ascending" : "descending");
 }
 function storiesHTML(it){
   const kids=(typeof CHILDREN!=="undefined" && CHILDREN[it.key]) ? CHILDREN[it.key] : [];
   if(!kids.length) return '';
-  const head=`<thead><tr><th>Story</th><th>Summary</th><th>Status</th><th>Assignee</th><th>Target end</th><th>In progress (days)</th><th>Δ vs target</th></tr></thead>`;
+  const head=`<thead><tr><th>Story</th><th>Summary</th>${sortableTh("status","Status")}${sortableTh("size","Size")}<th>Assignee</th><th>Target end</th>${sortableTh("due","Due")}${sortableTh("age","In progress (days)")}<th>Δ vs target</th></tr></thead>`;
   const body=`<tbody>${kids.map(storyRow).join('')}</tbody>`;
-  return `<button class="stories-lbl" type="button" aria-expanded="false"><span class="caret">▸</span>${kids.length} child ${kids.length===1?"story":"stories"}</button><div class="stories collapsed"><div class="stbl-wrap"><table class="stbl">${head}${body}</table></div></div>`;
+  return `<button class="stories-lbl" type="button" aria-expanded="false"><span class="caret">▸</span>${kids.length} child ${kids.length===1?"story":"stories"}</button><div class="stories collapsed"><div class="stbl-wrap"><table class="stbl" data-key="${it.key}">${head}${body}</table></div></div>`;
 }
 function featureCardHTML(it){
   const cls=classify(it), sc=scope(it), pct= sc?Math.round(it.done/sc*100):0;
-  let h=`<div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a><span class="tag">${esc(it.status)}</span>`;
+  let h=`<div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a>${statusPill(it.status, it.c)}${cardMeta(it, cls==="forecast" ? addWeeks(simOf(it).p85) : null)}`;
   if(cls==="forecast") h+=`<span class="conf ${confOf(it)}">${confOf(it)} confidence</span>`;
   h+=`</div>`;
   if(cls==="forecast"){ const lam=lambdaOf(it), sim=simOf(it);
@@ -288,8 +394,12 @@ function featureCardHTML(it){
 function renderInitiatives(){
   document.getElementById("initiatives").innerHTML = ITEMS.filter(i=>i.type==="initiative").map(it=>{
     const lam=lambdaOf(it), sim=simOf(it), sc=scope(it), pct=Math.round(it.done/sc*100);
-    const card=`<div class="init">
-      <div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a><span class="tag">${esc(it.status)}</span></div>
+    // Its Features live INSIDE the card (as an epic's stories do), so opening them floats the whole
+    // Initiative over the page with its Features in it.
+    const kids=ITEMS.filter(f=>f.type==="feature" && parentOf(f)===it.key).sort(featCompare);
+    const kidsHTML = kids.length ? `<button class="children-lbl" type="button" aria-expanded="false"><span class="caret">▸</span>${kids.length} Feature${kids.length===1?"":"s"} under this Initiative</button><div class="children cardlist collapsed">${kids.map(featureCardHTML).join('')}</div>` : '';
+    return `<div class="init">
+      <div class="top"><span class="name">${esc(it.name)}</span><a class="k" href="${BASE}${it.key}" target="_blank" rel="noopener">${it.key}</a>${statusPill(it.status, it.c)}${cardMeta(it, addWeeks(sim.p85))}</div>
       <div class="grid">
         <div class="metric"><div class="lbl">Progress</div><div class="v">${pct}% <small>${it.done}/${sc}</small></div></div>
         <div class="metric"><div class="lbl">Remaining</div><div class="v">${it.remaining}</div></div>
@@ -299,10 +409,8 @@ function renderInitiatives(){
       </div>
       <div style="margin-top:12px">${chips(it)}</div>
       <div class="caveat">⚠ ${esc(it.note)}</div>
+      ${kidsHTML}
     </div>`;
-    const kids=ITEMS.filter(f=>f.type==="feature" && parentOf(f)===it.key).sort(featCompare);
-    const kidsHTML = kids.length ? `<button class="children-lbl" type="button" aria-expanded="true"><span class="caret">▾</span>${kids.length} Features under this Initiative — click to collapse</button><div class="children">${kids.map(featureCardHTML).join('')}</div>` : '';
-    return card+kidsHTML;
   }).join('');
 }
 function renderFeatures(){
@@ -328,11 +436,179 @@ async function init(){
   }
 }
 init();
+
+/* ---------- expand / collapse ---------- */
+// Opening an epic's stories, or an Initiative's Features, lifts the card out of its grid -- an
+// outlined slot keeps its place, so nothing on the page moves -- slides it to the centre of the screen
+// over a dimmed page, widens it, then reveals the list inside it. Closing (the same button, the
+// backdrop, or Escape) runs the steps backwards and sets the card back in its slot. Overlays stack: an
+// epic opened inside a floating Initiative floats above it, and Escape or a backdrop click closes only
+// the top one. Each animation holds its last frame until the end state is committed, so nothing
+// flickers between steps; prefers-reduced-motion runs them instantly.
+const SLIDE_MS = 320, GROW_MS = 260, REVEAL_MS = 260, EASE = "cubic-bezier(.2,.7,.2,1)";
+const EDGE = 24;   // px kept clear around the floating card
+const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)");
+const STACK = [];     // open overlays, innermost last: {card, btn, list, slot, backdrop}
+let MOVING = false;    // one open or close at a time; input mid-move is dropped
+
+function markExpanded(btn, open){
+  btn.querySelector(".caret").textContent = open ? "▾" : "▸";
+  btn.setAttribute("aria-expanded", String(open));
+}
+async function play(el, frames, ms){
+  const animation = el.animate(frames, {duration: REDUCED_MOTION.matches ? 0 : ms, easing: EASE, fill: "forwards"});
+  await animation.finished;
+  return animation;
+}
+const viewportWidth = () => document.documentElement.clientWidth;
+const viewportHeight = () => document.documentElement.clientHeight;
+const centredTop = height => Math.max(EDGE, (viewportHeight() - height) / 2);
+// The height the floating card would have at `width`, measured without leaving it there.
+function heightAt(card, width){
+  const current = card.style.width;
+  card.style.width = width + "px";
+  const height = card.getBoundingClientRect().height;
+  card.style.width = current;
+  return height;
+}
+// The floating card's width with every story column on one line: the table at its max-content width
+// plus the card's padding, border and scrollbar gutter, never narrower than `minimum` nor wider than
+// the screen. A table too wide for the screen has its summary column shortened by the excess (the
+// --sum-max ellipsis) instead of scrolling sideways, never below SUMMARY_FLOOR. Measured by showing
+// the list for one synchronous read, so nothing paints.
+const SUMMARY_FLOOR = 240;
+function fitStories(card, list, minimum){
+  const table = list.querySelector(".stbl");
+  list.classList.remove("collapsed");
+  table.style.removeProperty("--sum-max");
+  table.style.width = "max-content";
+  const style = getComputedStyle(card);
+  const chrome = card.offsetWidth - card.clientWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const room = viewportWidth() - 2 * EDGE, excess = table.getBoundingClientRect().width + chrome - room;
+  if(excess > 0){
+    const widest = Math.max(...[...table.querySelectorAll(".sum")].map(sum => sum.getBoundingClientRect().width));
+    table.style.setProperty("--sum-max", Math.max(SUMMARY_FLOOR, widest - excess) + "px");
+  }
+  const tableWidth = table.getBoundingClientRect().width;
+  table.style.width = "";
+  list.classList.add("collapsed");
+  return Math.min(Math.max(minimum, tableWidth + chrome), room);
+}
+// An Initiative floats at the page's own content width, which is room for two Feature columns.
+function pageWidth(minimum){
+  const main = document.querySelector("main.card"), style = getComputedStyle(main);
+  const content = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return Math.min(Math.max(minimum, content), viewportWidth() - 2 * EDGE);
+}
+// Animate the floating card's width and top to new values, then commit them.
+async function moveCard(card, width, top, ms){
+  const moved = await play(card, [{width: card.style.width, top: card.style.top},
+                                  {width: width + "px", top: top + "px"}], ms);
+  card.style.width = width + "px";
+  card.style.top = top + "px";
+  moved.cancel();
+}
+// FLIP: slide el from the box it had to where it is now.
+async function slideFrom(el, from){
+  const to = el.getBoundingClientRect();
+  (await play(el, [{transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)`},
+                   {transform: "none"}], SLIDE_MS)).cancel();
+}
+// `widthOf(minimum)` gives the open width: fitStories for an epic, pageWidth for an Initiative.
+async function openCard(card, btn, list, widthOf){
+  const level = STACK.length;   // each overlay sits above the one it was opened from
+  markExpanded(btn, true);
+  const from = card.getBoundingClientRect();
+  const slot = document.createElement("div");
+  slot.className = "init-slot";
+  slot.style.height = from.height + "px";
+  card.replaceWith(slot);
+  const backdrop = document.createElement("div");
+  backdrop.className = "backdrop";
+  backdrop.style.zIndex = String(50 + 2 * level);
+  document.body.append(backdrop, card);
+  card.classList.add("floating");
+  card.style.zIndex = String(51 + 2 * level);
+  card.style.maxHeight = (viewportHeight() - 2 * EDGE) + "px";
+  card.style.width = from.width + "px";
+  card.style.top = centredTop(from.height) + "px";
+  btn.focus({preventScroll: true});   // moving the node drops focus
+  STACK.push({card, btn, list, slot, backdrop});
+  const [, dimmed] = await Promise.all([slideFrom(card, from),
+                                        play(backdrop, [{opacity: 0}, {opacity: 1}], SLIDE_MS)]);
+  dimmed.cancel();
+  const width = widthOf(from.width);
+  await moveCard(card, width, centredTop(heightAt(card, width)), GROW_MS);
+  // Measure the open size before animating: an animation's first frame applies at once, so reading
+  // the card afterwards would see the list at height 0 and centre it for the wrong size.
+  list.classList.remove("collapsed");
+  const listHeight = list.offsetHeight, openTop = centredTop(card.getBoundingClientRect().height);
+  list.style.overflow = "hidden";
+  const shown = play(list, [{height: "0px", opacity: 0}, {height: listHeight + "px", opacity: 1}], REVEAL_MS);
+  await Promise.all([shown, moveCard(card, width, openTop, REVEAL_MS)]);
+  list.style.overflow = "";
+  (await shown).cancel();
+}
+async function closeTop(){
+  const {card, btn, list, slot, backdrop} = STACK[STACK.length - 1];
+  markExpanded(btn, false);
+  // The closed size is measured by collapsing the list for one synchronous read: subtracting the
+  // list's height is wrong once max-height has capped the card and it scrolls.
+  const width = parseFloat(card.style.width), listHeight = list.offsetHeight;
+  list.classList.add("collapsed");
+  const closedTop = centredTop(card.getBoundingClientRect().height);
+  list.classList.remove("collapsed");
+  list.style.overflow = "hidden";
+  const hidden = play(list, [{height: listHeight + "px", opacity: 1}, {height: "0px", opacity: 0}], REVEAL_MS);
+  await Promise.all([hidden, moveCard(card, width, closedTop, REVEAL_MS)]);
+  list.classList.add("collapsed");
+  list.style.overflow = "";
+  (await hidden).cancel();
+  const to = slot.getBoundingClientRect();
+  await moveCard(card, to.width, centredTop(heightAt(card, to.width)), GROW_MS);
+  const at = card.getBoundingClientRect();
+  const [landed] = await Promise.all([
+    play(card, [{transform: "none"}, {transform: `translate(${to.left - at.left}px, ${to.top - at.top}px)`}], SLIDE_MS),
+    play(backdrop, [{opacity: 1}, {opacity: 0}], SLIDE_MS),
+  ]);
+  slot.replaceWith(card);
+  backdrop.remove();
+  card.classList.remove("floating");
+  card.style.width = card.style.top = card.style.maxHeight = card.style.zIndex = "";
+  landed.cancel();
+  STACK.pop();
+  btn.focus({preventScroll: true});
+}
+function runMove(move){
+  if(MOVING) return;
+  MOVING = true;
+  move().finally(() => { MOVING = false; });
+}
+
+// A toggle closes its card if that card is the top overlay, and otherwise opens it above whatever is
+// open. Nothing beneath the top overlay can be clicked -- its backdrop covers it.
+function onToggle(btn){
+  const card = btn.closest(".init"), list = btn.nextElementSibling;
+  if(STACK.length && STACK[STACK.length - 1].card === card){ runMove(closeTop); return; }
+  const widthOf = btn.classList.contains("stories-lbl") ? (minimum => fitStories(card, list, minimum)) : pageWidth;
+  runMove(() => openCard(card, btn, list, widthOf));
+}
+
+// A click anywhere on a closed card opens it as its toggle would, except on a link (which opens Jira)
+// or at the end of a drag that selected text. A click inside an open card does nothing, so working in
+// its list never closes it.
 document.addEventListener("click", e=>{
-  const b=e.target.closest(".children-lbl, .stories-lbl"); if(!b) return;
-  const collapsed=b.nextElementSibling.classList.toggle("collapsed");
-  b.querySelector(".caret").textContent = collapsed ? "▸" : "▾";
-  b.setAttribute("aria-expanded", String(!collapsed));
+  const toggle = e.target.closest(".stories-lbl, .children-lbl");
+  if(toggle){ onToggle(toggle); return; }
+  const sorter = e.target.closest(".stbl .sort");
+  if(sorter){ sortStories(sorter); return; }
+  if(e.target.classList.contains("backdrop")){ runMove(closeTop); return; }
+  const card = e.target.closest(".init");
+  const own = card && !card.classList.contains("floating") && card.querySelector(":scope > .stories-lbl, :scope > .children-lbl");
+  if(own && !e.target.closest("a") && getSelection().isCollapsed) onToggle(own);
+});
+document.addEventListener("keydown", e=>{
+  if(e.key === "Escape" && STACK.length) runMove(closeTop);
 });
 </script>
 </body>

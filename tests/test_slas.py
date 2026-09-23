@@ -23,7 +23,7 @@ def _issue(key, labels, created, status="Done", issuetype="Story", mr_url=None,
         created=created, updated=created, resolutiondate=None,
         planned_start=None, target_end=None, labels=labels,
         mr_field_url=mr_url, dev_has_pr=dev_pr, dev_has_commits=dev_commits,
-        estimated_size=size, fetched_at=datetime(2026, 7, 28, 0, 0, 0))
+        estimated_size=size, due_date=None, fetched_at=datetime(2026, 7, 28, 0, 0, 0))
 
 
 def _mr(id, key, labels, opened, merged, description="", branch=""):

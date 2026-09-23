@@ -26,7 +26,7 @@ def _issue(key, account_id, size, status="In Progress"):
         assignee=None, assignee_account_id=account_id, reporter=None, business_lead=None,
         parent_key=None, created=_NOW, updated=_NOW, resolutiondate=None,
         planned_start=None, target_end=None, labels=[], mr_field_url=None,
-        dev_has_pr=None, dev_has_commits=None, estimated_size=size, fetched_at=_NOW)
+        dev_has_pr=None, dev_has_commits=None, estimated_size=size, due_date=None, fetched_at=_NOW)
 
 
 def _store(issues):

@@ -29,7 +29,7 @@ def _issue(key, status="Triage", status_category="indeterminate"):
         assignee=None, assignee_account_id=None, reporter=None, business_lead=None,
         parent_key=None, created=_NOW, updated=_NOW, resolutiondate=None,
         planned_start=None, target_end=None, labels=[], mr_field_url=None,
-        dev_has_pr=False, dev_has_commits=False, estimated_size=None, fetched_at=_NOW)
+        dev_has_pr=False, dev_has_commits=False, estimated_size=None, due_date=None, fetched_at=_NOW)
 
 
 def _store(issues):

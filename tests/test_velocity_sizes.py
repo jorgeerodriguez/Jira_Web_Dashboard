@@ -29,7 +29,7 @@ def _issue(key: str, account_id: str, size: str | None) -> store.IssueRow:
         assignee_account_id=account_id, reporter=None, business_lead=None, parent_key=None,
         created=datetime(2026, 1, 5), updated=_NOW, resolutiondate=None, planned_start=None,
         target_end=None, labels=[], mr_field_url=None, dev_has_pr=False, dev_has_commits=False,
-        estimated_size=size, fetched_at=_NOW)
+        estimated_size=size, due_date=None, fetched_at=_NOW)
 
 
 def _report(completions: list[tuple[str, str, str | None, list[datetime]]], now: datetime) -> dict:

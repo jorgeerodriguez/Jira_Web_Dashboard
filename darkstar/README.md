@@ -22,7 +22,7 @@ shares no code with the Streamlit `app.py`; it has its own entrypoint and worklo
 |---|---|---|
 | `/intake` | Who should pick up this ticket? | Open Jira tickets + per-engineer capacity + an expertise signal built from what people actually build in GitLab |
 | `/slas` | Is self-service carrying real load, and how fast does it deliver? | Jira labels + MR labels/footers, MR ready→merged times |
-| `/delivery-forecast` | When will the open Initiative and Features land? | Monte-Carlo simulation over recent completion pace |
+| `/delivery-forecast` | When will the open Initiatives and Features land, and will they make their due dates? | Monte-Carlo simulation over recent completion pace, against Jira's Due date |
 | `/velocity` | How much is each engineer completing per month, and at which ticket sizes? | Earliest Jira changelog transition to Done, split by the ticket's Estimated Size |
 | `/lead-time` | How long do delivered stories take, and how much of it is waiting? | Lead (created→Done) vs cycle (time in active statuses) — **hidden from the nav**, still served |
 
@@ -923,6 +923,7 @@ retuned without another crawl.
   holds Jira's Estimated Size (`customfield_10968`) as its option label — `Small`/`Medium`/`Large`/
   `XL`, or `NULL` where Jira holds none — never a numeric weight: the ratio between sizes is a
   property of whatever consumes it and nothing has measured one yet (DEVOPS-10567).
+  `issues.due_date` holds Jira's built-in Due date (`duedate`), `NULL` where none is set.
 - **Jira poller** (`ingest.py`) — a one-time full crawl on the first run, then **incremental only**
   (`updated >= watermark`, no periodic full re-crawl) plus a per-changed-issue changelog, and a
   per-cycle removal of stored open issues that left DEVOPS (`reconcile_departed_issues`);
@@ -973,7 +974,7 @@ So the marker is not inferred from the data at all. `sync_meta.fields_version` r
 stamp. Unambiguous whatever the field itself holds, and the next column added gets it for free:
 
 ```python
-_FIELDS_VERSION: int = 1   # bump whenever _ISSUE_FIELDS gains a column
+_FIELDS_VERSION: int = 2   # bump whenever _ISSUE_FIELDS gains a column (2: duedate)
 ```
 
 Two details that are load-bearing:
@@ -1004,6 +1005,39 @@ different key now — which covers a move out of DEVOPS and back, since each mov
 Absence from the search alone never deletes: an issue can drop out of it by closing mid-cycle, and a
 short page would make every open row a candidate at once, removing rows the slice never brings back.
 Done rows are not checked; one that later leaves keeps counting in the history it was part of.
+
+## How the delivery forecast reads
+
+**Layout.** Initiatives and Features sit two to a row. Clicking a card anywhere but a link, or its
+toggle, opens its Features or child stories in an **overlay**: the card lifts out of the grid (a
+dashed slot keeps its place, so nothing on the page moves), slides to the centre over a dimmed page,
+widens, then reveals its list. Overlays stack — an epic opened inside a floating Initiative floats
+above it — and the toggle, the backdrop or Escape closes the top one. A click inside an open card
+does not close it. `prefers-reduced-motion` runs every step instantly.
+
+An epic's overlay is as wide as its story table on one line (`fitStories`), within the screen; a table
+wider than the screen has its **summary** column shortened with an ellipsis, full text on hover,
+rather than scrolling sideways, so every column stays visible. An Initiative floats at the page's
+content width, room for two Feature columns.
+
+**Status colour** is one rule for stories, Features and Initiatives (`statusTone`): Done green,
+**Will Not Do muted** (closed, not delivered — the forecast and the self-service stats already refuse
+to count it as success), In Progress / Validating / Staged CAR blue, On Hold purple, Blocked red, To Do
+/ Triage / Reviewing grey. Triage is matched by name because Jira files it under In Progress. The
+forecast API sends each item's status category (`c`) alongside its status for this.
+
+**Size and Due date** show on every card header and as story-table columns. On a card, the Due date
+carries a verdict against the P85 forecast: **overdue** once the date has passed, **at risk** when P85
+lands after it, **on track** otherwise; a delivered item, or one with no forecast, shows the date
+alone. Coverage is partial and uneven — on 2026-09-23, Due date was set on 10 of 28 open
+Features/Initiatives but only 9 of 114 open stories, and most of the 283 due dates in DEVOPS sit on
+tickets closed years ago, which the forecast never shows.
+
+**Sorting.** A story table sorts on Status, Size, Due and In progress: click a header to sort
+ascending, and click it again to reverse. Size sorts by magnitude (Small to XL) and Status by stage
+(to do, in progress, blocked, on hold, done, will not do), not alphabetically. A story with No Data in
+the sorted column stays at the bottom either way. In progress sorts on the figure the column shows:
+cycle days for a done story, and days since its last update for an open one.
 
 ## How intake works
 
