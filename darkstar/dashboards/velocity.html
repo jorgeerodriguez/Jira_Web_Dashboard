@@ -15,6 +15,10 @@
     --head:#202836; --well:#151b25;
     /* One accent, taken from the chart palette so it is already in the page's vocabulary. */
     --accent:#5b9dff; --accent-soft:rgba(91,157,255,.13);
+    /* Estimated Size, Small to XL. Sizes are ordered, so they take one hue in steps (validated as an
+       ordinal ramp against --card: Small, the darkest, clears 3.99:1); unsized is the darkest neutral
+       grey that still clears 3:1, so it reads as context behind the sized segments. */
+    --size-1:#2a78d6; --size-2:#5598e7; --size-3:#86b6ef; --size-4:#b7d3f6; --size-none:#5f6a7a;
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
@@ -69,6 +73,7 @@
   .pinned{margin-top:12px; display:inline-flex; align-items:center; gap:7px; cursor:pointer;
           font-family:var(--mono); font-size:12.5px; color:var(--ink2);
           border:1px solid var(--line2); border-radius:999px; padding:5px 12px}
+  .pinned[hidden]{display:none}
   .pinned:hover{border-color:var(--muted); color:var(--ink)}
   .pinned .sw{width:9px; height:9px; border-radius:50%; display:inline-block}
   .pinned .x{color:var(--muted)}
@@ -121,6 +126,17 @@
   .fc .rng{font-family:var(--mono); font-size:12px; color:var(--muted)}
   .fc.empty{color:var(--muted); font-size:13px; display:flex; align-items:center}
 
+  .controls.sizes{margin-top:4px}
+  .btn[aria-pressed="true"]{color:var(--ink); border-color:var(--accent); background:var(--accent-soft)}
+  .size-legend{display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:10px; font-family:var(--mono); font-size:12px; color:var(--ink2)}
+  .size-legend[hidden]{display:none}
+  .size-legend .key{display:inline-flex; align-items:center; gap:7px}
+  .size-legend .sw{width:10px; height:10px; border-radius:2px}
+  .size-row{transition:opacity .12s; outline:none}
+  .size-row:focus-visible .size-hit{stroke:var(--line2)}
+  .size-name{font-family:var(--mono); font-size:13px; fill:var(--ink2)}
+  .size-val{font-family:var(--mono); font-size:12px; font-weight:600; fill:var(--ink)}
+
   .foot{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:grid; gap:7px; max-width:76ch}
   .foot b{color:var(--ink2); font-weight:600}
   .foot code{font-family:var(--mono); color:var(--ink2)}
@@ -143,10 +159,10 @@
 <main class="card">
   <p class="eyebrow">Platform Engineering · Ticket Velocity</p>
   <h1>Completed Tickets by Month</h1>
-  <p class="dek">Delivery work (Story, Task, Bug, Hotfix, Sub-task), each ticket counted once in its first-completion month. Actuals Jan–Jun 2026, with a next-30-day (July) forecast for every member. Toggle members to isolate or compare — pick exactly two for a head-to-head %, or one for month-over-month.</p>
+  <p class="dek">Delivery work (Story, Task, Bug, Hotfix, Sub-task), each ticket counted once in its first-completion month. Actuals for the last six complete months, with this month's forecast for every member. Toggle members to isolate or compare — pick exactly two for a head-to-head %, or one for month-over-month.</p>
 
   <h2>Team throughput</h2>
-  <p class="h2sub">All 14 engineers combined — completed tickets per month (each ticket counted once), Jan–Jun with a next-30-day July forecast. This is the team-level trend; the per-engineer breakdown is below.</p>
+  <p class="h2sub">All roster engineers combined — completed tickets per month (each ticket counted once) over the last six complete months, with this month's forecast. This is the team-level trend; the per-engineer breakdown is below.</p>
   <div class="cards" id="teamStats"></div>
   <div class="chart-wrap" style="margin-top:16px"><div id="teamChart"></div></div>
 
@@ -159,34 +175,39 @@
     <!-- chips injected -->
     <button class="btn" id="btnAll" type="button">All</button>
     <button class="btn" id="btnNone" type="button">None</button>
-    <span class="note">solid = actual · dashed = July forecast · whisker = range · point values &amp; ranges shown when ≤3 selected · hover a line for the name</span>
+    <span class="note">solid = actual · dashed = forecast · whisker = range · point values &amp; ranges shown when ≤3 selected · hover a line for the name</span>
   </div>
 
   <div class="chart-wrap"><div class="chart-inner" id="chartInner"><div id="chart"></div><div id="tip" class="tip" hidden></div></div></div>
   <div id="pinned" class="pinned" hidden></div>
 
-  <h2>Next-30-day forecast</h2>
-  <p class="h2sub">Central starts from a recency-weighted average of the last 3 complete months (Apr×1 + May×2 + Jun×3)/6, then blends toward the current month’s pace as the month progresses; range = ±1 s.d. of those months. Reflects recent pace and how this month is tracking. Shows for the members you've selected.</p>
+  <h2>By ticket size</h2>
+  <p class="h2sub" id="sizeSub"></p>
+  <div class="controls sizes" id="sizeControls" role="group" aria-label="Ticket size"></div>
+  <div class="size-legend" id="sizeLegend" hidden></div>
+  <div class="chart-wrap"><div class="chart-inner" id="sizeInner"><div id="sizeChart"></div><div id="sizeTip" class="tip" hidden></div></div></div>
+
+  <h2>This month's forecast</h2>
+  <p class="h2sub" id="fcSub"></p>
   <div class="cards" id="cards"></div>
 
   <div class="foot">
-    <div><b>What's counted.</b> <code>project = DEVOPS</code>, issue types Story / Task / Bug / Hotfix / Sub-task. "Completed" = the ticket entered the <code>Done</code> status (from the changelog; <code>resolutiondate</code> is unreliable here). "Will Not Do" excluded. Re-opens de-duplicated — each ticket counts once, in its first-completion month. Attributed by current assignee. Data as of July 1, 2026.</div>
-    <div><b>Forecast method.</b> Central is a recency-weighted 3-month average (Apr–Jun, June heaviest) blended toward the current month’s run-rate — this month’s completions so far, extrapolated over the business days elapsed — weighted by how far into the month we are. Early in the month it tracks the recent-months baseline; it converges to the actual as the month fills in, so the estimate updates day to day. The band is ±1 standard deviation of the recent months, recentered on the estimate. Directional only.</div>
-    <div><b>Team.</b> 14 members of Platform Engineering (confirmed roster). Excludes non-team assignees who occasionally get DEVOPS tickets. Over Jan–Jun the team completed 616 tickets (delivery types, deduped).</div>
+    <div><b>What's counted.</b> <code>project = DEVOPS</code>, issue types Story / Task / Bug / Hotfix / Sub-task. "Completed" = the ticket entered the <code>Done</code> status (from the changelog; <code>resolutiondate</code> is unreliable here). "Will Not Do" excluded. Re-opens de-duplicated — each ticket counts once, in its first-completion month. Attributed by current assignee.</div>
+    <div><b>Forecast method.</b> Central is a recency-weighted average of the last 3 complete months (the latest heaviest) blended toward the current month’s run-rate — this month’s completions so far, extrapolated over the business days elapsed — weighted by how far into the month we are. Early in the month it tracks the recent-months baseline; it converges to the actual as the month fills in, so the estimate updates day to day. The band is ±1 standard deviation of the recent months, recentered on the estimate. Directional only.</div>
+    <div><b>Team.</b> The current Platform Engineering roster. Excludes non-team assignees who occasionally get DEVOPS tickets.</div>
+    <div><b>By ticket size.</b> Each ticket's current Estimated Size (Small / Medium / Large / XL); a ticket with none counts as unsized. Rates are tickets closed per month over the same three complete months the forecast weights.</div>
     <div><b>Caveat.</b> Ticket count is throughput, not effort or complexity — a bucket-creation task and a multi-week platform build each count as 1. Read across the team accordingly.</div>
-    <div><b>Add / edit a member.</b> Edit the <code>MEMBERS</code> object at the top of the &lt;script&gt; block — set <code>actuals: [Jan, Feb, Mar, Apr, May, Jun]</code> and a <code>forecast</code>. Everything updates automatically.</div>
+    <div><b>Add / edit a member.</b> Edit <code>ROSTER</code> in <code>darkstar/roster.py</code>; counts and forecasts come from the darkstar API.</div>
   </div>
 </main>
 
 <script>
-/* ============================================================
-   DATA — edit team members here.
-   actuals: [Jan, Feb, Mar, Apr, May, Jun].  forecast: {value, low, high} for the next 30 days (July).
-   ============================================================ */
 /* Data is loaded from the darkstar API (see init() at the bottom). */
-let MONTHS = [];          // ["Jan"…"Jun","Jul"] — last entry is the forecast month
+let MONTHS = [];          // the complete months' abbreviations, then the forecast month's
 let LAST_ACTUAL = 0;      // index of the last actual month
-let MEMBERS = {};         // key -> { name, short, color, actuals:[…], forecast:{value,low,high} }
+let MEMBERS = {};         // key -> { name, short, color, actuals:[…], sizes:{size:[…]}, forecast:{value,low,high} }
+let MONTH_PROGRESS = null; // this month's business days {elapsed, total}: the weight the forecast's blend gives its pace
+let FC_MONTH = "";        // the forecast month's full name
 let ORDER = [];           // member keys in display order (by total, desc — the API sorts)
 const selected = new Set();
 let locked = null;                             // pinned member key (click-to-lock)
@@ -195,6 +216,7 @@ const PALETTE = ["#ef6f9e","#6fd07f","#c084ef","#4cc4d6","#5b9dff","#f4a24c","#e
 const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const monthAbbr = ym => MONTH_ABBR[parseInt(ym.split("-")[1],10)-1];
 const nextMonthAbbr = ym => MONTH_ABBR[parseInt(ym.split("-")[1],10) % 12];
+const nextMonthName = ym => { const [y, m] = ym.split("-").map(Number); return new Date(y, m, 1).toLocaleString("en-US", {month:"long"}); };
 
 /* ---------- helpers ---------- */
 const CARD_BG = "#141922";
@@ -343,8 +365,8 @@ function renderTable(){
     if(solo) r+=`<td></td>`;
     return r+`</tr>`;
   };
-  body+=totRow("Total, actual (Jan–Jun)", k=>total(MEMBERS[k]), "first");
-  body+=totRow("Total, projected (Feb–Jul)", k=>projected(MEMBERS[k]), "");
+  body+=totRow(`Total, actual (${MONTHS[0]}–${MONTHS[LAST_ACTUAL]})`, k=>total(MEMBERS[k]), "first");
+  body+=totRow(`Total, projected (${MONTHS[0]}–${MONTHS[LAST_ACTUAL+1]})`, k=>projected(MEMBERS[k]), "");
   body+="</tbody>";
 
   const cap = pair
@@ -367,6 +389,110 @@ function renderCards(){
     </div>`; }).join('');
 }
 
+// The forecast's description names the months its baseline weights and how far into this month the
+// blend is, so it always describes today's forecast.
+function renderForecastSub(){
+  const [a, b, c] = MONTHS.slice(LAST_ACTUAL-2, LAST_ACTUAL+1);
+  document.getElementById("fcSub").textContent =
+    `Central starts from a recency-weighted average of the last 3 complete months (${a}×1 + ${b}×2 + ${c}×3)/6, then blends toward ${FC_MONTH}’s pace so far (${MONTH_PROGRESS.elapsed} of ${MONTH_PROGRESS.total} business days in); range = ±1 s.d. of those months. Reflects recent pace and how this month is tracking. Shows for the members you've selected.`;
+}
+
+/* ---------- by ticket size ---------- */
+// Tickets closed per month by Estimated Size, averaged over the three complete months the forecast
+// weights, for the selected members. One size at a time labels every bar; All sizes stacks them,
+// smallest first and unsized last. Rows sort by tickets closed, so the top row closes the most of
+// it; sorting whole counts rather than summed rates keeps equal rows tied, in the page's member order.
+const ALL_SIZES = "All sizes", UNSIZED = "Unsized", SIZE_WINDOW = 3;
+let SIZES = [];           // Estimated Size options, smallest first (from the API)
+let sizeView = null;      // one of SIZES, or ALL_SIZES
+const sizeParts = () => sizeView===ALL_SIZES ? [...SIZES, UNSIZED] : [sizeView];
+const sizeColor = size => size===UNSIZED ? "var(--size-none)" : `var(--size-${SIZES.indexOf(size)+1})`;
+const windowSum = arr => arr.slice(-SIZE_WINDOW).reduce((a,b)=>a+b,0);
+const sizeRate = (m, size) => windowSum(m.sizes[size]) / SIZE_WINDOW;
+const sizeWindow = () => `${MONTHS[LAST_ACTUAL-SIZE_WINDOW+1]}–${MONTHS[LAST_ACTUAL]}`;
+// A horizontal bar, square at the baseline and, when `end`, rounded 4px at its data end.
+function barPath(x, y, w, h, end){
+  const r = end ? Math.min(4, w, h/2) : 0;
+  return `M${x} ${y}H${x+w-r}` + (r ? `A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h-r}A${r} ${r} 0 0 1 ${x+w-r} ${y+h}` : `V${y+h}`) + `H${x}Z`;
+}
+function renderSizeControls(){
+  const c = document.getElementById("sizeControls");
+  c.innerHTML = [...SIZES, ALL_SIZES].map(size => `<button class="btn" type="button" data-size="${esc(size)}" aria-pressed="${size===sizeView}">${esc(size)}</button>`).join("");
+  c.onclick = e => {
+    const b = e.target.closest("[data-size]"); if(!b) return;
+    sizeView = b.dataset.size;
+    c.querySelectorAll("[data-size]").forEach(n => n.setAttribute("aria-pressed", String(n===b)));
+    renderSizes();
+  };
+}
+function renderSizes(){
+  const parts = sizeParts();
+  const rows = sel().map(k => { const m = MEMBERS[k], closed = parts.map(size => windowSum(m.sizes[size]));
+    return {k, m, vals: closed.map(c => c/SIZE_WINDOW), closed: closed.reduce((a,b)=>a+b,0)}; })
+    .sort((a,b) => b.closed - a.closed);
+  const closed = rows.reduce((s,r) => s + windowSum(r.m.actuals), 0);
+  const unsized = rows.reduce((s,r) => s + windowSum(r.m.sizes[UNSIZED]), 0);
+  const pct = closed ? Math.round(unsized/closed*100) : 0;
+  const what = sizeView===ALL_SIZES ? "Tickets closed per month by Estimated Size" : `${sizeView} tickets closed per month`;
+  document.getElementById("sizeSub").textContent =
+    `${what}, averaged over ${sizeWindow()} (the three months the forecast weights), for the members selected above. ` +
+    `${pct}% of their ${sizeWindow()} completions have no size` + (sizeView===ALL_SIZES ? " (grey)." : " and count only under All sizes.");
+  const legend = document.getElementById("sizeLegend");
+  legend.hidden = sizeView!==ALL_SIZES;
+  legend.innerHTML = [...SIZES, UNSIZED].map(size => `<span class="key"><span class="sw" style="background:${sizeColor(size)}"></span>${esc(size)}</span>`).join("");
+
+  const W=920, ROW=30, BAR=16, GAP=2, ML=104, MR=64, MT=4, H=MT+rows.length*ROW+4, PW=W-ML-MR;
+  const vmax = Math.max(0, ...rows.map(r => r.closed/SIZE_WINDOW));
+  const xOf = v => vmax ? v/vmax*PW : 0;
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="${esc(what)}, ${sizeWindow()}, one row per selected member.">`;
+  rows.forEach((r, i) => {
+    const y = MT + i*ROW, by = y + (ROW-BAR)/2, mid = y + ROW/2 + 4;
+    const last = r.vals.reduce((j, v, n) => v > 0 ? n : j, -1);
+    let x = ML, bars = "";
+    r.vals.forEach((v, n) => {
+      if(v <= 0) return;
+      const w = xOf(v), drawn = n===last ? w : w - GAP;   // a 2px surface gap between segments
+      if(drawn > 0) bars += `<path d="${barPath(x, by, drawn, BAR, n===last)}" fill="${sizeColor(parts[n])}"/>`;
+      x += w;
+    });
+    const spoken = sizeView===ALL_SIZES
+      ? parts.map((size, n) => `${size} ${r.vals[n].toFixed(1)}`).join(", ")
+      : `${(r.closed/SIZE_WINDOW).toFixed(1)} ${sizeView} per month`;
+    s += `<g class="size-row" data-k="${r.k}" tabindex="0" role="img" aria-label="${esc(r.m.name)}: ${esc(spoken)}">` +
+         `<rect class="size-hit" x="1" y="${y+1}" width="${W-2}" height="${ROW-2}" rx="6" fill="transparent"/>` +
+         `<text class="size-name" x="${ML-12}" y="${mid}" text-anchor="end">${esc(r.m.name)}</text>${bars}` +
+         `<text class="size-val" x="${ML + xOf(r.closed/SIZE_WINDOW) + 8}" y="${mid}">${(r.closed/SIZE_WINDOW).toFixed(1)}</text></g>`;
+  });
+  s += `</svg>`;
+  document.getElementById("sizeChart").innerHTML = s;
+}
+// Hover or keyboard focus on a row shows its figures and dims the other rows. Bound once: the rows
+// are redrawn inside #sizeChart, which stays.
+function bindSizeHover(){
+  const chart = document.getElementById("sizeChart"), inner = document.getElementById("sizeInner"), tip = document.getElementById("sizeTip");
+  const rowsOf = () => chart.querySelectorAll(".size-row");
+  const show = (g, x, y) => {
+    const m = MEMBERS[g.dataset.k];
+    rowsOf().forEach(other => other.style.opacity = other===g ? "1" : "0.45");
+    const lines = sizeParts().map(size => `<div class="tv"><span class="sw" style="background:${sizeColor(size)}"></span>${sizeRate(m, size).toFixed(1)} / month <span class="t">· ${esc(size)}, ${windowSum(m.sizes[size])} closed ${sizeWindow()}</span></div>`);
+    tip.innerHTML = esc(m.name) + lines.join("");
+    tip.style.left = x+"px"; tip.style.top = y+"px";
+    tip.style.transform = (x > inner.getBoundingClientRect().width-300) ? "translate(calc(-100% - 12px),10px)" : "translate(12px,10px)";
+    tip.hidden = false;
+  };
+  const hide = () => { tip.hidden = true; rowsOf().forEach(g => g.style.opacity = ""); };
+  chart.addEventListener("pointermove", e => {
+    const g = e.target.closest(".size-row"); if(!g){ hide(); return; }
+    const r = inner.getBoundingClientRect(); show(g, e.clientX-r.left, e.clientY-r.top);
+  });
+  chart.addEventListener("pointerleave", hide);
+  chart.addEventListener("focusin", e => {
+    const g = e.target.closest(".size-row"); if(!g) return;
+    const r = inner.getBoundingClientRect(), b = g.getBoundingClientRect(); show(g, b.left-r.left+b.width/3, b.top-r.top+b.height/2);
+  });
+  chart.addEventListener("focusout", hide);
+}
+
 /* ---------- chips ---------- */
 function renderChips(){
   const c=document.getElementById("controls");
@@ -384,7 +510,7 @@ function renderChips(){
 
 // ---- Team-level view: monthly team totals + summary (all members, ignores filter) ----
 function renderTeam(){
-  const N = LAST_ACTUAL + 1;                                  // actual months (Feb..Jun)
+  const N = LAST_ACTUAL + 1;                                  // the complete (actual) months
   const totals = [];
   for(let i=0;i<N;i++) totals.push(ORDER.reduce((s,k)=>s+MEMBERS[k].actuals[i],0));
   const fTot  = ORDER.reduce((s,k)=>s+MEMBERS[k].forecast.value,0);
@@ -397,12 +523,12 @@ function renderTeam(){
 
   const card=(k,v,sub,scls)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s ${scls||''}">${sub}</div></div>`;
   document.getElementById("teamStats").innerHTML =
-    card("Delivered Jan–Jun", grand, ORDER.length+" engineers") +
+    card("Delivered "+MONTHS[0]+"–"+MONTHS[N-1], grand, ORDER.length+" engineers") +
     card("Avg / month", avg, "team throughput") +
     card("Latest — "+MONTHS[N-1], last, (dPct>=0?"▲ +"+dPct:"▼ "+dPct)+"% vs "+MONTHS[N-2], dPct>=0?"pos":"neg") +
-    card("July forecast", "≈"+fTot, fLow+"–"+fHigh+" range");
+    card(MONTHS[N]+" forecast", "≈"+fTot, fLow+"–"+fHigh+" range");
 
-  // monthly team-total bar chart (actuals Feb..Jun + July forecast)
+  // monthly team-total bar chart (the actual months, then the forecast month)
   const labels = MONTHS.slice(0, N+1);
   const vals   = totals.concat([fTot]);
   const W=980,H=300,ML=46,MR=18,MT=26,MB=48;
@@ -410,7 +536,7 @@ function renderTeam(){
   const n=vals.length, step=PW/n, bw=Math.min(84, step*0.56);
   const maxV=Math.max(...vals), niceMax=Math.max(25, Math.ceil(maxV/25)*25);
   const yAtV=v=>PB-(v/niceMax)*PH, cxAt=i=>PL+step*i+step/2;
-  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Team completed tickets per month, February through June with a July forecast.">`;
+  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Team completed tickets per month, ${MONTHS[0]} through ${MONTHS[N-1]} with a ${MONTHS[N]} forecast.">`;
   for(let g=0;g<=4;g++){ const gv=Math.round(niceMax*g/4), gy=yAtV(gv);
     s+=`<line class="grid-line" x1="${PL}" y1="${gy}" x2="${PR}" y2="${gy}"/>`;
     s+=`<text class="tbar-ax" x="${PL-9}" y="${gy+4}" text-anchor="end">${gv}</text>`; }
@@ -422,7 +548,7 @@ function renderTeam(){
   s+=`</svg>`;
   document.getElementById("teamChart").innerHTML = s;
 }
-function renderAll(){ renderChips(); renderChart(); renderTable(); renderCards(); }
+function renderAll(){ renderChips(); renderChart(); renderTable(); renderSizes(); renderCards(); }
 document.getElementById("btnAll").addEventListener("click",()=>{ ORDER.forEach(k=>selected.add(k)); renderAll(); });
 document.getElementById("btnNone").addEventListener("click",()=>{ selected.clear(); selected.add(ORDER[0]); renderAll(); });
 document.getElementById("pinned").addEventListener("click",()=>{ locked=null; applyBase(); });
@@ -434,13 +560,19 @@ async function init(){
     const data = await res.json();
     LAST_ACTUAL = data.months.length - 1;
     MONTHS = data.months.map(monthAbbr).concat([nextMonthAbbr(data.months[data.months.length-1])]);
+    FC_MONTH = nextMonthName(data.months[data.months.length-1]);
+    MONTH_PROGRESS = data.month_progress;
+    SIZES = data.sizes; sizeView = SIZES[0];
     MEMBERS = {}; ORDER = [];
     data.members.forEach((mem,i)=>{
       const key = mem.name.toLowerCase().replace(/[^a-z0-9]+/g,"-") || ("m"+i);
-      MEMBERS[key] = { name:mem.name, short:mem.name, color:PALETTE[i % PALETTE.length], actuals:mem.counts, forecast:mem.forecast };
+      MEMBERS[key] = { name:mem.name, short:mem.name, color:PALETTE[i % PALETTE.length], actuals:mem.counts, sizes:mem.sizes, forecast:mem.forecast };
       ORDER.push(key);
     });
     selected.clear(); ORDER.forEach(k=>selected.add(k));
+    renderSizeControls();
+    bindSizeHover();
+    renderForecastSub();
     renderAll();
     renderTeam();
   }catch(e){

@@ -23,7 +23,7 @@ shares no code with the Streamlit `app.py`; it has its own entrypoint and worklo
 | `/intake` | Who should pick up this ticket? | Open Jira tickets + per-engineer capacity + an expertise signal built from what people actually build in GitLab |
 | `/slas` | Is self-service carrying real load, and how fast does it deliver? | Jira labels + MR labels/footers, MR ready→merged times |
 | `/delivery-forecast` | When will the open Initiative and Features land? | Monte-Carlo simulation over recent completion pace |
-| `/velocity` | How much is each engineer completing per month? | Earliest Jira changelog transition to Done |
+| `/velocity` | How much is each engineer completing per month, and at which ticket sizes? | Earliest Jira changelog transition to Done, split by the ticket's Estimated Size |
 | `/lead-time` | How long do delivered stories take, and how much of it is waiting? | Lead (created→Done) vs cycle (time in active statuses) — **hidden from the nav**, still served |
 
 `/` redirects to `/intake`; the nav lists Intake, Self-Service, Delivery Forecast, Velocity in that
