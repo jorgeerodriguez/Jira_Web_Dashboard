@@ -61,9 +61,10 @@ _ISSUE_FIELDS: str = (
     # field (customfield_10400) is deliberately NOT fetched: it serves a stale cache that omitted a
     # merged pull request on DEVOPS-10117 and disagreed with its own panel on build count. The dev
     # panel is read through JQL instead -- see fetch_dev_panel_keys.
-    # customfield_10968 = "Estimated Size" (Small/Medium/Large/XL). Bump _FIELDS_VERSION whenever
-    # this list gains a column, or existing rows keep a NULL there forever.
-    "customfield_11534,customfield_10968"
+    # customfield_10968 = "Estimated Size" (Small/Medium/Large/XL); duedate = Jira's built-in "Due
+    # date". Bump _FIELDS_VERSION whenever this list gains a column, or existing rows keep a NULL
+    # there forever.
+    "customfield_11534,customfield_10968,duedate"
 )
 
 # Version of _ISSUE_FIELDS above. A store stamped below this has rows that predate a column, so the
@@ -76,7 +77,7 @@ _ISSUE_FIELDS: str = (
 # reaches zero and the backfill re-crawls the store every cycle, forever. The version is the one
 # marker that is unambiguous regardless of what the field itself holds, and it costs one integer for
 # every column added after this one.
-_FIELDS_VERSION: int = 1
+_FIELDS_VERSION: int = 2   # 2: duedate
 
 @dataclass(frozen=True)
 class SyncPlan:
@@ -199,6 +200,7 @@ def _map_issue(issue: Issue, fetched_at: datetime) -> store.IssueRow:
         # reports/backlog_report.py's SIZE_ORDER) and the store records what Jira holds, which is
         # nothing.
         estimated_size=((fields.get("customfield_10968") or {}).get("value") or None),
+        due_date=_parse_date(fields.get("duedate")),
         # Filled by fetch_dev_panel_keys after the batch is mapped; unknown until then.
         dev_has_pr=None,
         dev_has_commits=None,

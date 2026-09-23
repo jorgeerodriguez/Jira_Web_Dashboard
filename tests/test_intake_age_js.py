@@ -59,7 +59,7 @@ def _api_created(created_utc: datetime) -> str:
         assignee_account_id=None, reporter=None, business_lead=None, parent_key=None,
         created=created_utc, updated=created_utc, resolutiondate=None, planned_start=None,
         target_end=None, labels=[], mr_field_url=None, dev_has_pr=False, dev_has_commits=False,
-        estimated_size=None, fetched_at=created_utc)])
+        estimated_size=None, due_date=None, fetched_at=created_utc)])
     return intake.intake_report(conn, created_utc)["queue"][0]["created"]
 
 

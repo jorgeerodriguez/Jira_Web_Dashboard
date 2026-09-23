@@ -47,7 +47,7 @@ def _proxy_created(children: list[dict], fallback: datetime | None) -> str:
 def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
     """Forecast items (initiatives + features), rollup, child drill-down, and cycle days."""
     initiatives = connection.execute(
-        "SELECT key, issuetype, status, summary, parent_key, created "
+        "SELECT key, issuetype, status, summary, parent_key, created, status_category, estimated_size, due_date "
         "FROM issues WHERE issuetype = 'Initiative' AND status_category <> 'done'"
     ).fetchall()
     open_initiative_keys = [row[0] for row in initiatives]
@@ -57,13 +57,13 @@ def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
     if open_initiative_keys:
         init_placeholders = ", ".join(["?"] * len(open_initiative_keys))
         features = connection.execute(
-            f"SELECT key, issuetype, status, summary, parent_key, created FROM issues "
+            f"SELECT key, issuetype, status, summary, parent_key, created, status_category, estimated_size, due_date FROM issues "
             f"WHERE issuetype = 'Feature' AND (status_category <> 'done' OR parent_key IN ({init_placeholders}))",
             open_initiative_keys,
         ).fetchall()
     else:
         features = connection.execute(
-            "SELECT key, issuetype, status, summary, parent_key, created "
+            "SELECT key, issuetype, status, summary, parent_key, created, status_category, estimated_size, due_date "
             "FROM issues WHERE issuetype = 'Feature' AND status_category <> 'done'"
         ).fetchall()
 
@@ -75,8 +75,9 @@ def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
     epic_placeholders = ", ".join(["?"] * len(epic_keys))
     children_by_parent: dict[str, list[dict]] = {}
     child_keys: list[str] = []
-    for key, parent, summary, status, category, assignee, updated, target_end, created in connection.execute(
-        f"SELECT key, parent_key, summary, status, status_category, assignee, updated, target_end, created "
+    for key, parent, summary, status, category, assignee, updated, target_end, created, size, due in connection.execute(
+        f"SELECT key, parent_key, summary, status, status_category, assignee, updated, target_end, created, "
+        f"estimated_size, due_date "
         f"FROM issues WHERE parent_key IN ({epic_placeholders})",
         epic_keys,
     ).fetchall():
@@ -84,6 +85,7 @@ def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
             "k": key, "s": summary or "", "st": status, "c": category, "a": assignee,
             "scd": updated.date().isoformat() if updated is not None else None,
             "te": target_end.isoformat() if target_end is not None else None,
+            "sz": size, "dd": due.isoformat() if due is not None else None,
             "created": created,
         })
         child_keys.append(key)
@@ -113,24 +115,28 @@ def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
     initiative_keys = {row[0] for row in epics if row[1] == "Initiative"}
     rollup = {row[0]: row[4] for row in epics if row[1] == "Feature" and row[4] in initiative_keys}
 
+    # "c" is the status category, the same short key each child carries, so the page colours a card's
+    # status pill by the rule it uses for stories -- a Done Feature under an open Initiative included.
     feature_items = []
-    for key, _type, status, summary, _parent, created in epics:
+    for key, _type, status, summary, _parent, created, category, size, due in epics:
         if _type != "Feature":
             continue
         kids = children_by_parent.get(key, [])
         feature_items.append({
-            "type": "feature", "key": key, "name": summary, "status": status,
+            "type": "feature", "key": key, "name": summary, "status": status, "c": category,
+            "size": size, "due": due.isoformat() if due is not None else None,
             "created": _proxy_created(kids, created), **_counts(kids, recent_keys),
         })
 
     initiative_items = []
-    for key, _type, status, summary, _parent, created in epics:
+    for key, _type, status, summary, _parent, created, category, size, due in epics:
         if _type != "Initiative":
             continue
         rolled = [row[0] for row in epics if rollup.get(row[0]) == key]
         rolled_kids = [c for feature_key in rolled for c in children_by_parent.get(feature_key, [])]
         initiative_items.append({
-            "type": "initiative", "key": key, "name": summary, "status": status,
+            "type": "initiative", "key": key, "name": summary, "status": status, "c": category,
+            "size": size, "due": due.isoformat() if due is not None else None,
             "created": created.date().isoformat() if created is not None else _proxy_created(rolled_kids, None),
             **_counts(rolled_kids, recent_keys),
             "note": f"Rolls up {len(rolled)} Features; several may have no stories yet, so this "
@@ -138,7 +144,7 @@ def delivery_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
         })
 
     children_out = {
-        parent: [{field: child[field] for field in ("k", "s", "st", "c", "a", "scd", "te")} for child in kids]
+        parent: [{field: child[field] for field in ("k", "s", "st", "c", "a", "scd", "te", "sz", "dd")} for child in kids]
         for parent, kids in children_by_parent.items()
     }
     return {"items": initiative_items + feature_items, "rollup": rollup, "children": children_out, "cycle": cycle}

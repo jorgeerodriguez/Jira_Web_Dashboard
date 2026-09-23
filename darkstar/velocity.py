@@ -18,13 +18,17 @@ from darkstar.roster import ROSTER
 
 _DELIVERY_TYPES: tuple[str, ...] = ("Story", "Task", "Bug", "Hotfix", "Sub-task")
 _WINDOW_MONTHS: int = 6
+# Estimated Size's options (customfield_10968), smallest first. A completion with no size, or with an
+# option added in Jira later, counts as unsized -- the rule intake's weight_of applies to WIP.
+_SIZES: tuple[str, ...] = ("Small", "Medium", "Large", "XL")
+_UNSIZED: str = "Unsized"
 
 _COMPLETIONS_SQL: str = (
-    "SELECT i.assignee_account_id AS account_id, MIN(t.changed_at) AS done_at "
+    "SELECT i.assignee_account_id AS account_id, i.estimated_size AS size, MIN(t.changed_at) AS done_at "
     "FROM issues i "
     "JOIN transitions t ON t.key = i.key AND t.to_status = 'Done' "
     "WHERE i.issuetype IN ({placeholders}) "
-    "GROUP BY i.key, i.assignee_account_id"
+    "GROUP BY i.key, i.assignee_account_id, i.estimated_size"
 )
 
 
@@ -46,16 +50,16 @@ def _business_days(year: int, month: int, through_day: int) -> int:
     return sum(1 for day in range(1, through_day + 1) if date(year, month, day).weekday() < 5)
 
 
-def _month_elapsed_fraction(now_local: datetime) -> float:
-    """Fraction of the current month's business days elapsed, through today (business tz)."""
+def _month_business_days(now_local: datetime) -> tuple[int, int]:
+    """The current month's business days (business tz) elapsed through today, and in the month."""
     days_in_month = calendar.monthrange(now_local.year, now_local.month)[1]
     total = _business_days(now_local.year, now_local.month, days_in_month)
     elapsed = _business_days(now_local.year, now_local.month, now_local.day)
-    return elapsed / total if total else 0.0
+    return elapsed, total
 
 
 def _forecast(counts: list[int], current_done: int, month_elapsed: float) -> dict:
-    """Next-month estimate in whole tickets, updated by current-month performance.
+    """This month's projected total in whole tickets, updated by current-month performance.
 
     `baseline` is the recency-weighted average of the last three complete months (June heaviest).
     The headline `value` blends that baseline toward the current month's run-rate — `current_done`
@@ -83,7 +87,12 @@ def _forecast(counts: list[int], current_done: int, month_elapsed: float) -> dic
 
 
 def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict:
-    """Monthly delivery completions per roster engineer over the trailing complete months."""
+    """Monthly delivery completions per roster engineer over the trailing complete months.
+
+    Each member also carries `sizes`: the same monthly completions split by Estimated Size, unsized
+    included. `month_progress` is the business days elapsed and in the current month, the weight the
+    forecast's blend gives this month's pace.
+    """
     placeholders = ", ".join(["?"] * len(_DELIVERY_TYPES))
     completions = connection.execute(
         _COMPLETIONS_SQL.format(placeholders=placeholders), list(_DELIVERY_TYPES)
@@ -94,10 +103,16 @@ def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
     month_index = {year_month: i for i, year_month in enumerate(window)}
     month_labels = [f"{year:04d}-{month:02d}" for (year, month) in window]
     current_done_by_name = completions_this_month(connection, now)
-    month_elapsed = _month_elapsed_fraction(now_local)
+    elapsed_days, total_days = _month_business_days(now_local)
+    month_elapsed = elapsed_days / total_days if total_days else 0.0
 
     counts_by_name: dict[str, list[int]] = {name: [0] * _WINDOW_MONTHS for name in ROSTER.values()}
-    for account_id, done_at in completions:
+    # The same completions split by size: each one lands in exactly one bucket, so a member's size
+    # buckets always sum to their monthly counts.
+    sizes_by_name: dict[str, dict[str, list[int]]] = {
+        name: {size: [0] * _WINDOW_MONTHS for size in (*_SIZES, _UNSIZED)} for name in ROSTER.values()
+    }
+    for account_id, size, done_at in completions:
         name = ROSTER.get(account_id)
         if name is None or done_at is None:
             continue
@@ -105,12 +120,14 @@ def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
         if index is None:
             continue
         counts_by_name[name][index] += 1
+        sizes_by_name[name][size if size in _SIZES else _UNSIZED][index] += 1
 
     members = [
         {
             "name": name,
             "counts": counts,
             "total": sum(counts),
+            "sizes": sizes_by_name[name],
             "forecast": _forecast(counts, current_done_by_name.get(name, 0), month_elapsed),
         }
         for name, counts in counts_by_name.items()
@@ -121,7 +138,13 @@ def velocity_report(connection: duckdb.DuckDBPyConnection, now: datetime) -> dic
     team_done = sum(current_done_by_name.values())
     team = {"counts": team_counts, "total": sum(team_counts), "forecast": _forecast(team_counts, team_done, month_elapsed)}
 
-    return {"months": month_labels, "members": members, "team": team}
+    return {
+        "months": month_labels,
+        "sizes": list(_SIZES),
+        "month_progress": {"elapsed": elapsed_days, "total": total_days},
+        "members": members,
+        "team": team,
+    }
 
 
 def completions_this_month(connection: duckdb.DuckDBPyConnection, now: datetime) -> dict[str, int]:
@@ -136,7 +159,7 @@ def completions_this_month(connection: duckdb.DuckDBPyConnection, now: datetime)
         _COMPLETIONS_SQL.format(placeholders=placeholders), list(_DELIVERY_TYPES)
     ).fetchall()
     counts: dict[str, int] = {name: 0 for name in ROSTER.values()}
-    for account_id, done_at in completions:
+    for account_id, _size, done_at in completions:
         name = ROSTER.get(account_id)
         if name is None or done_at is None:
             continue

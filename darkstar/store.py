@@ -66,6 +66,10 @@ class IssueRow:
     # ~71% of DEVOPS) OR "this row predates the column". That is why the backfill is driven by
     # sync_meta.fields_version and never by a NULL count over this column; see ingest._FIELDS_VERSION.
     estimated_size: str | None
+    # Jira's built-in "Due date" (`duedate`). Used mostly on Features and Initiatives, where the
+    # forecast compares it with the P85 date. None is ambiguous in the same way as estimated_size,
+    # so its backfill is keyed on ingest._FIELDS_VERSION too, never on a NULL count.
+    due_date: date | None
     fetched_at: datetime
 
 
@@ -158,7 +162,7 @@ _ISSUE_COLUMNS: tuple[str, ...] = (
     "key", "id", "project", "issuetype", "status", "status_category", "priority",
     "summary", "assignee", "assignee_account_id", "reporter", "business_lead", "parent_key",
     "created", "updated", "resolutiondate", "planned_start", "target_end",
-    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "estimated_size", "fetched_at",
+    "labels", "mr_field_url", "dev_has_pr", "dev_has_commits", "estimated_size", "due_date", "fetched_at",
 )
 
 # Column order shared by the merge_requests DDL and its upsert; keep in sync with MergeRequestRow.
@@ -193,6 +197,7 @@ CREATE TABLE IF NOT EXISTS issues (
     dev_has_pr          BOOLEAN,
     dev_has_commits     BOOLEAN,
     estimated_size      VARCHAR,
+    due_date            DATE,
     fetched_at          TIMESTAMP NOT NULL
 );
 
@@ -294,6 +299,7 @@ def initialize_schema(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_pr BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS dev_has_commits BOOLEAN")
     connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS estimated_size VARCHAR")
+    connection.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS due_date DATE")
     connection.execute("ALTER TABLE sync_meta ADD COLUMN IF NOT EXISTS fields_version INTEGER")
     logger.debug("schema initialized")
 
