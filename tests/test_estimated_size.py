@@ -123,6 +123,7 @@ def _run(conn, monkeypatch, refill):
 
     monkeypatch.setattr(ingest, "fetch_issues", _fetch)
     monkeypatch.setattr(ingest, "fetch_dev_panel_keys", lambda jira, jql, predicate: set())
+    monkeypatch.setattr(ingest, "fetch_keys", lambda jira, jql, description: set())
     monkeypatch.setattr(ingest, "fetch_transitions", lambda jira, keys: [])
     plan = ingest.SyncPlan(watermark=datetime(2026, 9, 18, 0, 0), last_full_sync=_NOW)
     ingest.run_sync(conn, object(), plan, _NOW, _TZ)

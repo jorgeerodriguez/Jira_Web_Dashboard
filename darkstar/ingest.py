@@ -2,12 +2,14 @@
 
 One sync cycle:
   1. plan_sync() decides, from the stored watermark and the clock, whether this is a
-     full crawl (first run or a due reconcile) or an incremental `updated >=` slice.
+     full crawl (first run only) or an incremental `updated >=` slice.
   2. fetch_issues() pulls the matching DEVOPS issues (paginated).
   3. fetch_transitions() pulls each fetched issue's changelog and extracts its status
      transitions (the basis for changelog-derived completion, cycle, and lead time).
-  4. the store is updated (issues upserted, transitions replaced for the fetched keys)
-     and the watermark advanced.
+  4. the store is updated (issues upserted, transitions replaced for the fetched keys).
+  5. reconcile_departed_issues() deletes stored open issues that were moved out of DEVOPS
+     or deleted -- the one change an `updated >=` slice can never see -- and the
+     watermark is advanced.
 
 Blocking Jira calls run under asyncio.to_thread when driven by poll_loop(); all Jira
 timestamps are normalized to naive UTC to match the store.
@@ -25,6 +27,7 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pandas as pd
 from jira import JIRA
+from jira.exceptions import JIRAError
 from jira.resources import Issue
 
 from darkstar import store
@@ -43,6 +46,9 @@ _WATERMARK_MARGIN: timedelta = timedelta(minutes=2)
 _ORDER_BY_RE: re.Pattern[str] = re.compile(r"\s+ORDER\s+BY\s+", re.IGNORECASE)
 
 _FULL_JQL: str = "project = DEVOPS ORDER BY updated ASC"
+# Jira's side of the store's "open" (issues.status_category <> 'done'): what reconcile_departed_issues
+# compares the stored open rows against.
+_OPEN_JQL: str = "project = DEVOPS AND statusCategory != Done"
 _PAGE_SIZE: int = 100
 _RETRY_ATTEMPTS: int = 3
 _RETRY_BACKOFF_SECONDS: float = 2.0
@@ -87,6 +93,7 @@ class SyncResult:
     full: bool
     fetched_issues: int
     fetched_transitions: int
+    departed_issues: int
     total_issues: int
     total_transitions: int
 
@@ -233,15 +240,18 @@ def fetch_dev_panel_keys(jira: JIRA, scope_jql: str, predicate: str) -> set[str]
     parentheses. Ordering is meaningless here anyway; only the set of keys is wanted.
     """
     scope = _ORDER_BY_RE.split(scope_jql)[0].strip()
+    return fetch_keys(jira, f"({scope}) AND {predicate}", f"enhanced_search_issues({predicate})")
+
+
+def fetch_keys(jira: JIRA, jql: str, description: str) -> set[str]:
+    """Keys of every issue matching jql (token-paginated, no fields beyond the key)."""
     keys: set[str] = set()
     next_token: str | None = None
     while True:
-        kwargs = {"jql_str": f"({scope}) AND {predicate}", "maxResults": _PAGE_SIZE,
-                  "fields": "key"}
+        kwargs = {"jql_str": jql, "maxResults": _PAGE_SIZE, "fields": "key"}
         if next_token:
             kwargs["nextPageToken"] = next_token
-        issues = _retry(lambda: jira.enhanced_search_issues(**kwargs),
-                        f"enhanced_search_issues({predicate})")
+        issues = _retry(lambda: jira.enhanced_search_issues(**kwargs), description)
         if not issues:
             break
         keys.update(issue.key for issue in issues)
@@ -249,6 +259,56 @@ def fetch_dev_panel_keys(jira: JIRA, scope_jql: str, predicate: str) -> set[str]
         if not next_token:
             break
     return keys
+
+
+def fetch_current_key(jira: JIRA, key: str) -> str | None:
+    """The key Jira files this issue under now, or None when Jira has no such issue for us.
+
+    Jira follows an old key to wherever the issue went: after its move, DEVOPS-9888 answers as
+    DAT-5323. A 404 means deleted, or no longer visible to the API account -- Jira does not tell the
+    two apart, and darkstar can display neither. The 404 is the only failure that is an answer; any
+    other is retried and then raised.
+    """
+    def _get() -> str | None:
+        try:
+            return jira.issue(key, fields="project").key
+        except JIRAError as error:
+            if error.status_code == 404:
+                return None
+            raise
+    return _retry(_get, f"issue {key}")
+
+
+def reconcile_departed_issues(jira: JIRA, connection: duckdb.DuckDBPyConnection) -> list[str]:
+    """Delete stored open issues that were moved out of DEVOPS or deleted; return their keys.
+
+    The incremental slice cannot see these. It asks for `project = DEVOPS AND updated >= ...`, and an
+    issue that has been moved to another project or deleted never matches that again, so its row kept
+    the status it last had in DEVOPS, forever. On 2026-09-23 that was 10 of the 17 tickets in the
+    intake queue: eight moved to DAT/ADTECH/AWQA/SECOPS/ST, two deleted.
+
+    Only rows the store holds as open are checked. Those are the rows that put ghosts on screen (the
+    queue, WIP, open Features), and there are few of them: ~150, two key-only search pages, against
+    ~9,800 stored rows. A done row that later leaves keeps counting in the history it was part of.
+
+    A key missing from Jira's open set is a CANDIDATE, never a verdict. It may simply have closed or
+    been created between this cycle's slice and this search, and a search that came back short would
+    make every open row a candidate at once. Deleting on absence would lose rows for good, because
+    the slice never revisits an issue nobody edits. So each candidate is fetched by key, and removed
+    only when Jira positively says it is gone (404) or now files it under another key -- which is
+    every move, including one out of DEVOPS and back, where the slice has already stored the new
+    key. A candidate still under its own key is left to the slice, which re-reads anything updated
+    since the watermark.
+    """
+    stored_open = {key for (key,) in connection.execute(
+        "SELECT key FROM issues WHERE status_category <> 'done'").fetchall()}
+    candidates = sorted(stored_open - fetch_keys(jira, _OPEN_JQL, "enhanced_search_issues(open)"))
+    departed = [key for key in candidates if fetch_current_key(jira, key) != key]
+    store.delete_issues(connection, departed)
+    if departed:
+        logger.info("jira reconcile: removed %d issues that left DEVOPS: %s",
+                    len(departed), ", ".join(departed))
+    return departed
 
 
 def apply_dev_panel_flags(rows: list[store.IssueRow], with_pr: set[str],
@@ -368,6 +428,8 @@ def run_sync(
 
     store.upsert_issues(connection, issues)
     store.replace_transitions(connection, keys, transitions)
+    # After the slice is written, so an issue it has just closed is not taken for a departure.
+    departed = reconcile_departed_issues(jira, connection)
 
     # Self-heal the columns an incremental plan can never reach: it only fetches issues *updated*
     # since the watermark, so a row untouched since a column was added keeps NULL there forever.
@@ -387,6 +449,7 @@ def run_sync(
         full=plan.watermark is None,
         fetched_issues=len(issues) + backfilled,
         fetched_transitions=len(transitions),
+        departed_issues=len(departed),
         total_issues=total_issues,
         total_transitions=total_transitions,
     )
@@ -421,6 +484,7 @@ async def poll_loop(config: Config) -> None:
                     "full": result.full,
                     "fetched_issues": result.fetched_issues,
                     "fetched_transitions": result.fetched_transitions,
+                    "departed_issues": result.departed_issues,
                     "total_issues": result.total_issues,
                 },
             )
@@ -441,7 +505,8 @@ def main() -> None:
     connection.close()
     print(
         f"sync complete: full={result.full} fetched_issues={result.fetched_issues} "
-        f"fetched_transitions={result.fetched_transitions} total_issues={result.total_issues} "
+        f"fetched_transitions={result.fetched_transitions} departed_issues={result.departed_issues} "
+        f"total_issues={result.total_issues} "
         f"total_transitions={result.total_transitions}"
     )
 
