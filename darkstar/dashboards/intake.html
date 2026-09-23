@@ -236,8 +236,8 @@
   <div id="smeTable"></div>
 
   <div class="foot">
-    <div><b>Intake definition.</b> <code>project = DEVOPS</code>, status in <code>Triage</code> or <code>Reviewing</code> — work that has not yet been accepted by an engineer. Ordered by <code>created</code> ascending. Data as of July 1, 2026.</div>
-    <div><b>Aging.</b> Days since creation. A ticket is flagged <span style="color:var(--warn)">aging</span> at ≥5 days and <span style="color:var(--neg)">stale</span> at ≥7 — the signal to vet or reject before it rots.</div>
+    <div><b>Intake definition.</b> <code>project = DEVOPS</code>, status in <code>Triage</code> or <code>Reviewing</code> — work that has not yet been accepted by an engineer. Ordered by <code>created</code> ascending.</div>
+    <div><b>Aging.</b> Whole days since the created date, counted in Pacific time. A ticket is flagged <span style="color:var(--warn)">aging</span> at ≥5 days and <span style="color:var(--neg)">stale</span> at ≥7 — the signal to vet or reject before it rots.</div>
     <div><b>Suggested owner (unassigned rows).</b> <b>SME</b> = deepest domain history — top closer in the ticket’s primary domain, from a keyword tagger over 656 ticket titles — 612 completed + 44 active, completed weighted higher and To-Do excluded (63% matched; titles only; niche domains outrank broad ones like GitLab/Kubernetes). SMEs can be <b>hand-set</b> per domain (WorkSpaces = Adam) — a manual override that beats the tagger. <b>Stretch</b> = a domain runner-up with spare capacity (someone growing into it), else the most-free engineer overall. Both advisory; generic tickets fall back to capacity only.</div>
     <div><b>Caveat.</b> Capacity is a throughput proxy, not effort — it doesn't know a ticket's size or which engineer owns the relevant system. Treat the suggestion as a starting point, then apply judgment.</div>
   </div>
@@ -247,7 +247,11 @@
 /* ============================================================
    DATA — refresh from Jira: intake queue + per-engineer WIP.
    ============================================================ */
-const ASOF = "2026-07-01";
+// Today's date in the business timezone (metrics.BUSINESS_TZ), read at load. Pacific rather than the
+// viewer's clock so everyone counts the same age -- an EET morning is still the Pacific evening
+// before. en-CA renders ISO-8601, which ageOf parses exactly like a `created` date.
+const BUSINESS_TZ = "America/Los_Angeles";
+const ASOF = new Date().toLocaleDateString("en-CA", {timeZone: BUSINESS_TZ});
 const AGING = 5, STALE = 7;
 
 // roster: predicted July velocity (vel) + current active WIP (wip)
