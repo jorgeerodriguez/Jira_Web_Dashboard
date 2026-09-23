@@ -501,8 +501,9 @@ stylesheet is the real fix and is not done here.
 ## How a number gets made
 
 1. **Jira poller** (`ingest.py`) — one full crawl, then incremental by `updated` watermark, plus
-   each changed issue's changelog. Completion is the **earliest transition to `Done`**, not
-   `resolutiondate`, which is null on ~85% of issues.
+   each changed issue's changelog; every cycle also removes stored open issues that were moved
+   out of DEVOPS or deleted (see **Issues that leave DEVOPS**). Completion is the **earliest
+   transition to `Done`**, not `resolutiondate`, which is null on ~85% of issues.
 2. **GitLab poller** (`gitlab_ingest.py`) — merged MRs from the PE groups over a trailing window,
    plus each MR's changed file paths and its draft/ready/review events.
 3. **Aggregation** — one module per view (`intake`, `delivery`, `velocity`, `leadtime`, `slas`,
@@ -923,7 +924,8 @@ retuned without another crawl.
   `XL`, or `NULL` where Jira holds none — never a numeric weight: the ratio between sizes is a
   property of whatever consumes it and nothing has measured one yet (DEVOPS-10567).
 - **Jira poller** (`ingest.py`) — a one-time full crawl on the first run, then **incremental only**
-  (`updated >= watermark`, no periodic full reconcile) plus a per-changed-issue changelog;
+  (`updated >= watermark`, no periodic full re-crawl) plus a per-changed-issue changelog, and a
+  per-cycle removal of stored open issues that left DEVOPS (`reconcile_departed_issues`);
   completion is measured as the earliest transition to `Done` (resolutiondate is null on ~85% of
   issues), attributed to the business month (`metrics.BUSINESS_TZ`). Adding a field to
   `_ISSUE_FIELDS` needs `_FIELDS_VERSION` bumped with it — see **Adding a Jira field to a store that
@@ -987,6 +989,21 @@ Two details that are load-bearing:
   August. A floor picked from when the team adopted a field is not the same as a floor picked from
   when the field could hold data — and neither is what the backfill wants, which is simply "as far
   back as anything is displayed".
+
+## Issues that leave DEVOPS
+
+The same watermark has a second blind spot: an issue **moved to another project, or deleted**, never
+matches `project = DEVOPS AND updated >= …` again, so its row kept the status it last had here,
+forever. On 2026-09-23, **10 of the 17** tickets in the intake queue were ghosts of this kind — eight
+moved to DAT/ADTECH/AWQA/SECOPS/ST (some already Done there), two deleted.
+
+`reconcile_departed_issues` closes it on every cycle: it compares the store's open rows with the keys
+of Jira's open DEVOPS issues (two key-only search pages) and **looks up each missing key on its
+own**. A row is deleted, with its transitions, only when Jira answers 404 or files the issue under a
+different key now — which covers a move out of DEVOPS and back, since each move assigns a new key.
+Absence from the search alone never deletes: an issue can drop out of it by closing mid-cycle, and a
+short page would make every open row a candidate at once, removing rows the slice never brings back.
+Done rows are not checked; one that later leaves keeps counting in the history it was part of.
 
 ## How intake works
 

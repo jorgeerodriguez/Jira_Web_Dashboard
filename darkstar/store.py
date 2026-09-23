@@ -1,7 +1,8 @@
 """darkstar persistence: a single DuckDB file holding the polled Jira snapshot.
 
 Three datasets, written by the poller and read (read-only) by the dashboards:
-  - issues:      one row per Jira issue (current snapshot, upserted by key)
+  - issues:      one row per DEVOPS issue (current snapshot, upserted by key; deleted once the
+                 issue is moved out of DEVOPS or deleted)
   - transitions: append-only status changes from each issue's changelog
   - sync_meta:   one row tracking the incremental watermark and last full sync
 
@@ -325,6 +326,14 @@ def replace_transitions(
             [list(astuple(transition)) for transition in transitions],
         )
     return len(transitions)
+
+
+def delete_issues(connection: duckdb.DuckDBPyConnection, keys: list[str]) -> int:
+    """Delete the given issues and their transitions. Returns the number of keys removed."""
+    if keys:
+        connection.executemany("DELETE FROM transitions WHERE key = ?", [[key] for key in keys])
+        connection.executemany("DELETE FROM issues WHERE key = ?", [[key] for key in keys])
+    return len(keys)
 
 
 def get_sync_meta(connection: duckdb.DuckDBPyConnection) -> SyncMeta | None:

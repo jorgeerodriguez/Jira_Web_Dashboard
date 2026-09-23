@@ -182,6 +182,7 @@ def test_a_sync_cycle_self_heals_issues_the_incremental_slice_never_touches(monk
 
     monkeypatch.setattr(ingest, "fetch_issues", _fetch)
     monkeypatch.setattr(ingest, "fetch_dev_panel_keys", lambda jira, jql, predicate: {"DEVOPS-9"})
+    monkeypatch.setattr(ingest, "fetch_keys", lambda jira, jql, description: set())
     monkeypatch.setattr(ingest, "fetch_transitions", lambda jira, keys: [])
 
     plan = ingest.SyncPlan(watermark=datetime(2026, 8, 19, 0, 0), last_full_sync=_NOW)
@@ -208,6 +209,7 @@ def test_the_backfill_is_skipped_once_the_window_is_filled(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(ingest, "fetch_issues", lambda jira, jql: (calls.append(jql) or []))
     monkeypatch.setattr(ingest, "fetch_dev_panel_keys", lambda jira, jql, predicate: set())
+    monkeypatch.setattr(ingest, "fetch_keys", lambda jira, jql, description: set())
     monkeypatch.setattr(ingest, "fetch_transitions", lambda jira, keys: [])
 
     plan = ingest.SyncPlan(watermark=datetime(2026, 8, 19, 0, 0), last_full_sync=_NOW)
