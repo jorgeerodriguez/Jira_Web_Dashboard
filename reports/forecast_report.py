@@ -19,6 +19,23 @@ def mean_squared_error(y_true, y_pred):
 from .capacity_report import build_capacity_data
 
 
+# Container work items are tracked through their child tickets, so they are kept
+# out of the throughput counts the forecast models are trained on.
+EXCLUDED_WORK_TYPES = {"feature", "iniciative", "initiative"}
+
+
+def _exclude_container_items(df_issues: pd.DataFrame) -> pd.DataFrame:
+    """Drop Feature/Initiative rows, matched on either issuetype or status."""
+    if df_issues is None or df_issues.empty:
+        return df_issues
+    keep = pd.Series(True, index=df_issues.index)
+    for col in ("issuetype", "status"):
+        if col in df_issues.columns:
+            values = df_issues[col].astype(str).str.strip().str.casefold()
+            keep &= ~values.isin(EXCLUDED_WORK_TYPES)
+    return df_issues[keep]
+
+
 # ── Feature helpers ───────────────────────────────────────────────────────────
 
 def _create_lagged_features(data: pd.DataFrame, lags: int = 3) -> pd.DataFrame:
@@ -323,7 +340,7 @@ def build_forecast_visuals(df_issues: pd.DataFrame, periods: int = 4) -> dict:
     }
 
     # ── 1. Build capacity data ────────────────────────────────────────────────
-    all_data = build_capacity_data(df_issues)
+    all_data = build_capacity_data(_exclude_container_items(df_issues))
     if all_data is None or all_data.empty:
         empty["error_message"] = "Not enough capacity data to build a forecast."
         return empty

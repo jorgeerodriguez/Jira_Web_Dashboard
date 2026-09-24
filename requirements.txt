@@ -72,6 +72,9 @@ wordcloud==1.9.6
 # invisible on a macOS install and costs 664 MB on every CI build (904 MB -> 240 MB of
 # site-packages) for a GPU collective-communications library nothing here can use. Verified
 # on linux/amd64 against reports/forecast_report.py's XGBRegressor call site.
-xgboost-cpu==3.2.0
+# xgboost-cpu publishes no macOS wheels (pip falls back to a cmake source build), and the
+# nccl dependency above is Linux-only anyway, so macOS installs the regular package.
+xgboost-cpu==3.2.0; sys_platform != "darwin"
+xgboost==3.2.0; sys_platform == "darwin"
 xlrd==2.0.2
 zipp==3.23.1
