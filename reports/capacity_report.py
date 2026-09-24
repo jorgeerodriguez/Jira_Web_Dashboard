@@ -2,8 +2,17 @@ import pandas as pd
 import plotly.express as px
 
 
-def build_capacity_data(df_issues: pd.DataFrame) -> pd.DataFrame:
-    """Build monthly created/completed capacity dataframe from Jira issues."""
+DEFAULT_COMPLETED_STATUSES = ("Done", "Released Successfully to Production")
+
+
+def build_capacity_data(
+    df_issues: pd.DataFrame,
+    completed_statuses: tuple[str, ...] = DEFAULT_COMPLETED_STATUSES,
+) -> pd.DataFrame:
+    """Build monthly created/completed capacity dataframe from Jira issues.
+
+    A ticket counts as completed when its status is one of `completed_statuses`.
+    """
     if df_issues is None or df_issues.empty:
         return pd.DataFrame(columns=["date", "created", "completed"])
 
@@ -22,7 +31,7 @@ def build_capacity_data(df_issues: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"year_created": "year", "month_created": "month"})
     )
 
-    completed_scope = scope[scope["status"].isin(["Done", "Released Successfully to Production"])].copy()
+    completed_scope = scope[scope["status"].isin(completed_statuses)].copy()
     completed = (
         completed_scope.groupby(["year_updated", "month_updated"])
         .size()

@@ -23,6 +23,9 @@ from .capacity_report import build_capacity_data
 # out of the throughput counts the forecast models are trained on.
 EXCLUDED_WORK_TYPES = {"feature", "iniciative", "initiative"}
 
+# The forecast counts a ticket as completed only when its status is "Done".
+FORECAST_COMPLETED_STATUSES = ("Done",)
+
 
 def _exclude_container_items(df_issues: pd.DataFrame) -> pd.DataFrame:
     """Drop Feature/Initiative rows, matched on either issuetype or status."""
@@ -340,7 +343,10 @@ def build_forecast_visuals(df_issues: pd.DataFrame, periods: int = 4) -> dict:
     }
 
     # ── 1. Build capacity data ────────────────────────────────────────────────
-    all_data = build_capacity_data(_exclude_container_items(df_issues))
+    all_data = build_capacity_data(
+        _exclude_container_items(df_issues),
+        completed_statuses=FORECAST_COMPLETED_STATUSES,
+    )
     if all_data is None or all_data.empty:
         empty["error_message"] = "Not enough capacity data to build a forecast."
         return empty
