@@ -20,6 +20,19 @@ EXCLUDED_STATUSES = {
     "❌ Rolled Back",
 }
 
+# Features and Initiatives are containers, not tickets, so they are left out of the
+# whole summary; matched on either issuetype or status.
+EXCLUDED_WORK_TYPES = {"feature", "iniciative", "initiative"}
+
+# A ticket counts as resolved when it reaches this status. Its "updated" timestamp is
+# the resolution date whenever Jira has one (see data/build_dataframe_new.py).
+RESOLVED_STATUS = "Done"
+
+
+def _count_since(timestamps: pd.Series, since: pd.Timestamp) -> int:
+    ts = pd.to_datetime(timestamps, utc=True, errors="coerce")
+    return int((ts >= since).sum())
+
 
 def _lead_column(df_issues: pd.DataFrame) -> str:
     if "bussiness_lead" in df_issues.columns:
@@ -53,13 +66,26 @@ def build_executive_summary_data(df_issues: pd.DataFrame) -> dict:
             "avg_days_old": 0.0,
             "over_90_days": 0,
             "overdue_tickets": 0,
+            "created_24h": 0,
+            "resolved_24h": 0,
             "lead_age_df": pd.DataFrame(),
             "status_priority_df": pd.DataFrame(),
             "assignee_age_df": pd.DataFrame(),
             "top_oldest_df": pd.DataFrame(),
         }
 
-    df = df_issues.copy()
+    tickets = df_issues.copy()
+    for col in ("issuetype", "status"):
+        if col in tickets.columns:
+            tickets = tickets[~tickets[col].astype(str).str.strip().str.casefold().isin(EXCLUDED_WORK_TYPES)]
+
+    since_24h = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
+    created_24h = _count_since(tickets["created"], since_24h) if "created" in tickets.columns else 0
+    resolved_24h = 0
+    if {"status", "updated"}.issubset(tickets.columns):
+        resolved_24h = _count_since(tickets.loc[tickets["status"].eq(RESOLVED_STATUS), "updated"], since_24h)
+
+    df = tickets.copy()
     if "status" in df.columns:
         df = df[~df["status"].isin(EXCLUDED_STATUSES)].copy()
 
@@ -144,6 +170,8 @@ def build_executive_summary_data(df_issues: pd.DataFrame) -> dict:
         "avg_days_old": avg_days_old,
         "over_90_days": over_90_days,
         "overdue_tickets": overdue_tickets,
+        "created_24h": created_24h,
+        "resolved_24h": resolved_24h,
         "lead_age_df": lead_age_df,
         "status_priority_df": status_priority_df,
         "assignee_age_df": assignee_age_df,
@@ -165,8 +193,8 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Open Issues", data["total_tickets"])
     k2.metric("Avg Days Old", f"{data['avg_days_old']:.1f}")
-    k3.metric("Created (24h)", "—")
-    k4.metric("Resolved (24h)", "—")
+    k3.metric("Created (24h)", data["created_24h"])
+    k4.metric("Resolved (24h)", data["resolved_24h"])
     k5.metric("90+ Days", data["over_90_days"])
     k6.metric("Overdue", data["overdue_tickets"])
 
@@ -187,7 +215,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
                 category_orders={"Priority": PRIORITY_ORDER},
             )
             fig_status.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig_status, use_container_width=True)
+            st.plotly_chart(fig_status, width="stretch")
         else:
             st.info("No status data available.")
 
@@ -237,7 +265,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
                     x=1.02,
                 ),
             )
-            st.plotly_chart(fig_pri, use_container_width=True)
+            st.plotly_chart(fig_pri, width="stretch")
         else:
             st.info("No oldest ticket data available.")
 
@@ -245,7 +273,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
     if not data["lead_age_df"].empty:
         fig_lead = px.bar(data["lead_age_df"], y="Business Lead", x="Avg Days Old", orientation="h")
         fig_lead.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_lead, use_container_width=True)
+        st.plotly_chart(fig_lead, width="stretch")
     else:
         st.info("No business lead data available.")
 
@@ -253,7 +281,7 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
     if not data["assignee_age_df"].empty:
         fig_assignee = px.bar(data["assignee_age_df"], y="Assignee", x="Avg Days Old", orientation="h")
         fig_assignee.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_assignee, use_container_width=True)
+        st.plotly_chart(fig_assignee, width="stretch")
     else:
         st.info("No assignee data available.")
 
@@ -270,6 +298,6 @@ def render_executive_summary(df_issues: pd.DataFrame, report_date, lookback_days
                 help="Open Jira ticket",
                 display_text=r".*/([^/]+)$",
             )
-        st.dataframe(display_df, use_container_width=True, column_config=column_config)
+        st.dataframe(display_df, width="stretch", column_config=column_config)
     else:
         st.info("No oldest tickets available.")

@@ -17,12 +17,17 @@ from reports.tickets_distribution import plot_ticket_distribution
 from data.build_dataframe_new import build_issues_dataframe
 from reports.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
 from reports.executive_summary import render_executive_summary
+from reports.atc_sequence import build_atc_sequence as _build_atc_sequence
 from reports.capacity_report import build_capacity_visuals
 from reports.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
 from reports.trend_report import build_trend_visuals
-from reports.in_progress_report import build_in_progress_visuals
+from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
-from reports.backlog_report import build_backlog_visuals
+from reports.backlog_report import (
+    RISK_BASES as BACKLOG_RISK_BASES,
+    SIMULATIONS as BACKLOG_SIMULATIONS,
+    build_backlog_visuals,
+)
 from reports.blocked_report import build_blocked_visuals
 from reports.estimated_size_distribution_report import build_estimated_size_distribution_visuals
 try:
@@ -254,114 +259,6 @@ def _normalize_ticket_size(series: pd.Series) -> pd.Series:
     return norm.where(norm.isin(valid_sizes), "Unestimated")
 
 
-# Apparent Tardiness Cost (Vepsalainen & Morton, 1987) sequencing inputs.
-ATC_SIZE_EFFORT_DAYS = {"Small": 1, "Medium": 3, "Large": 5, "XL": 10}
-ATC_DEFAULT_EFFORT_DAYS = 2  # Unestimated / no size
-ATC_PRIORITY_BASE_WEIGHT = {"no priority": 1, "low": 2, "medium": 4, "high": 8, "urgent": 16, "critical": 16}
-ATC_URGENT_PRIORITIES = {"urgent", "critical"}  # always-first tier, soonest due date first; weight shown for reference only
-ATC_DEFAULT_DAYS_LEFT = 30  # ticket has no target date
-ATC_K = 2.0  # look-ahead sensitivity (typical range 1.5-3)
-
-
-ATC_HELD_BACK_STATUSES = {"on hold", "blocked"}  # excluded from scoring, appended at the end
-ATC_HELD_BACK_TIER_ORDER = ["On Hold", "Blocked"]  # On Hold first, then Blocked
-
-
-def _build_atc_sequence(pool_df: pd.DataFrame) -> pd.DataFrame:
-    """Order open tickets by the Apparent Tardiness Cost rule.
-
-    "Validating" tickets are dropped entirely — they're waiting on the end user,
-    not on the assignee, so they shouldn't consume a slot in the sequence.
-    "On Hold" and "Blocked" tickets can't be actively worked right now, so they're
-    held out of ATC scoring and appended at the end instead (On Hold first, then
-    Blocked, each soonest due date first) rather than competing for a slot.
-
-    Urgent/Critical priority tickets among the schedulable ones are a separate
-    first tier (soonest due date first) so a big Urgent ticket can't lose to a
-    small Medium one on value per day. Everything else is ordered by
-    Score = (w / p) * exp(-slack / (K * p_bar)), recomputed after each pick since
-    p_bar and the clock both move.
-    Expects pool_df with "Ticket", "Priority", "Size", "Days Left", "Days Old",
-    "Status" columns.
-    """
-    if pool_df is None or pool_df.empty:
-        return pd.DataFrame()
-
-    status_norm = pool_df["Status"].astype(str).map(_normalize_text)
-    rows = pool_df[~status_norm.eq("validating")].copy()
-    if rows.empty:
-        return pd.DataFrame()
-
-    status_norm = rows["Status"].astype(str).map(_normalize_text)
-    priority_norm = rows["Priority"].astype(str).map(_normalize_text)
-
-    rows["_effort"] = rows["Size"].astype(str).map(ATC_SIZE_EFFORT_DAYS).fillna(ATC_DEFAULT_EFFORT_DAYS)
-    rows["_due"] = pd.to_numeric(rows["Days Left"], errors="coerce").fillna(ATC_DEFAULT_DAYS_LEFT)
-    base_weight = priority_norm.map(ATC_PRIORITY_BASE_WEIGHT).fillna(ATC_PRIORITY_BASE_WEIGHT["no priority"])
-    days_old = pd.to_numeric(rows["Days Old"], errors="coerce").fillna(0)
-    rows["_weight"] = base_weight * (1 + days_old / 30.0)
-    rows["_urgent_tier"] = priority_norm.isin(ATC_URGENT_PRIORITIES)
-    rows["_held_back_tier"] = status_norm.map(
-        {"on hold": "On Hold", "blocked": "Blocked"}
-    )
-
-    held_back = rows[rows["_held_back_tier"].notna()]
-    schedulable = rows[rows["_held_back_tier"].isna()].copy()
-
-    urgent = schedulable[schedulable["_urgent_tier"]].sort_values("_due", ascending=True)
-    remaining = schedulable[~schedulable["_urgent_tier"]].copy()
-
-    sequence_rows = []
-    t = 0.0
-
-    def _append(r: pd.Series, tier: str, score) -> None:
-        nonlocal t
-        p = float(r["_effort"])
-        start, finish = t, t + p
-        sequence_rows.append({
-            "Seq": len(sequence_rows) + 1,
-            "Ticket": r["Ticket"],
-            "Priority": r["Priority"],
-            "Size": r["Size"],
-            "Effort (Days)": p,
-            "Weight": round(float(r["_weight"]), 2),
-            "Days Left": round(float(r["_due"]), 1),
-            "ATC Score": round(score, 3) if score is not None else None,
-            "Tier": tier,
-            "Projected Start (Day)": round(start, 1),
-            "Projected Finish (Day)": round(finish, 1),
-            "Projected Tardiness (Days)": round(max(finish - float(r["_due"]), 0.0), 1),
-        })
-        t = finish
-
-    for _, r in urgent.iterrows():
-        _append(r, "Urgent", None)
-
-    remaining_idx = list(remaining.index)
-    while remaining_idx:
-        p_bar = float(remaining.loc[remaining_idx, "_effort"].mean()) or 1.0
-
-        best_idx, best_score = None, -np.inf
-        for idx in remaining_idx:
-            r = remaining.loc[idx]
-            p, d, w = float(r["_effort"]), float(r["_due"]), float(r["_weight"])
-            slack = max(d - p - t, 0.0)
-            score = (w / p) * np.exp(-slack / (ATC_K * p_bar)) if p > 0 else 0.0
-            if score > best_score:
-                best_idx, best_score = idx, score
-
-        _append(remaining.loc[best_idx], "ATC", best_score)
-        remaining_idx.remove(best_idx)
-
-    for tier in ATC_HELD_BACK_TIER_ORDER:
-        tier_rows = held_back[held_back["_held_back_tier"].eq(tier)].sort_values("_due", ascending=True)
-        for _, r in tier_rows.iterrows():
-            _append(r, tier, None)
-
-    return pd.DataFrame(sequence_rows)
-
-
-# Calendar cell codes, low -> high severity (drives the discrete Heatmap colorscale).
 ATC_CAL_CODE_COLORS = {
     0: "#eef1f5",  # weekend
     1: "#fcfcfb",  # working day, nothing scheduled
@@ -1012,36 +909,84 @@ elif selected == "⚡  Velocity":
 # ── In Progress ─────────────────────────────────────────────────────────────────
 elif selected == "🔄  In Progress":
     st.title("🔄 In Progress")
-    st.caption("Leadership view of current in-progress workload and estimated completion effort.")
+    st.caption(
+        "When each in-progress ticket (Features and Initiatives excluded) is forecast to finish, "
+        "against its SLA and Target End Date. SLAs are in business days."
+    )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    ip = build_in_progress_visuals(df_issues)
+    risk_basis = st.radio(
+        "Judge risk against",
+        IN_PROGRESS_RISK_BASES,
+        horizontal=True,
+        help="The KPIs and charts use this deadline. The detail table always shows both the SLA and Target End status.",
+    )
+    ip = build_in_progress_visuals(df_issues, risk_basis=risk_basis)
 
-    if ip["load_fig"] is None:
+    if ip["timeline_fig"] is None:
         st.info("📥 Fetch Jira tickets from the sidebar to see In Progress visuals.")
     else:
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Total In Progress", f"{ip['total_in_progress']:,}")
-        c2.metric("Estimated Total Days", f"{ip['total_estimated_days']:.0f}")
-        c3.metric("Avg Days / Ticket", f"{ip['avg_velocity']:.1f}")
-        c4.metric("Critical Assignees", f"{ip['critical_assignees']}")
-        c5.metric("Missing Target End Date", f"{ip['missing_target_end_dates']}")
+        c2.metric("✓ On Track", f"{ip['on_track']}")
+        c3.metric("! At Risk / Likely Late", f"{ip['at_risk']}")
+        c4.metric("✖ Breached", f"{ip['breached']}")
+        c5.metric("All Done by (P85)", ip["all_done_p85"].strftime("%b %d") if ip["all_done_p85"] else "—")
+        c6.metric("Unsized (Medium assumed)", f"{ip['unsized']}")
+
+        with st.expander("How the forecast works"):
+            st.markdown(
+                "- **SLA clock** starts at the Target start date and counts business days "
+                "(weekends and company holidays excluded), using the Priority × Size SLA matrix. "
+                "Unsized tickets use the Medium SLA.\n"
+                "- **Execution velocity** is learned from the last year of Done tickets (Target start → Done), "
+                "weighting recent work more. Each assignee's speed per priority is blended with the team "
+                "baseline, so people with little history lean on the team.\n"
+                "- **Time already spent** is taken into account: only comparable tickets that ran at least as "
+                "long as this one inform how much is left.\n"
+                "- **Current load**: carrying more tickets than usual stretches the forecast (Load Factor).\n"
+                "- **P50** is the likely finish date; **P85** is the safe date to commit to.\n"
+                "- **Risk** compares the forecast with the deadline chosen above (SLA due date, Target End Date, "
+                "or whichever is earlier): ✖ Breached (deadline passed) · ▲ Likely Late (P50 after deadline) · "
+                "! At Risk (P85 after deadline) · ✓ On Track.\n"
+                "- Back-tested on past tickets: about 6 in 10 finished by P50 and 9 in 10 by P85."
+            )
 
         st.divider()
-        st.plotly_chart(ip["load_fig"], width="stretch")
+        st.subheader("Completion Forecast")
+        st.caption("Bar: Target start → P85 date, coloured by risk. ● P50 · ◇ SLA due · ✕ Target End Date.")
+        st.plotly_chart(ip["timeline_fig"], width="stretch")
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(ip["scatter_fig"], width="stretch")
+            st.subheader("Risk by Assignee")
+            st.plotly_chart(ip["assignee_risk_fig"], width="stretch")
         with col2:
-            st.plotly_chart(ip["distribution_fig"], width="stretch")
+            st.subheader("In Progress by SLA Cell")
+            st.caption("Tickets per Priority × Size, with each cell's SLA.")
+            st.plotly_chart(ip["sla_grid_fig"], width="stretch")
 
-        if ip.get("target_timeline_fig") is not None:
-            st.subheader("Target End Date Timeline")
-            st.plotly_chart(ip["target_timeline_fig"], width="stretch")
+        if ip.get("velocity_fig") is not None:
+            st.subheader("Execution Velocity by Priority per Assignee")
+            st.caption("Typical business days from Target start to Done, learned from the last year of Done tickets.")
+            st.plotly_chart(ip["velocity_fig"], width="stretch")
 
-        st.subheader("In Progress Workload Detail")
-        st.dataframe(ip["detail_df"], width="stretch")
+        st.subheader("In Progress Forecast Detail")
+        st.dataframe(
+            ip["forecast_df"],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                ),
+                "SLA Used %": st.column_config.ProgressColumn(
+                    "SLA Used %", format="%d%%", min_value=0, max_value=100,
+                ),
+            },
+        )
 
         st.subheader("All In Progress Tickets")
         st.dataframe(
@@ -1139,31 +1084,99 @@ elif selected == "🚧  Blocked":
 # ── Backlog ──────────────────────────────────────────────────────────────────────
 elif selected == "🗂️  Backlog":
     st.title("🗂️ Backlog")
-    st.caption("Tickets in To Do and Tech Discovery Required stages, with live backlog analysis.")
+    st.caption(
+        "To Do and Tech Discovery Required tickets (Features and Initiatives excluded): when each is "
+        "projected to start and finish, and whether it will make its SLA. SLAs are in business days."
+    )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    backlog = build_backlog_visuals(df_issues)
+    backlog_risk_basis = st.radio(
+        "Judge risk against",
+        BACKLOG_RISK_BASES,
+        horizontal=True,
+        key="backlog_risk_basis",
+        help="The KPIs and charts use this deadline. The detail table always shows both the SLA and Target End status.",
+    )
+    backlog = build_backlog_visuals(df_issues, risk_basis=backlog_risk_basis)
 
-    if backlog["load_fig"] is None:
+    if backlog["readiness_fig"] is None:
         st.info("📥 Fetch Jira tickets from the sidebar to see Backlog visuals.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Backlog", f"{backlog['total_in_progress']:,}")
-        c2.metric("Estimated Total Days", f"{backlog['total_estimated_days']:.0f}")
-        c3.metric("Avg Complexity Days", f"{backlog['avg_velocity']:.1f}")
-        c4.metric("Critical Assignees", f"{backlog['critical_assignees']}")
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+        c1.metric("Backlog Tickets", f"{backlog['total_backlog']:,}")
+        c2.metric("Ready to Start", f"{backlog['ready']}")
+        c3.metric("Should Have Started", f"{backlog['should_have_started']}")
+        c4.metric("! At Risk / Likely Late", f"{backlog['at_risk']}")
+        c5.metric("✖ Breached", f"{backlog['breached']}")
+        c6.metric("Unassigned", f"{backlog['unassigned']}")
+        c7.metric("Waiting > SLA", f"{backlog['waiting_past_sla']}")
+
+        with st.expander("How the backlog forecast works"):
+            st.markdown(
+                "- **Queue order**: each person's backlog is ordered with the Apparent Tardiness Cost rule, "
+                "the same order the Personal Dashboard suggests (Queue #).\n"
+                "- **Queue simulation**: each person works on as many tickets at once as they usually do. "
+                "Their In Progress tickets finish first (using the In Progress forecast); each backlog ticket "
+                "starts when a slot frees up, but not before its Target start. This is simulated "
+                f"{BACKLOG_SIMULATIONS:,} times with durations drawn from comparable Done tickets.\n"
+                "- **Projected Start** and **Finish P50** are the likely dates; **Finish P85** is the safe date to commit to.\n"
+                "- **SLA** runs from Target start (Priority × Size, business days). Tickets with no Target start "
+                "or no assignee are ○ Not assessed. The **Missing** column says what to fill in.\n"
+                "- **Waiting > SLA**: tickets that have already sat in the backlog longer than their whole SLA."
+            )
 
         st.divider()
-        st.plotly_chart(backlog["load_fig"], width="stretch")
-
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([3, 2])
         with col1:
-            st.plotly_chart(backlog["scatter_fig"], width="stretch")
+            st.subheader("Capacity Runway by Assignee")
+            st.caption("Business days until each person is free: In Progress work first, then their backlog queue.")
+            if backlog["runway_fig"] is not None:
+                st.plotly_chart(backlog["runway_fig"], width="stretch")
         with col2:
-            st.plotly_chart(backlog["distribution_fig"], width="stretch")
+            st.subheader("Backlog Readiness")
+            st.caption("A ticket needs all four to be scheduled and judged against its SLA.")
+            st.plotly_chart(backlog["readiness_fig"], width="stretch")
 
-        st.subheader("Backlog Workload Detail")
-        st.dataframe(backlog["detail_df"], width="stretch")
+        if backlog["timeline_fig"] is not None:
+            st.subheader("Projected Start and Finish")
+            st.caption("Bar: projected start → P85 finish, coloured by risk. ● P50 finish · ▷ Target start · ◇ SLA due · ✕ Target End Date.")
+            st.plotly_chart(backlog["timeline_fig"], width="stretch")
+        if backlog["all_done_p85"]:
+            st.caption(f"Whole assigned backlog projected done by **{backlog['all_done_p85']:%b %d, %Y}** (P85).")
+
+        col3, col4 = st.columns(2)
+        with col3:
+            st.subheader("Backlog by SLA Cell")
+            st.caption("Tickets per Priority × Size, with each cell's SLA. Unsized tickets count as Medium.")
+            st.plotly_chart(backlog["sla_grid_fig"], width="stretch")
+        with col4:
+            st.subheader("Waiting Longer Than Their SLA")
+            st.caption("Business days since creation already exceed the ticket's whole SLA.")
+            if backlog["waiting_df"].empty:
+                st.success("No backlog ticket has waited longer than its SLA.")
+            else:
+                st.dataframe(
+                    backlog["waiting_df"],
+                    width="stretch",
+                    hide_index=True,
+                    height=320,
+                    column_config={"Ticket": st.column_config.LinkColumn(
+                        "Ticket", help="Open Jira ticket", display_text=r".*/([^/]+)$")},
+                )
+
+        st.subheader("Backlog Forecast Detail")
+        st.dataframe(
+            backlog["forecast_df"],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Ticket": st.column_config.LinkColumn(
+                    "Ticket",
+                    help="Open Jira ticket",
+                    display_text=r".*/([^/]+)$",
+                )
+            },
+        )
 
         st.subheader("All Backlog Tickets")
         st.dataframe(

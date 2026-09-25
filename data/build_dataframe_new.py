@@ -28,7 +28,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
     fields_to_fetch = (
         "assignee, summary, key, status, created, updated, issuetype, creator, project, "
         "duedate, priority, customfield_10947, customfield_11751, customfield_11445, "
-        "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968"
+        "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968, "
+        "statuscategorychangedate"
     )
 
     # Build JQL query — 24-month lookback
@@ -177,6 +178,11 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "created": created_local,
             "updated": updated_local,
             "resolved": resolved_local,
+            # When the status category last changed -- for a Done ticket, when it became Done.
+            # Unlike `updated`, later comments/edits do not move it.
+            "status_category_changed": pd.to_datetime(
+                fields.get("statuscategorychangedate"), utc=True, errors="coerce"
+            ),
             "project_name": fields.get("project", {}).get("name", ""),
             "project_id": fields.get("project", {}).get("id", ""),
             "priority_name": priority_name,

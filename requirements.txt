@@ -16,6 +16,8 @@ fonttools==4.63.0
 gitdb==4.0.12
 GitPython==3.1.50
 h11==0.16.0
+# Company business-day calendar for the In Progress SLA forecast (darkstar.metrics.is_holiday).
+holidays==0.103
 httptools==0.7.1
 idna==3.15
 importlib_metadata==9.0.0

@@ -1,422 +1,401 @@
+"""Backlog forecast: when will each backlog ticket start and finish, and will it make its SLA?
+
+Backlog = To Do + Tech Discovery Required tickets (Features and Initiatives excluded). It reuses the
+In Progress execution-velocity model (reports/in_progress_report.py) and adds a queue:
+
+- Each assignee's backlog is ordered with the Apparent Tardiness Cost rule (reports/atc_sequence.py),
+  the same order the Personal Dashboard suggests.
+- A Monte Carlo simulation runs each assignee's queue many times. The assignee works on as many
+  tickets at once as they typically do (their historical work in progress, at least one). Current
+  In Progress tickets hold those slots until they finish (remaining time from the In Progress
+  forecast); each backlog ticket then starts when a slot frees up, but not before its Target start,
+  and takes a duration drawn from comparable Done tickets.
+- The P50/P85 of each ticket's simulated start and finish give projected dates. The SLA clock starts
+  at Target start, so a ticket is judged against Target start + SLA (business days). Tickets without
+  a Target start, or without an assignee, cannot be judged and are flagged instead.
+"""
+from __future__ import annotations
+
+import heapq
+from datetime import timezone
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+
+from reports import in_progress_report as ipr
+from reports.atc_sequence import build_atc_sequence
 
 
-TIME_PERIOD_DAYS = 90
-JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
-EXCLUDED_ASSIGNEES = {
-    "satish kumar marana",
-    "denys loboda",
-    "cullen philippson",
-    "emmanuel adjei",
-}
-SIZE_ORDER = ["Small", "Medium", "Large", "XL", "Unestimated"]
+JIRA_BROWSE_BASE_URL = ipr.JIRA_BROWSE_BASE_URL
+BACKLOG_STATUSES = {"to do", "tech discovery required"}
+SIMULATIONS = 1000
+RNG_SEED = 7  # fixed so the page shows the same dates on every rerun of the same data
+UNASSIGNED = "Unassigned"
+
+NOT_ASSESSED = "Not Assessed"
+RISK_ORDER = ipr.RISK_ORDER + [NOT_ASSESSED]
+RISK_LABELS = {**ipr.RISK_LABELS, NOT_ASSESSED: "○ Not assessed"}
+RISK_COLORS = {**ipr.RISK_COLORS, RISK_LABELS[NOT_ASSESSED]: "#94a3b8"}
+RISK_BASES = ipr.RISK_BASES
+# Categorical slots 1 and 2 of the chart palette.
+RUNWAY_COLORS = {"In Progress work": "#2a78d6", "Backlog work": "#eb6834"}
+INK = ipr.INK
 
 
 def _empty_payload() -> dict:
     return {
-        "total_in_progress": 0,
-        "total_estimated_days": 0.0,
-        "avg_velocity": 0.0,
-        "critical_assignees": 0,
-        "load_fig": None,
-        "scatter_fig": None,
-        "distribution_fig": None,
-        "detail_df": pd.DataFrame(),
+        "total_backlog": 0,
+        "ready": 0,
+        "should_have_started": 0,
+        "at_risk": 0,
+        "breached": 0,
+        "unassigned": 0,
+        "waiting_past_sla": 0,
+        "all_done_p85": None,
+        "runway_fig": None,
+        "readiness_fig": None,
+        "timeline_fig": None,
+        "sla_grid_fig": None,
+        "forecast_df": pd.DataFrame(),
+        "waiting_df": pd.DataFrame(),
         "tickets_df": pd.DataFrame(),
     }
 
 
-def _harmonic_estimate(avg_days: float, tickets: int) -> float:
-    if tickets <= 0 or avg_days <= 0:
-        return 0.0
-    return sum(avg_days / i for i in range(1, tickets + 1))
+# ── Queue simulation ────────────────────────────────────────────────────────────
+
+def _slots(typical_wip: float) -> int:
+    return max(1, int(round(typical_wip)))
 
 
-def _normalize_assignee(series: pd.Series) -> pd.Series:
-    return series.fillna("Unassigned").astype(str).str.strip()
+def _simulate_queue(in_progress_samples: list[np.ndarray], queue_samples: list[np.ndarray],
+                    earliest_start: list[float], slots: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One assignee's queue, simulated column-by-column over the sample draws.
+
+    Returns (starts, finishes) shaped [ticket, simulation] in business days from today, and the day
+    each simulation's In Progress work is all finished.
+    """
+    n_sim = SIMULATIONS
+    starts = np.zeros((len(queue_samples), n_sim))
+    finishes = np.zeros((len(queue_samples), n_sim))
+    in_progress_clear = np.zeros(n_sim)
+    for s in range(n_sim):
+        busy = [sample[s] for sample in in_progress_samples]
+        in_progress_clear[s] = max(busy, default=0.0)
+        heapq.heapify(busy)
+        clock = 0.0
+        for j, sample in enumerate(queue_samples):
+            while len(busy) >= slots:
+                clock = max(clock, heapq.heappop(busy))
+            start = max(clock, earliest_start[j])
+            finish = start + sample[s]
+            starts[j, s], finishes[j, s] = start, finish
+            heapq.heappush(busy, finish)
+    return starts, finishes, in_progress_clear
 
 
-def _normalize_size(series: pd.Series) -> pd.Series:
-    norm = series.fillna("Unestimated").astype(str).str.strip()
-    norm = norm.replace("", "Unestimated")
-    return norm.where(norm.isin(SIZE_ORDER[:-1]), "Unestimated")
+# ── Figures ─────────────────────────────────────────────────────────────────────
+
+def _runway_figure(runway: pd.DataFrame) -> go.Figure:
+    plot = runway.sort_values("free_p50_bd", ascending=True)
+    fig = go.Figure()
+    for name, col in [("In Progress work", "in_progress_bd"), ("Backlog work", "backlog_bd")]:
+        fig.add_trace(go.Bar(
+            y=plot["assignee_name"], x=plot[col], name=name, orientation="h",
+            marker=dict(color=RUNWAY_COLORS[name], line=dict(color="rgba(255,255,255,0.9)", width=2)),
+            customdata=plot[["tickets_in_progress", "tickets_backlog", "free_p50", "free_p85"]],
+            hovertemplate="<b>%{y}</b><br>" + name + ": %{x:.0f} business days"
+                          "<br>%{customdata[0]} in progress · %{customdata[1]} in backlog"
+                          "<br>Free by %{customdata[2]|%b %d} (P50) · %{customdata[3]|%b %d} (P85)<extra></extra>",
+        ))
+    fig.add_trace(go.Scatter(
+        y=plot["assignee_name"], x=plot["free_p85_bd"], mode="markers", name="Free by (P85)",
+        marker=dict(symbol="line-ns-open", size=16, color=INK, line=dict(width=3, color=INK)),
+        hovertemplate="<b>%{y}</b><br>Free by P85: %{x:.0f} business days<extra></extra>",
+    ))
+    fig.update_layout(barmode="stack", height=max(320, 32 * len(plot) + 130), legend_title_text="",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                      xaxis_title="Business days from today", yaxis_title=None,
+                      margin=dict(l=10, r=10, t=40, b=10))
+    return fig
 
 
-def _get_done_window(df: pd.DataFrame) -> pd.DataFrame:
-    done_df = df[df["status"].astype(str).str.lower().eq("done")].copy()
-    if done_df.empty:
-        return done_df
+def _readiness_figure(backlog: pd.DataFrame) -> go.Figure:
+    total = len(backlog)
+    checks = [
+        ("Assigned", backlog["is_assigned"]),
+        ("Sized", backlog["is_sized"]),
+        ("Has Target start", backlog["target_start_day"].notna()),
+        ("Has Target end", backlog["target_end_day"].notna()),
+        ("Ready (all four)", backlog["is_ready"]),
+    ]
+    data = pd.DataFrame({"Check": [c for c, _ in checks], "Tickets": [int(m.sum()) for _, m in checks]})
+    data["Share"] = data["Tickets"] / max(total, 1)
+    data["Label"] = [f"{n} / {total} ({p:.0%})" for n, p in zip(data["Tickets"], data["Share"])]
+    fig = go.Figure(go.Bar(
+        y=data["Check"], x=data["Share"], orientation="h", text=data["Label"], textposition="outside",
+        marker=dict(color=RUNWAY_COLORS["In Progress work"]),
+        hovertemplate="%{y}: %{text}<extra></extra>", cliponaxis=False,
+    ))
+    fig.update_xaxes(range=[0, 1.25], tickformat=".0%", title=None, showgrid=True,
+                     gridcolor="rgba(148,163,184,0.25)")
+    fig.update_yaxes(autorange="reversed", title=None)
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+    return fig
 
-    for date_col in ["resolved_date", "completed_date", "done_date", "updated"]:
-        if date_col in done_df.columns:
-            done_df[date_col] = pd.to_datetime(done_df[date_col], errors="coerce")
-            date_tz = done_df[date_col].dt.tz
-            if date_tz is not None:
-                cutoff = pd.Timestamp.now(tz=date_tz).normalize() - pd.Timedelta(days=TIME_PERIOD_DAYS)
-            else:
-                cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=TIME_PERIOD_DAYS)
-            done_df = done_df[done_df[date_col].isna() | (done_df[date_col] >= cutoff)].copy()
-            break
-    return done_df
+
+def _timeline_figure(fc: pd.DataFrame, today: pd.Timestamp) -> go.Figure | None:
+    plot = fc[fc["is_assigned"]].sort_values(["start_p50", "finish_p85"], ascending=False).copy()
+    if plot.empty:
+        return None
+    plot["label"] = plot["key"] + " · " + plot["assignee_name"]
+    fig = px.timeline(
+        plot, x_start="start_p50", x_end="finish_p85", y="label", color="risk_label",
+        color_discrete_map=RISK_COLORS, category_orders={"risk_label": [RISK_LABELS[r] for r in RISK_ORDER]},
+        custom_data=["queue_position", "priority_bucket", "size_label", "sla_bd"],
+    )
+    fig.update_traces(
+        marker_line_color="rgba(255,255,255,0.9)", marker_line_width=2, opacity=0.85,
+        hovertemplate="<b>%{y}</b><br>Projected start %{base|%b %d} → P85 finish %{x|%b %d}"
+                      "<br>Queue #%{customdata[0]} · %{customdata[1]} · %{customdata[2]}"
+                      "<br>SLA %{customdata[3]} business days<extra></extra>",
+    )
+    for col, name, symbol, size in [("finish_p50", "Finish P50 (likely)", "circle", 9),
+                                    ("target_start_day", "Target start", "triangle-right-open", 11),
+                                    ("sla_due", "SLA due", "diamond-open", 11),
+                                    ("target_end_day", "Target End Date", "x-thin-open", 11)]:
+        fig.add_trace(go.Scatter(
+            x=plot[col], y=plot["label"], mode="markers", name=name,
+            marker=dict(symbol=symbol, size=size, color=INK, line=dict(width=2, color=INK)),
+            hovertemplate=f"<b>%{{y}}</b><br>{name}: %{{x|%a %b %d, %Y}}<extra></extra>",
+        ))
+    fig.add_vline(x=today, line_width=2, line_dash="dash", line_color=INK)
+    fig.add_annotation(x=today, y=1, xref="x", yref="paper", text="Today", showarrow=False,
+                       xanchor="left", yanchor="bottom", font={"color": INK})
+    fig.update_yaxes(title=None, autorange="reversed")
+    fig.update_xaxes(title=None, showgrid=True, gridcolor="rgba(148,163,184,0.25)")
+    fig.update_layout(height=max(360, 28 * len(plot) + 140), legend_title_text="",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                      margin=dict(l=10, r=10, t=40, b=10))
+    return fig
 
 
-def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for col in candidates:
-        if col in df.columns:
-            return col
-    return None
+# ── Tables ──────────────────────────────────────────────────────────────────────
+
+def _all_tickets_table(backlog: pd.DataFrame) -> pd.DataFrame:
+    """The unchanged "All Backlog Tickets" table."""
+    df = backlog.copy()
+    lead_col = ipr._first_existing_column(df, ["bussiness_lead", "business_lead", "Business Lead"])
+    if lead_col is None:
+        df["bussiness_lead"], lead_col = "Unknown", "bussiness_lead"
+    for col, default in {"priority_name": "Unknown", "creator_name": "Unknown", "days_old": 0, "summary": "",
+                         "target_end_date": pd.NaT}.items():
+        if col not in df.columns:
+            df[col] = default
+    today_utc = pd.Timestamp.now(tz="UTC").normalize().date()
+    target_end = pd.to_datetime(df["target_end_date"], errors="coerce").dt.date
+    table = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + df["key"].astype(str),
+        "Priority": df["priority_name"],
+        "Business Lead": df[lead_col],
+        "Creator": df["creator_name"],
+        "Assognee Name": df["assignee_name"],
+        "Last Updated": pd.to_datetime(df["updated"], errors="coerce").dt.date,
+        "Target Start Date": pd.to_datetime(df["planned_start_date"], errors="coerce").dt.date,
+        "Days Old": pd.to_numeric(df["days_old"], errors="coerce").fillna(0),
+        "Days Left": target_end.apply(lambda d: (d - today_utc).days if pd.notnull(d) else None),
+        "Estimated Size": df["size"],
+        "Summary": df["summary"].fillna("").astype(str).str[:160],
+    })
+    return table.sort_values("Days Old", ascending=False)
 
 
-def build_backlog_visuals(df_issues: pd.DataFrame) -> dict:
-    """Leadership view of backlog workload based on To Do + Tech Discovery Required tickets."""
+# ── Entry point ─────────────────────────────────────────────────────────────────
+
+def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> dict:
+    """Queue-aware start/finish forecast for backlog tickets (Features/Initiatives excluded).
+
+    `risk_basis` (one of RISK_BASES) picks the deadline the headline risk, KPIs and charts use.
+    """
     if df_issues is None or df_issues.empty:
         return _empty_payload()
-
-    required = {"status", "assignee_name", "velocity_days", "velocity_backlog_days"}
+    required = {"key", "status", "assignee_name", "issuetype", "created", "updated"}
     if not required.issubset(df_issues.columns):
         return _empty_payload()
 
-    df = df_issues.copy()
-    df["assignee_name"] = _normalize_assignee(df["assignee_name"])
-    excluded_lower = {x.lower() for x in EXCLUDED_ASSIGNEES}
+    tickets = ipr.prepare_tickets(df_issues)
+    today = ipr.today_local()
+    hol = ipr._calendar_holidays(today)
+    today_series = lambda idx: pd.Series(today, index=idx)  # noqa: E731
 
-    backlog_statuses = {"to do", "tech discovery required"}
-    in_progress_df = df[df["status"].astype(str).str.lower().isin(backlog_statuses)].copy()
-    in_progress_df = in_progress_df[~in_progress_df["assignee_name"].str.lower().isin(excluded_lower)].copy()
-
-    key_col = _first_existing_column(in_progress_df, ["key", "Key", "ticket", "Ticket"])
-    priority_col_src = _first_existing_column(in_progress_df, ["priority_name", "priority", "Priority"])
-    lead_col = _first_existing_column(in_progress_df, ["bussiness_lead", "business_lead", "Business Lead"])
-    creator_col = _first_existing_column(in_progress_df, ["creator_name", "creator", "Creator"])
-    assignee_col = _first_existing_column(in_progress_df, ["assignee_name", "Assignee"])
-    updated_col = _first_existing_column(in_progress_df, ["updated", "Updated", "last_updated"])
-    target_end_col = _first_existing_column(in_progress_df, ["target_end_date", "project_due_date", "Target End Date"])
-    target_start_col = _first_existing_column(
-        in_progress_df, ["planned_start_date", "target_start_date", "Target Start Date"]
-    )
-    days_old_col = _first_existing_column(in_progress_df, ["days_old", "Days Old"])
-    summary_col = _first_existing_column(in_progress_df, ["summary", "Summary"])
-    size_col = _first_existing_column(in_progress_df, ["estimated_size_name", "Estimated Size"])
-
-    if key_col is None:
-        in_progress_df["key"] = in_progress_df.index.astype(str)
-        key_col = "key"
-    if priority_col_src is None:
-        in_progress_df["priority_name"] = "Unknown"
-        priority_col_src = "priority_name"
-    if lead_col is None:
-        in_progress_df["bussiness_lead"] = "Unknown"
-        lead_col = "bussiness_lead"
-    if creator_col is None:
-        in_progress_df["creator_name"] = "Unknown"
-        creator_col = "creator_name"
-    if assignee_col is None:
-        in_progress_df["assignee_name"] = "Unassigned"
-        assignee_col = "assignee_name"
-    if days_old_col is None:
-        in_progress_df["days_old"] = 0
-        days_old_col = "days_old"
-    if summary_col is None:
-        in_progress_df["summary"] = ""
-        summary_col = "summary"
-    if size_col is None:
-        in_progress_df["estimated_size_name"] = "Unestimated"
-        size_col = "estimated_size_name"
-    in_progress_df["size_group"] = _normalize_size(in_progress_df[size_col])
-
-    today = pd.Timestamp.now(tz="UTC").normalize()
-    today_date_only = today.date()
-    if target_end_col is not None:
-        in_progress_df[target_end_col] = pd.to_datetime(in_progress_df[target_end_col], errors="coerce").dt.date
-        in_progress_df["days_left"] = in_progress_df[target_end_col].apply(
-            lambda d: (d - today_date_only).days if pd.notnull(d) else None
-        )
-    else:
-        in_progress_df["days_left"] = None
-
-    if updated_col is not None:
-        in_progress_df[updated_col] = pd.to_datetime(in_progress_df[updated_col], errors="coerce").dt.date
-    else:
-        in_progress_df["updated"] = pd.NaT
-        updated_col = "updated"
-
-    in_progress_df[days_old_col] = pd.to_numeric(in_progress_df[days_old_col], errors="coerce").fillna(0)
-
-    target_start_select_col = target_start_col
-    if target_start_select_col is None:
-        target_start_select_col = "__target_start_date__"
-        in_progress_df[target_start_select_col] = pd.NaT
-    else:
-        in_progress_df[target_start_select_col] = pd.to_datetime(
-            in_progress_df[target_start_select_col], errors="coerce"
-        ).dt.date
-
-    tickets_df = in_progress_df[
-        [
-            key_col,
-            priority_col_src,
-            lead_col,
-            creator_col,
-            assignee_col,
-            updated_col,
-            target_start_select_col,
-            days_old_col,
-            "days_left",
-            "size_group",
-            summary_col,
-        ]
-    ].copy()
-    tickets_df.columns = [
-        "Ticket",
-        "Priority",
-        "Business Lead",
-        "Creator",
-        "Assognee Name",
-        "Last Updated",
-        "Target Start Date",
-        "Days Old",
-        "Days Left",
-        "Estimated Size",
-        "Summary",
-    ]
-    tickets_df["Ticket"] = tickets_df["Ticket"].astype(str).apply(
-        lambda ticket: f"{JIRA_BROWSE_BASE_URL}{ticket}"
-    )
-    tickets_df["Summary"] = tickets_df["Summary"].fillna("").astype(str).str[:160]
-    tickets_df = tickets_df.sort_values("Days Old", ascending=False)
-
-    backlog_counts = (
-        in_progress_df.groupby("assignee_name", as_index=False)
-        .size()
-        .rename(columns={"size": "total_tickets_in_progress"})
-    )
-
-    if backlog_counts.empty:
+    status_norm = tickets["status"].astype(str).str.strip().str.casefold()
+    backlog = tickets[status_norm.isin(BACKLOG_STATUSES)].copy()
+    if backlog.empty:
         return _empty_payload()
+    in_progress = ipr.prepare_in_progress(tickets, today, hol)
 
-    size_breakdown = (
-        in_progress_df.groupby(["assignee_name", "size_group"])
-        .size()
-        .unstack(fill_value=0)
-        .reindex(columns=SIZE_ORDER, fill_value=0)
-        .reset_index()
-    )
+    history = ipr._build_history(tickets, today, hol)
+    _, effects = ipr._assignee_effects(history)
+    typical = ipr._typical_wip(history, in_progress, today, hol)
+    wip = ipr._wip_factors(typical, in_progress)
 
-    done_df = _get_done_window(df)
-    done_df["velocity_days"] = pd.to_numeric(done_df["velocity_days"], errors="coerce")
-    done_df["velocity_backlog_days"] = pd.to_numeric(done_df["velocity_backlog_days"], errors="coerce")
+    # ── Backlog ticket facts ──
+    backlog["target_start_day"] = ipr._to_day(backlog["planned_start_date"], timezone.utc)
+    backlog["target_end_day"] = ipr._to_day(
+        backlog.get("target_end_date", pd.Series(pd.NaT, index=backlog.index)), timezone.utc)
+    backlog["created_day"] = ipr._to_day(backlog["created"], ipr.LOCAL_TZ)
+    backlog["waiting_bd"] = ipr._busdays_between(backlog["created_day"], today_series(backlog.index), hol).fillna(0)
+    backlog["elapsed_bd"] = 0.0
+    backlog["is_assigned"] = backlog["assignee_name"].ne(UNASSIGNED)
+    backlog["is_sized"] = backlog["size"].ne("Unestimated")
+    backlog["is_ready"] = (backlog["is_assigned"] & backlog["is_sized"]
+                           & backlog["target_start_day"].notna() & backlog["target_end_day"].notna())
+    backlog["sla_size"] = backlog["size"].where(backlog["is_sized"], ipr.ASSUMED_SIZE)
+    backlog["size_label"] = np.where(backlog["is_sized"], backlog["size"], f"{ipr.ASSUMED_SIZE}* (assumed)")
+    backlog["sla_bd"] = [ipr.SLA_BUSINESS_DAYS[p][s] for p, s in zip(backlog["priority_bucket"], backlog["sla_size"])]
+    backlog["sla_due"] = ipr._add_busdays(backlog["target_start_day"], backlog["sla_bd"].astype(float), hol)
 
-    priority_col = "priority"
-    if priority_col not in done_df.columns:
-        done_df[priority_col] = "Unknown"
-    done_df[priority_col] = done_df[priority_col].fillna("Unknown").astype(str)
+    # Duration of each backlog ticket once started (no load factor: the queue models the load).
+    dists = {idx: ipr._remaining_distribution(row, history, effects, {}) for idx, row in backlog.iterrows()}
+    backlog["duration_p50_bd"] = [dists[i]["p50"] for i in backlog.index]
+    backlog["duration_p85_bd"] = [dists[i]["p85"] for i in backlog.index]
+    backlog["confidence"] = [dists[i]["confidence"] for i in backlog.index]
+    backlog["basis"] = [dists[i]["basis"] for i in backlog.index]
 
-    backlog_type_df = done_df[done_df["velocity_backlog_days"] > 0][
-        ["assignee_name", priority_col, "velocity_backlog_days"]
-    ].copy()
-    backlog_type_df["velocity_type"] = "* Backlog Velocity"
-    backlog_type_df.rename(columns={"velocity_backlog_days": "velocity_value"}, inplace=True)
+    # ── ATC order per assignee (same per-person sequencing as the Personal Dashboard) ──
+    atc_input = pd.DataFrame({
+        "Ticket": backlog["key"],
+        "Priority": backlog.get("priority_name", pd.Series("None", index=backlog.index)).fillna("None"),
+        "Size": backlog["size"],
+        "Days Left": (backlog["target_end_day"] - today).dt.days,
+        "Days Old": pd.to_numeric(backlog.get("days_old", 0), errors="coerce").fillna(0),
+        "Status": "To Do",
+        "assignee_name": backlog["assignee_name"],
+    })
+    atc_rank = {}
+    for _, pool in atc_input.groupby("assignee_name"):
+        seq = build_atc_sequence(pool.drop(columns="assignee_name"))
+        atc_rank.update(zip(seq["Ticket"], seq["Seq"]))
+    backlog["queue_position"] = backlog["key"].map(atc_rank)
+    backlog = backlog.sort_values(["assignee_name", "queue_position"])
+    backlog["queue_position"] = backlog["queue_position"].where(backlog["is_assigned"])
 
-    execution_type_df = done_df[done_df["velocity_days"] > 0][
-        ["assignee_name", priority_col, "velocity_days"]
-    ].copy()
-    execution_type_df["velocity_type"] = "Execution Velocity"
-    execution_type_df.rename(columns={"velocity_days": "velocity_value"}, inplace=True)
+    # ── Monte Carlo queue per assignee ──
+    rng = np.random.default_rng(RNG_SEED)
+    for col in ["start_p50_bd", "start_p85_bd", "finish_p50_bd", "finish_p85_bd"]:
+        backlog[col] = np.nan
+    runway_rows = []
+    for assignee, queue in backlog[backlog["is_assigned"]].groupby("assignee_name", sort=False):
+        mine = in_progress[in_progress["assignee_name"] == assignee]
+        ip_samples = [ipr.sample_remaining(ipr._remaining_distribution(row, history, effects, wip), rng, SIMULATIONS)
+                      for _, row in mine.iterrows()]
+        q_samples = [ipr.sample_remaining(dists[i], rng, SIMULATIONS) for i in queue.index]
+        earliest = ipr._busdays_between(today_series(queue.index), queue["target_start_day"], hol).fillna(0).tolist()
+        starts, finishes, ip_clear = _simulate_queue(ip_samples, q_samples, earliest, _slots(typical.get(assignee, 1.0)))
 
-    combined_velocity = pd.concat([backlog_type_df, execution_type_df], ignore_index=True)
-    combined_velocity = combined_velocity[
-        ~combined_velocity["assignee_name"].str.lower().isin(excluded_lower)
-    ].copy()
+        backlog.loc[queue.index, "start_p50_bd"] = np.quantile(starts, 0.50, axis=1)
+        backlog.loc[queue.index, "start_p85_bd"] = np.quantile(starts, 0.85, axis=1)
+        backlog.loc[queue.index, "finish_p50_bd"] = np.quantile(finishes, 0.50, axis=1)
+        backlog.loc[queue.index, "finish_p85_bd"] = np.quantile(finishes, 0.85, axis=1)
+        free = np.maximum(finishes.max(axis=0), ip_clear)
+        runway_rows.append({
+            "assignee_name": assignee,
+            "tickets_in_progress": len(mine),
+            "tickets_backlog": len(queue),
+            "in_progress_bd": float(np.median(ip_clear)),
+            "free_p50_bd": float(np.median(free)),
+            "free_p85_bd": float(np.quantile(free, 0.85)),
+        })
 
-    if combined_velocity.empty:
-        global_exec_avg = 0.0
-        global_backlog_avg = 0.0
-        velocity_comparison_df = pd.DataFrame(columns=[
-            "assignee_name",
-            "backlog_velocity_value",
-            "execution_velocity_value",
-            "complexity_days",
-        ])
-    else:
-        assignees = sorted(combined_velocity["assignee_name"].dropna().unique().tolist())
-        velocity_types = ["* Backlog Velocity", "Execution Velocity"]
-        priorities = sorted(combined_velocity[priority_col].dropna().unique().tolist())
+    for bd_col, date_col in [("start_p50_bd", "start_p50"), ("start_p85_bd", "start_p85"),
+                             ("finish_p50_bd", "finish_p50"), ("finish_p85_bd", "finish_p85")]:
+        backlog[date_col] = ipr._add_busdays(today_series(backlog.index), backlog[bd_col], hol)
 
-        full_index = pd.MultiIndex.from_product(
-            [assignees, velocity_types, priorities],
-            names=["assignee_name", "velocity_type", priority_col],
-        )
+    # ── Risk: SLA runs from Target start; unassigned / undated tickets are not assessed ──
+    def risk_against(deadline: pd.Series, can_judge: pd.Series) -> list[str]:
+        return [ipr._risk(today, d, p50, p85) if ok else NOT_ASSESSED
+                for d, p50, p85, ok in zip(deadline, backlog["finish_p50"], backlog["finish_p85"], can_judge)]
 
-        avg_by_combo = (
-            combined_velocity.groupby(["assignee_name", "velocity_type", priority_col], as_index=False)[
-                "velocity_value"
-            ].mean()
-        )
-        avg_by_combo = avg_by_combo.set_index(["assignee_name", "velocity_type", priority_col]).reindex(full_index).reset_index()
+    rank = {r: i for i, r in enumerate(RISK_ORDER)}
+    backlog["risk_sla"] = risk_against(backlog["sla_due"],
+                                       backlog["is_assigned"] & backlog["target_start_day"].notna())
+    backlog["risk_target"] = risk_against(backlog["target_end_day"],
+                                          backlog["is_assigned"] & backlog["target_end_day"].notna())
+    backlog["risk_both"] = [min(a, b, key=rank.get) for a, b in zip(backlog["risk_sla"], backlog["risk_target"])]
+    backlog["risk"] = {"SLA": backlog["risk_sla"], "Target End Date": backlog["risk_target"]}.get(
+        risk_basis, backlog["risk_both"])
+    backlog["risk_label"] = backlog["risk"].map(RISK_LABELS)
 
-        overall_avg = float(combined_velocity["velocity_value"].mean()) if not combined_velocity.empty else 0.0
-        avg_by_combo["velocity_value"] = avg_by_combo["velocity_value"].fillna(overall_avg)
+    backlog["start_slip_bd"] = np.where(
+        backlog["target_start_day"].notna() & backlog["start_p50"].notna(),
+        ipr._busdays_between(backlog["target_start_day"], backlog["start_p50"], hol), np.nan)
+    backlog["missing"] = [
+        ", ".join(label for label, ok in [("Assignee", a), ("Size", s), ("Target start", ts), ("Target end", te)]
+                  if not ok) or "—"
+        for a, s, ts, te in zip(backlog["is_assigned"], backlog["is_sized"],
+                                backlog["target_start_day"].notna(), backlog["target_end_day"].notna())]
+    backlog["waiting_past_sla"] = backlog["waiting_bd"] > backlog["sla_bd"]
 
-        summary_by_assignee = (
-            avg_by_combo.groupby(["assignee_name", "velocity_type"], as_index=False)["velocity_value"]
-            .mean()
-        )
+    fc = backlog.sort_values(["risk", "start_p50_bd"], key=lambda s: s.map(rank) if s.name == "risk" else s)
+    forecast_df = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + fc["key"].astype(str),
+        "Risk": fc["risk_label"],
+        "SLA Status": fc["risk_sla"].map(RISK_LABELS),
+        "Target End Status": fc["risk_target"].map(RISK_LABELS),
+        "Missing": fc["missing"],
+        "Assignee": fc["assignee_name"],
+        "Queue #": fc["queue_position"].astype("Int64"),
+        "Priority": fc["priority_bucket"],
+        "Size": fc["size_label"],
+        "Waiting (bd)": fc["waiting_bd"].astype(int),
+        "Target Start": fc["target_start_day"].dt.date,
+        "Projected Start": fc["start_p50"].dt.date,
+        "Start Slip (bd)": pd.to_numeric(fc["start_slip_bd"]).round(0).astype("Int64"),
+        "Finish P50": fc["finish_p50"].dt.date,
+        "Finish P85": fc["finish_p85"].dt.date,
+        "SLA (bd)": fc["sla_bd"],
+        "SLA Due": fc["sla_due"].dt.date,
+        "Target End": fc["target_end_day"].dt.date,
+        "Work P50–P85 (bd)": [f"{a:.0f}–{b:.0f}" for a, b in zip(fc["duration_p50_bd"], fc["duration_p85_bd"])],
+        "Confidence": fc["confidence"],
+        "Based On": fc["basis"],
+    })
 
-        backlog_df = summary_by_assignee[
-            summary_by_assignee["velocity_type"] == "* Backlog Velocity"
-        ][["assignee_name", "velocity_value"]].rename(columns={"velocity_value": "backlog_velocity_value"})
+    waiting = fc[fc["waiting_past_sla"]].sort_values("waiting_bd", ascending=False)
+    waiting_df = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + waiting["key"].astype(str),
+        "Assignee": waiting["assignee_name"],
+        "Priority": waiting["priority_bucket"],
+        "Size": waiting["size_label"],
+        "Waiting (bd)": waiting["waiting_bd"].astype(int),
+        "SLA (bd)": waiting["sla_bd"],
+        "Summary": waiting.get("summary", pd.Series("", index=waiting.index)).fillna("").astype(str).str[:120],
+    })
 
-        execution_df = summary_by_assignee[
-            summary_by_assignee["velocity_type"] == "Execution Velocity"
-        ][["assignee_name", "velocity_value"]].rename(columns={"velocity_value": "execution_velocity_value"})
-
-        velocity_comparison_df = pd.merge(backlog_df, execution_df, on="assignee_name", how="outer")
-        velocity_comparison_df["complexity_days"] = (
-            velocity_comparison_df["execution_velocity_value"] - velocity_comparison_df["backlog_velocity_value"]
-        )
-
-        global_exec_avg = float(velocity_comparison_df["execution_velocity_value"].mean())
-        global_backlog_avg = float(velocity_comparison_df["backlog_velocity_value"].mean())
-
-    velocity_comparison_df = backlog_counts.merge(velocity_comparison_df, on="assignee_name", how="left")
-    velocity_comparison_df = velocity_comparison_df.rename(
-        columns={"total_tickets_in_progress": "total_tickets_in_backlog"}
-    )
-    velocity_comparison_df["execution_velocity_value"] = velocity_comparison_df[
-        "execution_velocity_value"
-    ].fillna(global_exec_avg)
-    velocity_comparison_df["backlog_velocity_value"] = velocity_comparison_df[
-        "backlog_velocity_value"
-    ].fillna(global_backlog_avg)
-    velocity_comparison_df["complexity_days"] = velocity_comparison_df["complexity_days"].fillna(
-        velocity_comparison_df["execution_velocity_value"] - velocity_comparison_df["backlog_velocity_value"]
-    )
-    velocity_comparison_df["complexity_days"] = velocity_comparison_df["complexity_days"].abs()
-
-    # Iterate through each row
-    for idx, row in velocity_comparison_df.iterrows():
-        if row["total_tickets_in_backlog"] > 0:
-            TOT = 0
-            for x in range(1, int(row["total_tickets_in_backlog"]) + 1):
-                TOT = TOT + row["execution_velocity_value"] / x
-            velocity_comparison_df.at[idx, "estimated_total_velocity_execution_days"] = TOT
-        else:
-            velocity_comparison_df.at[idx, "estimated_total_velocity_execution_days"] = 0
-
-    velocity_comparison_df["average_total_velocity_backlog_days"] = velocity_comparison_df[
-        "estimated_total_velocity_execution_days"
-    ]
-
-    summary = velocity_comparison_df.rename(columns={"total_tickets_in_backlog": "total_tickets_in_progress"})
-    summary = summary.merge(size_breakdown, on="assignee_name", how="left")
-    summary[SIZE_ORDER] = summary[SIZE_ORDER].fillna(0).astype(int)
-
-    def load_bucket(days: float) -> str:
-        if days > 90:
-            return "Critical"
-        if days > 60:
-            return "High"
-        if days > 30:
-            return "Medium"
-        if days > 0:
-            return "Low"
-        return "None"
-
-    summary["load_bucket"] = summary["complexity_days"].apply(load_bucket)
-    summary["estimated_total_days_detail"] = (
-        summary["total_tickets_in_progress"] * summary["complexity_days"]
-    )
-    summary = summary.sort_values("complexity_days", ascending=False)
-
-    load_fig = px.bar(
-        summary,
-        y="assignee_name",
-        x="complexity_days",
-        color="load_bucket",
-        orientation="h",
-        title="Complexity Days by Assignee",
-        hover_data=["total_tickets_in_progress", "execution_velocity_value", "average_total_velocity_backlog_days"],
-        color_discrete_map={
-            "Critical": "#dc2626",
-            "High": "#f97316",
-            "Medium": "#facc15",
-            "Low": "#16a34a",
-            "None": "#94a3b8",
-        },
-    )
-    load_fig.update_layout(height=460, xaxis_title="Complexity Days", yaxis_title="Assignee")
-
-    scatter_fig = px.scatter(
-        summary,
-        x="total_tickets_in_progress",
-        y="complexity_days",
-        size="average_total_velocity_backlog_days",
-        color="average_total_velocity_backlog_days",
-        color_continuous_scale="RdYlGn_r",
-        hover_name="assignee_name",
-        hover_data=["execution_velocity_value", "backlog_velocity_value", "average_total_velocity_backlog_days"],
-        title="Backlog Size vs Complexity Days",
-    )
-    scatter_fig.update_layout(height=380, xaxis_title="Backlog Tickets", yaxis_title="Complexity Days")
-
-    dist = (
-        summary["load_bucket"]
-        .value_counts()
-        .reindex(["None", "Low", "Medium", "High", "Critical"], fill_value=0)
-        .reset_index()
-    )
-    dist.columns = ["Load", "Count"]
-    distribution_fig = px.pie(
-        dist,
-        names="Load",
-        values="Count",
-        title="Workload Distribution by Load",
-        color="Load",
-        color_discrete_map={
-            "Critical": "#dc2626",
-            "High": "#f97316",
-            "Medium": "#facc15",
-            "Low": "#16a34a",
-            "None": "#94a3b8",
-        },
-    )
-    distribution_fig.update_layout(height=380)
-
-    detail_df = summary[
-        [
-            "assignee_name",
-            "total_tickets_in_progress",
-            *SIZE_ORDER,
-            "complexity_days",
-            "load_bucket",
-        ]
-    ].copy()
-    detail_df.columns = [
-        "Assignee",
-        "Backlog Tickets",
-        "Small",
-        "Medium",
-        "Large",
-        "XL",
-        "Unestimated",
-        "Complexity Days",
-        "Load",
-    ]
+    runway = pd.DataFrame(runway_rows)
+    all_done_p85 = None
+    if not runway.empty:
+        runway["backlog_bd"] = (runway["free_p50_bd"] - runway["in_progress_bd"]).clip(lower=0)
+        runway["free_p50"] = ipr._add_busdays(today_series(runway.index), runway["free_p50_bd"], hol)
+        runway["free_p85"] = ipr._add_busdays(today_series(runway.index), runway["free_p85_bd"], hol)
+        all_done_p85 = runway["free_p85"].max().date()
 
     return {
-        "total_in_progress": int(summary["total_tickets_in_progress"].sum()),
-        "total_estimated_days": float(summary["average_total_velocity_backlog_days"].sum()),
-        "avg_velocity": float(summary["complexity_days"].mean()),
-        "critical_assignees": int((summary["average_total_velocity_backlog_days"] > 90).sum()),
-        "load_fig": load_fig,
-        "scatter_fig": scatter_fig,
-        "distribution_fig": distribution_fig,
-        "detail_df": detail_df,
-        "tickets_df": tickets_df,
+        "total_backlog": int(len(backlog)),
+        "ready": int(backlog["is_ready"].sum()),
+        "should_have_started": int((backlog["target_start_day"] < today).sum()),
+        "at_risk": int(backlog["risk"].isin(["At Risk", "Likely Late"]).sum()),
+        "breached": int((backlog["risk"] == "Breached").sum()),
+        "unassigned": int((~backlog["is_assigned"]).sum()),
+        "waiting_past_sla": int(backlog["waiting_past_sla"].sum()),
+        "all_done_p85": all_done_p85,
+        "runway_fig": _runway_figure(runway) if not runway.empty else None,
+        "readiness_fig": _readiness_figure(backlog),
+        "timeline_fig": _timeline_figure(fc, today),
+        "sla_grid_fig": ipr._sla_grid_figure(backlog),
+        "forecast_df": forecast_df,
+        "waiting_df": waiting_df,
+        "tickets_df": _all_tickets_table(backlog),
     }
-
-
-def build_in_progress_visuals(df_issues: pd.DataFrame) -> dict:
-    """Backward-compatible alias for existing callers."""
-    return build_backlog_visuals(df_issues)
