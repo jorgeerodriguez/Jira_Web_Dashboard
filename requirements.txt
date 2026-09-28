@@ -29,7 +29,6 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kiwisolver==1.5.0
 MarkupSafe==3.0.3
-matplotlib==3.10.9
 narwhals==2.21.0
 nest-asyncio==1.6.0
 numpy==2.4.4
@@ -65,10 +64,8 @@ toml==0.10.2
 typing_extensions==4.15.0
 urllib3==2.7.0
 uvicorn==0.46.0
-vaderSentiment==3.3.2
 websockets==16.0
 Werkzeug==3.1.8
-wordcloud==1.9.6
 # xgboost-cpu, not xgboost: same version and source, built with USE_CUDA/USE_NCCL off.
 # The default wheel declares `nvidia-nccl-cu12; platform_system == "Linux"`, so it is
 # invisible on a macOS install and costs 664 MB on every CI build (904 MB -> 240 MB of

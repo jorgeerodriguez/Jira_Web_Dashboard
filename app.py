@@ -1354,7 +1354,11 @@ elif selected == "👤  Distribution per Business Leader":
 # ── Word of the Month ─────────────────────────────────────────────────────────────
 elif selected == "💬  Word of the Month":
     st.title("💬 Word of the Month")
-    st.caption("Trending terms from ticket summaries and sentiment signals from ticket comments for the selected month range.")
+    st.caption(
+        "What ticket comments say about how we work: comment coverage to track over time, the friction "
+        "themes that cost the most time, conversation health, and the phrases of the month. Human comments "
+        "only (bots excluded), on completed tickets (no Features or Initiatives)."
+    )
 
     if build_word_of_the_month_visuals is None:
         st.error("word_of_the_month_report module could not be loaded.")
@@ -1371,49 +1375,126 @@ elif selected == "💬  Word of the Month":
         st.stop()
 
     available_months = seed["available_months"]
-    default_start = seed["start_month"]
-    default_end = seed["end_month"]
-
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns([2, 2, 3])
     with c1:
-        start_month = st.selectbox(
-            "Start month",
-            options=available_months,
-            index=available_months.index(default_start) if default_start in available_months else 0,
-        )
+        start_month = st.selectbox("Start month (completed)", available_months,
+                                   index=available_months.index(seed["start_month"]))
     with c2:
-        end_month = st.selectbox(
-            "End month",
-            options=available_months,
-            index=available_months.index(default_end) if default_end in available_months else len(available_months) - 1,
-        )
+        end_month = st.selectbox("End month (completed)", available_months,
+                                 index=available_months.index(seed["end_month"]))
+    with c3:
+        coverage_target = st.slider("Comment coverage target", 0.5, 1.0, 0.8, 0.05, format="%.2f",
+                                    help="Drawn on the coverage trend as the goal to work toward.")
 
-    with st.spinner("Building word of the month visuals…"):
-        words = build_word_of_the_month_visuals(df_issues, start_month=start_month, end_month=end_month)
-
-    if words["error_message"] and words["bar_fig"] is None:
+    with st.spinner("Reading ticket comments…"):
+        words = build_word_of_the_month_visuals(df_issues, start_month=start_month, end_month=end_month,
+                                                coverage_target=coverage_target)
+    if words["error_message"]:
         st.error(f"❌ {words['error_message']}")
         st.stop()
 
-    st.caption(f"Showing words from **{words['start_month']}** to **{words['end_month']}**")
+    def _pp(delta):
+        return None if delta is None else f"{delta * 100:+.0f} pts vs previous period"
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.plotly_chart(words["bar_fig"], width="stretch")
-    with col2:
-        st.plotly_chart(words["treemap_fig"], width="stretch")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Comment Coverage", f"{words['coverage']:.0%}", _pp(words["coverage_delta"]),
+              help="Completed tickets with at least one human comment.")
+    k2.metric("Assignee Commented", f"{words['closing_note']:.0%}", _pp(words["closing_note_delta"]),
+              help="Completed tickets where the assignee left at least one comment.")
+    k3.metric("Median First Reply",
+              f"{words['first_reply_hours']:.1f} bh" if words["first_reply_hours"] is not None else "—",
+              help="Business hours from ticket creation to the first human comment by someone other than the requester.")
+    k4.metric("Requester Had to Chase", f"{words['chased_share']:.0%}",
+              help="Completed tickets where the requester posted a follow-up ping.")
+    k5.metric("Completed Tickets Read", f"{words['tickets_in_range']:,}")
 
-    if words.get("sentiment_fig") is not None:
-        st.plotly_chart(words["sentiment_fig"], width="stretch")
+    with st.expander("How this works"):
+        st.markdown(
+            "- **Comments** are human comments only. Bot accounts such as Automation for Jira are dropped when data "
+            "loads. Jira returns up to 20 comments per ticket.\n"
+            "- **Comment coverage** is measured on tickets completed in each month. **Assignee Commented** means the "
+            "person who did the work left a note.\n"
+            "- **Friction themes** are keyword rules (editable in `reports/word_of_the_month_report.py`). A ticket has "
+            "a theme when any human comment matches. **Extra days** compares its cycle time (Target start → Done, "
+            "business days) with similar tickets (same Priority × Size) without that theme.\n"
+            "- Long tickets collect more comments, so themes are **associated** with delay, not proven to cause it. "
+            "*Chasing* is a symptom of slow tickets, so it is shown but not ranked as an opportunity.\n"
+            "- **Emerging phrases** are two-word phrases used much more than in the previous three months, "
+            "adjusted for how much more people comment now."
+        )
 
-    if words.get("wordcloud_fig") is not None:
-        st.pyplot(words["wordcloud_fig"], clear_figure=True, width="stretch")
+    st.divider()
+    st.subheader("📈 Comment Coverage")
+    st.caption("Share of completed tickets with a human comment, and with a comment from the assignee. Track this monthly.")
+    st.plotly_chart(words["coverage_fig"], width="stretch")
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.caption("By business lead (lowest coverage first)")
+        st.dataframe(words["coverage_by_lead_df"], width="stretch", hide_index=True, height=280,
+                     column_config={c: st.column_config.ProgressColumn(c, format="%d%%", min_value=0, max_value=100)
+                                    for c in ["With Human Comment", "Assignee Commented"]})
+    with cc2:
+        st.caption("By assignee (documentation habit, not performance)")
+        st.dataframe(words["coverage_by_assignee_df"], width="stretch", hide_index=True, height=280,
+                     column_config={c: st.column_config.ProgressColumn(c, format="%d%%", min_value=0, max_value=100)
+                                    for c in ["With Human Comment", "Assignee Commented"]})
 
-    st.subheader(f"🏆 Word of the Month: **{words['top_word'].upper()}**")
-    st.caption(f"Appeared {words['top_frequency']} times across ticket summaries in the selected range.")
+    st.divider()
+    st.subheader("🧭 Where Time Gets Lost")
+    if words["recommendations"]:
+        st.caption("Top opportunities, ranked by total extra business days in the selected months.")
+        rec_cols = st.columns(len(words["recommendations"]))
+        for col, rec in zip(rec_cols, words["recommendations"]):
+            col.info(
+                f"**{rec['theme']}**\n\n{rec['tickets']} tickets · +{rec['extra_per_ticket']:.1f} business days each "
+                f"· ~{rec['total_extra']:.0f} days in total\n\n{rec['action']}"
+            )
+    wt1, wt2 = st.columns(2)
+    with wt1:
+        st.caption("Total extra business days by theme")
+        st.plotly_chart(words["pareto_fig"], width="stretch")
+    with wt2:
+        st.caption("Share of completed tickets with each theme, by month")
+        st.plotly_chart(words["theme_trend_fig"], width="stretch")
 
-    with st.expander("View summary table"):
-        st.dataframe(words["summary_df"], width="stretch")
+    if words["slice_figs"]:
+        slice_by = st.radio("Break themes down by", list(words["slice_figs"]), horizontal=True, key="wotm_slice")
+        st.plotly_chart(words["slice_figs"][slice_by], width="stretch")
+    with st.expander("Theme details"):
+        st.dataframe(words["themes_df"], width="stretch", hide_index=True)
+
+    st.divider()
+    st.subheader("🗣️ Conversation Health")
+    ch1, ch2 = st.columns(2)
+    with ch1:
+        st.caption("More back-and-forth between people goes with longer tickets")
+        st.plotly_chart(words["handoff_fig"], width="stretch")
+    with ch2:
+        st.caption("Response and back-and-forth by assignee (tickets created in the selected months)")
+        st.dataframe(words["people_df"], width="stretch", hide_index=True, height=320)
+
+    st.divider()
+    st.subheader(f"🏆 Phrase of the Month: **{(words['phrase_of_the_month'] or '—').upper()}**")
+    ph1, ph2 = st.columns(2)
+    with ph1:
+        st.caption("Most used phrases in human comments")
+        if words["phrases_fig"] is not None:
+            st.plotly_chart(words["phrases_fig"], width="stretch")
+    with ph2:
+        st.caption("Emerging: used far more than in the previous three months")
+        st.dataframe(words["emerging_df"], width="stretch", hide_index=True, height=420)
+
+    st.divider()
+    st.subheader("🔎 Tickets With Friction Themes")
+    st.dataframe(
+        words["tickets_df"],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Ticket": st.column_config.LinkColumn("Ticket", help="Open Jira ticket", display_text=r".*/([^/]+)$"),
+            "Example": st.column_config.TextColumn("Example", width="large"),
+        },
+    )
 
 
 # ── SLA ─────────────────────────────────────────────────────────────────────────

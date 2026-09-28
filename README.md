@@ -16,6 +16,7 @@ It supports:
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
+- **Word of the Month** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Word of the Month works](#how-word-of-the-month-works)
 - **Executive Summary** with live **Created (24h)** and **Resolved (24h)** counts
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
@@ -70,6 +71,7 @@ Jira_Web_Dashboard/
 ├── tests/                       # pytest suite (darkstar + reports)
 │   ├── test_in_progress_forecast.py
 │   ├── test_backlog_forecast.py
+│   ├── test_word_of_the_month.py
 │   └── ...
 └── backup/
 ```
@@ -174,6 +176,7 @@ Templates provided:
 	- continuous schedule-adherence feature for lateness severity
 	- added target-date awareness, on-time/past-due pie visualizations, and a rolling completion trend chart
 	- normalized heatmap ordering to a consistent priority sequence across reports
+- Rebuilt **Word of the Month** on human ticket comments (comment coverage metric, friction themes, conversation health, phrases); Jira fetch now loads comments and reporter
 - Rebuilt the **Backlog** report as a queue-aware start/finish forecast with SLA risk, capacity runway and readiness
 - Rebuilt the **In Progress** report as an SLA-aware completion forecast (P50/P85 dates, risk vs SLA and Target End Date, execution velocity by priority per assignee)
 - **Executive Summary** now counts tickets only (no Features/Initiatives) across every KPI, chart and table, and calculates **Created (24h)** / **Resolved (24h)** from Jira data
@@ -192,7 +195,7 @@ These rules are shared across reports so the numbers agree:
 - **Ticket**: any issue type except **Feature** and **Initiative**. Those are containers tracked
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
-  Summary, In Progress and Backlog reports. The Trend and Size Distribution reports exclude Features only,
+  Summary, In Progress, Backlog and Word of the Month reports. The Trend and Size Distribution reports exclude Features only,
   and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
 - **Completed / Resolved**: status `Done`. The Capacity report is the exception and also counts
   Release Management's `Released Successfully to Production`.
@@ -326,6 +329,75 @@ can't be back-tested yet: the dataframe has each ticket's Target start but not t
 moved to In Progress. Darkstar already stores status transitions, so that's the data to use if
 start-date accuracy needs checking.
 
+## How Word of the Month works
+
+The **Word of the Month** page reads ticket comments to show how we work and where time gets lost.
+Code: `reports/word_of_the_month_report.py`.
+
+### Comments
+
+- The Jira fetch loads each ticket's comments into a `comments` column (author, time, text). Bot
+  accounts such as *Automation for Jira* are dropped at load time. They were about 30% of all
+  comments. `bot_comment_count` and `comment_total` keep the counts.
+- Jira's search returns up to 20 comments per ticket. About 1% of tickets have more.
+- Loading comments adds about 20 seconds to a full fetch.
+
+### Comment coverage (the metric to track)
+
+Measured on tickets **completed** in each month:
+
+- **Comment Coverage**: share with at least one human comment.
+- **Assignee Commented**: share where the assignee left a comment (a closing note).
+
+The page shows both as a 12-month trend against an adjustable target (default 80%), the change
+against the previous period of the same length, and breakdowns by business lead and assignee.
+The per-assignee view is a documentation habit, not a performance score. As of 2026-09-28,
+coverage for Jul–Sep was 65% and Assignee Commented was 52%.
+
+### Friction themes
+
+Keyword rules in `THEMES` (edit them freely) tag a ticket when any human comment matches:
+
+| Theme | Example words | Suggested change |
+| --- | --- | --- |
+| Waiting / blocked | waiting on, blocked, dependency, on hold | Surface dependencies at intake; use the Blocked status |
+| Access / permissions | access, permission, IAM, VPN, SSO | Self-service or pre-approved access roles |
+| Approval | approve, sign-off | Name the approver at intake; pre-approve routine changes |
+| Clarification | clarify, more details, requirements | Required fields in the intake template |
+| Rework / rollback | rollback, revert, reopen, not working | Validation step before release |
+| Incident / outage | outage, incident, sev, downtime | Post-incident review and preventive ticket |
+| Chasing / follow-up | any update, following up, bump | *(symptom, not ranked)* |
+
+- **Extra days**: each tagged ticket's cycle time (Target start → Done, business days) minus the
+  median for similar tickets (same Priority × Size, falling back to priority, then all) without
+  the theme. **Total extra days** ranks the themes, and the top three *causes* become the page's
+  recommendations.
+- **Chasing** counts only when the **requester** posts the ping. It is a symptom of slow tickets,
+  so it is shown but never recommended.
+- Long tickets collect more comments, so a theme is **associated** with delay, not proven to cause it.
+
+Themes can be broken down by business lead, issue type or priority, and shown month by month.
+
+### Conversation health
+
+- **Median First Reply**: business hours (08:00–17:00, company holidays excluded, via
+  `darkstar/metrics.py`) from ticket creation to the first human comment by someone other than the
+  requester.
+- **Back-and-forth**: how many times the speaker changes in a ticket's comments, compared with
+  cycle time.
+- A per-assignee table shows reply time and back-and-forth.
+
+### Phrases
+
+Two-word phrases from human comments, after removing markup, links, code blocks, @mentions,
+ticket keys and people's names. **Emerging** phrases are used much more than in the previous three
+months, adjusted for overall comment volume (comments have grown longer). The top emerging phrase is
+the **Phrase of the Month**.
+
+The old version's VADER sentiment and word cloud were removed. They ran on ticket titles, because
+comments weren't loaded, and general-purpose sentiment misreads normal DevOps words such as
+"kill", "fail" and "block".
+
 ---
 
 ## How ticket sequencing works (Apparent Tardiness Cost)
@@ -419,6 +491,12 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-09-28
+- Rebuilt **Word of the Month** on human ticket comments: comment coverage and assignee-comment metrics with a monthly trend and target, friction themes ranked by extra business days with suggested process changes, breakdowns by business lead / issue type / priority, conversation health (first reply, back-and-forth, requester chasing), and emerging phrases (see [How Word of the Month works](#how-word-of-the-month-works))
+- Jira fetch loads human comments (`comments`, `comment_total`, `bot_comment_count`) and `reporter_name`
+- Removed `wordcloud`, `vaderSentiment` and `matplotlib` from `requirements.txt` (no longer used)
+- Added `tests/test_word_of_the_month.py`
+
 ### 2026-09-25
 - Rebuilt the **Backlog** report as a queue-aware forecast: ATC-ordered queue per assignee, Monte Carlo start/finish dates behind current In Progress work, SLA risk from Target start, capacity runway, backlog readiness and "waiting longer than SLA" (see [How the Backlog forecast works](#how-the-backlog-forecast-works)). Fixes the old report's priority grouping, which read a column that didn't exist, and replaces "Complexity Days". The **All Backlog Tickets** table keeps its columns and now excludes Features and Initiatives
 - Moved ATC sequencing from `app.py` to `reports/atc_sequence.py` so the Personal Dashboard and Backlog share it (output verified identical)
@@ -503,11 +581,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress and Backlog forecast tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog and Word of the Month tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py -q
 ```
 
 ---

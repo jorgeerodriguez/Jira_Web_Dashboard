@@ -13,6 +13,27 @@ CF_TIME_IN_PROGRESS = "customfield_11261"
 CF_PLANNED_START    = "customfield_10946"
 CF_ESTIMATE_SIZE    = "customfield_10968"
 
+# Comment authors that are automation, not people ("Automation for Jira" and other apps).
+BOT_ACCOUNT_TYPES = {"app"}
+
+
+def _human_comments(fields: dict) -> tuple[list[dict], int, int]:
+    """Human comments on an issue as [{author, created, body}], plus Jira's total comment count and
+    how many were from bots. The search API returns at most 20 comments per issue."""
+    block = fields.get("comment") or {}
+    comments, bots = [], 0
+    for comment in block.get("comments", []):
+        author = comment.get("author") or {}
+        if author.get("accountType") in BOT_ACCOUNT_TYPES:
+            bots += 1
+            continue
+        comments.append({
+            "author": author.get("displayName", "Unknown"),
+            "created": pd.to_datetime(comment.get("created"), utc=True, errors="coerce"),
+            "body": comment.get("body") or "",
+        })
+    return comments, int(block.get("total", len(block.get("comments", [])))), bots
+
 
 def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
     """Build a pandas DataFrame of issues from Jira.
@@ -29,7 +50,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
         "assignee, summary, key, status, created, updated, issuetype, creator, project, "
         "duedate, priority, customfield_10947, customfield_11751, customfield_11445, "
         "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968, "
-        "statuscategorychangedate"
+        "statuscategorychangedate, comment, reporter"
     )
 
     # Build JQL query — 24-month lookback
@@ -167,6 +188,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             updated_local = resolved_local
 
 
+        human_comments, comment_total, bot_comments = _human_comments(fields)
+
         issue_data = {
             "key": issue.key,
             "id": issue.id,
@@ -209,6 +232,10 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "legend": legend,
             "parent_project": parent_project,
             "parent": parent,
+            "reporter_name": (fields.get("reporter") or {}).get("displayName", "Unknown"),
+            "comments": human_comments,
+            "comment_total": comment_total,
+            "bot_comment_count": bot_comments,
             'estimated_size_name' : estimate_size_name,
             'estimated_size_number' : estimate_size_number,
         }
