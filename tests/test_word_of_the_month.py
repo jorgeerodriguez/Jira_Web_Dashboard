@@ -1,4 +1,4 @@
-"""Word of the Month: comment coverage, friction themes and phrases from human ticket comments.
+"""Teams Conversations (formerly Word of the Month): comment coverage, friction themes and phrases from human ticket comments.
 
 The page is meant to drive process changes, so the rules behind each number are pinned here: bots
 never count as comments, coverage is measured on completed tickets, only the requester can "chase",

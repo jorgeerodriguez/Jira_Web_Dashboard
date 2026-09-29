@@ -191,12 +191,12 @@ with st.sidebar:
         "⚡  Velocity",
         "🔄  In Progress",
         "✅  Validating",
-        "🚧  Blocked",
+        "🚧  Blocked & On Hold",
         "🗂️  Backlog",
         "🔮  Forecast",
         "📊  Distribution of Ticket's Age",
         "👤  Distribution per Business Leader",
-        "💬  Word of the Month",
+        "💬  Teams Conversations",
         "🛡️  SLA (Service Level Agreements)",
         "🎯  Probability of completion on time",
         "🧑‍💼  Personal Dashboard",
@@ -206,7 +206,8 @@ with st.sidebar:
     selected = st.radio(
         "Navigate to",
         MENU_ITEMS,
-        index=MENU_ITEMS.index(st.session_state.get("selected_menu", "🏠  Overview")),
+        index=MENU_ITEMS.index(st.session_state.get("selected_menu"))
+        if st.session_state.get("selected_menu") in MENU_ITEMS else MENU_ITEMS.index("🏠  Overview"),
         label_visibility="collapsed",
     )
     if selected != st.session_state.get("selected_menu"):
@@ -1042,22 +1043,23 @@ elif selected == "✅  Validating":
         )
 
 
-# ── Blocked ──────────────────────────────────────────────────────────────────────
-elif selected == "🚧  Blocked":
-    st.title("🚧 Blocked")
-    st.caption("Tickets that are blocked and require immediate attention.")
+# ── Blocked & On Hold ────────────────────────────────────────────────────────────
+elif selected == "🚧  Blocked & On Hold":
+    st.title("🚧 Blocked & On Hold")
+    st.caption("Tickets that are Blocked or On Hold, shown side by side, and which need attention to get moving again.")
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     blocked = build_blocked_visuals(df_issues)
 
     if blocked["blocked_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see Blocked visuals.")
+        st.info("📥 Fetch Jira tickets from the sidebar to see Blocked & On Hold visuals.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Blocked", f"{blocked['total_blocked']:,}")
-        c2.metric("Overdue", f"{blocked['overdue_tickets']}")
-        c3.metric("Due in 7 Days", f"{blocked['due_soon_tickets']}")
-        c4.metric("High Priority", f"{blocked['high_priority_tickets']}")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Blocked", f"{blocked['total_blocked']:,}")
+        c2.metric("On Hold", f"{blocked['total_on_hold']:,}")
+        c3.metric("Overdue", f"{blocked['overdue_tickets']}", help="Blocked and On Hold tickets past their Target End Date.")
+        c4.metric("Due in 7 Days", f"{blocked['due_soon_tickets']}", help="Blocked and On Hold tickets due within 7 days.")
+        c5.metric("High Priority", f"{blocked['high_priority_tickets']}", help="Blocked and On Hold tickets with High, Critical or Urgent priority.")
 
         st.divider()
 
@@ -1067,10 +1069,11 @@ elif selected == "🚧  Blocked":
         with col2:
             st.plotly_chart(blocked["risk_fig"], width="stretch")
 
-        st.subheader("Blocked Ticket Detail")
+        st.subheader("Blocked & On Hold Ticket Detail")
         st.dataframe(
             blocked["detail_df"],
             width="stretch",
+            hide_index=True,
             column_config={
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
@@ -1351,9 +1354,9 @@ elif selected == "👤  Distribution per Business Leader":
         st.dataframe(biz["summary_df"], width="stretch")
 
 
-# ── Word of the Month ─────────────────────────────────────────────────────────────
-elif selected == "💬  Word of the Month":
-    st.title("💬 Word of the Month")
+# ── Teams Conversations ───────────────────────────────────────────────────────────
+elif selected == "💬  Teams Conversations":
+    st.title("💬 Teams Conversations")
     st.caption(
         "What ticket comments say about how we work: comment coverage to track over time, the friction "
         "themes that cost the most time, conversation health, and the phrases of the month. Human comments "

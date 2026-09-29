@@ -1,4 +1,4 @@
-"""Word of the Month: what ticket comments say about how we work, and where time gets lost.
+"""Teams Conversations (formerly Word of the Month): what ticket comments say about how we work, and where time gets lost.
 
 Built from human comments (bots such as "Automation for Jira" are dropped when the data loads) on
 tickets only (no Features or Initiatives). Four views:

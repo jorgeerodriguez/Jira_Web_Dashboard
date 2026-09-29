@@ -16,7 +16,7 @@ It supports:
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
-- **Word of the Month** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Word of the Month works](#how-word-of-the-month-works)
+- **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
 - **Executive Summary** with live **Created (24h)** and **Resolved (24h)** counts
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
@@ -72,6 +72,7 @@ Jira_Web_Dashboard/
 │   ├── test_in_progress_forecast.py
 │   ├── test_backlog_forecast.py
 │   ├── test_word_of_the_month.py
+│   ├── test_blocked_on_hold.py
 │   └── ...
 └── backup/
 ```
@@ -176,7 +177,9 @@ Templates provided:
 	- continuous schedule-adherence feature for lateness severity
 	- added target-date awareness, on-time/past-due pie visualizations, and a rolling completion trend chart
 	- normalized heatmap ordering to a consistent priority sequence across reports
-- Rebuilt **Word of the Month** on human ticket comments (comment coverage metric, friction themes, conversation health, phrases); Jira fetch now loads comments and reporter
+- Renamed pages: **Word of the Month** → **Teams Conversations**, **Blocked** → **Blocked & On Hold**
+- **Blocked & On Hold** now includes On Hold tickets, with Blocked and On Hold shown separately in the KPIs, both charts and the ticket table
+- Rebuilt **Teams Conversations** (formerly Word of the Month) on human ticket comments (comment coverage metric, friction themes, conversation health, phrases); Jira fetch now loads comments and reporter
 - Rebuilt the **Backlog** report as a queue-aware start/finish forecast with SLA risk, capacity runway and readiness
 - Rebuilt the **In Progress** report as an SLA-aware completion forecast (P50/P85 dates, risk vs SLA and Target End Date, execution velocity by priority per assignee)
 - **Executive Summary** now counts tickets only (no Features/Initiatives) across every KPI, chart and table, and calculates **Created (24h)** / **Resolved (24h)** from Jira data
@@ -195,7 +198,7 @@ These rules are shared across reports so the numbers agree:
 - **Ticket**: any issue type except **Feature** and **Initiative**. Those are containers tracked
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
-  Summary, In Progress, Backlog and Word of the Month reports. The Trend and Size Distribution reports exclude Features only,
+  Summary, In Progress, Backlog and Teams Conversations reports. The Trend and Size Distribution reports exclude Features only,
   and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
 - **Completed / Resolved**: status `Done`. The Capacity report is the exception and also counts
   Release Management's `Released Successfully to Production`.
@@ -329,9 +332,9 @@ can't be back-tested yet: the dataframe has each ticket's Target start but not t
 moved to In Progress. Darkstar already stores status transitions, so that's the data to use if
 start-date accuracy needs checking.
 
-## How Word of the Month works
+## How Teams Conversations works
 
-The **Word of the Month** page reads ticket comments to show how we work and where time gets lost.
+The **Teams Conversations** page (formerly *Word of the Month*) reads ticket comments to show how we work and where time gets lost.
 Code: `reports/word_of_the_month_report.py`.
 
 ### Comments
@@ -491,8 +494,14 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-09-29
+- Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
+- The sidebar menu falls back to Overview if a previously selected page name no longer exists
+- **Blocked & On Hold** now includes `On Hold` tickets as well as `Blocked`: separate Blocked and On Hold KPIs, business-lead and risk-mix charts stacked by state (the risk pie became a stacked bar), and a State column in the ticket table (Blocked first, most overdue first)
+- Added `tests/test_blocked_on_hold.py`
+
 ### 2026-09-28
-- Rebuilt **Word of the Month** on human ticket comments: comment coverage and assignee-comment metrics with a monthly trend and target, friction themes ranked by extra business days with suggested process changes, breakdowns by business lead / issue type / priority, conversation health (first reply, back-and-forth, requester chasing), and emerging phrases (see [How Word of the Month works](#how-word-of-the-month-works))
+- Rebuilt **Word of the Month** (now **Teams Conversations**) on human ticket comments: comment coverage and assignee-comment metrics with a monthly trend and target, friction themes ranked by extra business days with suggested process changes, breakdowns by business lead / issue type / priority, conversation health (first reply, back-and-forth, requester chasing), and emerging phrases (see [How Teams Conversations works](#how-teams-conversations-works))
 - Jira fetch loads human comments (`comments`, `comment_total`, `bot_comment_count`) and `reporter_name`
 - Removed `wordcloud`, `vaderSentiment` and `matplotlib` from `requirements.txt` (no longer used)
 - Added `tests/test_word_of_the_month.py`
@@ -581,11 +590,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog and Word of the Month tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog and Teams Conversations tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py -q
 ```
 
 ---
