@@ -59,6 +59,10 @@ SLA_BUSINESS_DAYS = {
     "High":     {"Small": 7,  "Medium": 10, "Large": 17, "XL": 22},
     "Urgent":   {"Small": 1,  "Medium": 4,  "Large": 8,  "XL": 16},
 }
+# Release Management "Change and Release" (CAR) tickets follow the release process, not PE delivery
+# work, so the PE SLA does not apply to them.
+SLA_EXEMPT_PROJECTS = {"release management"}
+SLA_EXEMPT_ISSUE_TYPES = {"change and release"}
 # Unsized tickets get the SLA of this size; the table marks them so the gap stays visible.
 ASSUMED_SIZE = "Medium"
 
@@ -490,6 +494,16 @@ def _all_tickets_table(in_progress_df: pd.DataFrame, today_date) -> pd.DataFrame
     return table.sort_values("Days Old", ascending=False)
 
 
+def sla_applies(df: pd.DataFrame) -> pd.Series:
+    """False for tickets the PE SLA does not cover (Release Management / Change and Release)."""
+    exempt = pd.Series(False, index=df.index)
+    if "project_name" in df.columns:
+        exempt |= df["project_name"].astype(str).str.strip().str.casefold().isin(SLA_EXEMPT_PROJECTS)
+    if "issuetype" in df.columns:
+        exempt |= df["issuetype"].astype(str).str.strip().str.casefold().isin(SLA_EXEMPT_ISSUE_TYPES)
+    return ~exempt
+
+
 def prepare_tickets(df_issues: pd.DataFrame) -> pd.DataFrame:
     """Tickets in scope for the forecasts: no Features/Initiatives, no excluded assignees, with
     normalised assignee, priority bucket and size."""
@@ -500,6 +514,7 @@ def prepare_tickets(df_issues: pd.DataFrame) -> pd.DataFrame:
     tickets["size"] = _normalize_size(tickets.get("estimated_size_name", pd.Series(index=tickets.index)))
     if "planned_start_date" not in tickets.columns:
         tickets["planned_start_date"] = pd.NaT
+    tickets["sla_applies"] = sla_applies(tickets)
     return tickets
 
 

@@ -41,8 +41,11 @@ def _issue(key, comments=(), assignee="Ana", reporter="Rita", status="Done", don
 
 
 def _build(rows, **kwargs):
-    month = _TODAY.strftime("%Y-%m")
-    return wotm.build_word_of_the_month_visuals(pd.DataFrame(rows), start_month=month, end_month=month, **kwargs)
+    # Test tickets are created up to ~5 days before they finish today, so early in a month they were
+    # created last month: span both months so creation-based metrics (first reply) always see them.
+    start = (_TODAY - pd.Timedelta(days=10)).strftime("%Y-%m")
+    end = _TODAY.strftime("%Y-%m")
+    return wotm.build_word_of_the_month_visuals(pd.DataFrame(rows), start_month=start, end_month=end, **kwargs)
 
 
 def test_loader_keeps_human_comments_and_counts_bots():

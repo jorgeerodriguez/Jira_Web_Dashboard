@@ -57,3 +57,12 @@ def test_only_on_hold_tickets_still_render():
     out = build_blocked_visuals(pd.DataFrame([_issue("T-1", "On Hold")]))
     assert out["total_blocked"] == 0 and out["total_on_hold"] == 1
     assert out["blocked_fig"] is not None
+
+
+def test_features_and_initiatives_are_left_out():
+    rows = [_issue("T-1", "On Hold"), _issue("F-1", "On Hold"), _issue("I-1", "Blocked")]
+    df = pd.DataFrame(rows)
+    df["issuetype"] = ["Story", "Feature", "Initiative"]
+    out = build_blocked_visuals(df)
+    assert out["total_on_hold"] == 1 and out["total_blocked"] == 0
+    assert out["detail_df"]["Ticket"].str.endswith("T-1").all()

@@ -1,6 +1,8 @@
 import pandas as pd
 import plotly.express as px
 
+from reports import in_progress_report as ipr
+
 
 TIME_PERIOD_DAYS = 90
 JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
@@ -32,7 +34,7 @@ def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
 
 
 def build_blocked_visuals(df_issues: pd.DataFrame) -> dict:
-    """Executive dashboard for Blocked and On Hold tickets, shown side by side."""
+    """Executive dashboard for Blocked and On Hold tickets (no Features or Initiatives), side by side."""
     if df_issues is None or df_issues.empty:
         return _empty_payload()
 
@@ -40,8 +42,14 @@ def build_blocked_visuals(df_issues: pd.DataFrame) -> dict:
     if status_col is None:
         return _empty_payload()
 
-    status_norm = df_issues[status_col].astype(str).str.strip().str.lower()
-    df = df_issues[status_norm.isin(HELD_STATUSES)].copy()
+    # Tickets only, with the same rules as the Executive Summary, In Progress and Backlog pages:
+    # no Features or Initiatives, and no tickets assigned to EXCLUDED_ASSIGNEES.
+    tickets = ipr._exclude_container_items(df_issues)
+    if "assignee_name" in tickets.columns:
+        assignee = ipr._normalize_assignee(tickets["assignee_name"]).str.casefold()
+        tickets = tickets[~assignee.isin(ipr.EXCLUDED_ASSIGNEES)]
+    status_norm = tickets[status_col].astype(str).str.strip().str.lower()
+    df = tickets[status_norm.isin(HELD_STATUSES)].copy()
     if df.empty:
         return _empty_payload()
     df["state"] = status_norm[df.index].map(HELD_STATUSES)

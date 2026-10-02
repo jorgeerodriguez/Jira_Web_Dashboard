@@ -320,7 +320,8 @@ def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> d
 
     rank = {r: i for i, r in enumerate(RISK_ORDER)}
     backlog["risk_sla"] = risk_against(backlog["sla_due"],
-                                       backlog["is_assigned"] & backlog["target_start_day"].notna())
+                                       backlog["is_assigned"] & backlog["target_start_day"].notna()
+                                       & backlog["sla_applies"])
     backlog["risk_target"] = risk_against(backlog["target_end_day"],
                                           backlog["is_assigned"] & backlog["target_end_day"].notna())
     backlog["risk_both"] = [min(a, b, key=rank.get) for a, b in zip(backlog["risk_sla"], backlog["risk_target"])]

@@ -17,7 +17,7 @@ It supports:
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
 - **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
-- **Executive Summary** with live **Created (24h)** and **Resolved (24h)** counts
+- **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
@@ -73,6 +73,7 @@ Jira_Web_Dashboard/
 │   ├── test_backlog_forecast.py
 │   ├── test_word_of_the_month.py
 │   ├── test_blocked_on_hold.py
+│   ├── test_executive_summary.py
 │   └── ...
 └── backup/
 ```
@@ -182,6 +183,7 @@ Templates provided:
 - Rebuilt **Teams Conversations** (formerly Word of the Month) on human ticket comments (comment coverage metric, friction themes, conversation health, phrases); Jira fetch now loads comments and reporter
 - Rebuilt the **Backlog** report as a queue-aware start/finish forecast with SLA risk, capacity runway and readiness
 - Rebuilt the **In Progress** report as an SLA-aware completion forecast (P50/P85 dates, risk vs SLA and Target End Date, execution velocity by priority per assignee)
+- Rebuilt the **Executive Summary** as a leadership view built on the SLA, forecast and conversation reports (headlines, trend tiles, flow, SLA trend, stage risk, needs-attention list, aging)
 - **Executive Summary** now counts tickets only (no Features/Initiatives) across every KPI, chart and table, and calculates **Created (24h)** / **Resolved (24h)** from Jira data
 - **Forecast** report trains on tickets only, with completed meaning status `Done`
 - Jira fetch now loads `statuscategorychangedate` (when a ticket moved to Done)
@@ -198,14 +200,73 @@ These rules are shared across reports so the numbers agree:
 - **Ticket**: any issue type except **Feature** and **Initiative**. Those are containers tracked
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
-  Summary, In Progress, Backlog and Teams Conversations reports. The Trend and Size Distribution reports exclude Features only,
-  and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
+  Summary, In Progress, Backlog, Blocked & On Hold and Teams Conversations reports. The Executive
+  Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
+  `EXCLUDED_ASSIGNEES`, so their counts agree. The Trend and Size Distribution reports exclude Features
+  only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
+- **PE SLA scope**: the SLA (Priority × Size, business days) applies to Platform Engineering tickets.
+  Release Management **"Change and Release" (CAR)** tickets follow the release process and have no PE
+  SLA: they are never judged against it and are not counted in SLA compliance. The rule is
+  `sla_applies()` in `reports/in_progress_report.py` (`SLA_EXEMPT_PROJECTS`, `SLA_EXEMPT_ISSUE_TYPES`).
 - **Completed / Resolved**: status `Done`. The Capacity report is the exception and also counts
   Release Management's `Released Successfully to Production`.
-- **When it finished**: most Done tickets have no Jira resolution date. The Forecast and Executive
-  Summary use `updated` (the resolution date when Jira has one). The In Progress forecast uses
-  `status_category_changed` (Jira's `statuscategorychangedate`), which later comments or edits
-  don't move.
+- **When it finished**: most Done tickets have no Jira resolution date. The Forecast uses `updated`
+  (the resolution date when Jira has one). The In Progress, Backlog, Executive Summary and Teams
+  Conversations reports use `status_category_changed` (Jira's `statuscategorychangedate`), which later
+  comments or edits don't move.
+
+---
+
+## How the Executive Summary works
+
+The **Executive Summary** is the leadership view: the state of the work on one page, read top to
+bottom. Code: `reports/executive_summary.py`. Risk and forecasts come from the In Progress and Backlog
+reports and the conversation signals from Teams Conversations, so its numbers match those pages.
+Tickets only (no Features or Initiatives).
+
+### Headlines
+
+Three to seven plain-English bullets generated from the data, marked ✓ good, ! watch, ✖ problem or
+• for information. They cover the SLA compliance trend (last *full* month against six months earlier),
+throughput against the previous period, whether open work is growing or shrinking, tickets that have
+breached or are forecast to miss their SLA, in-progress tickets on track, Blocked/On Hold, and the
+biggest friction theme from ticket comments.
+
+### Health tiles
+
+Each tile compares the last *N* days with the *N* days before, where *N* is the sidebar **Lookback**
+(1–30 days).
+
+| Tile | Meaning |
+| --- | --- |
+| Open Tickets | Open now; change since *N* days ago |
+| Completed (*N*d) | Moved to `Done`; % change vs previous period |
+| Net Flow (*N*d) | Closed minus created. Closed counts every outcome (Done, Released, Will Not Do, Rolled Back). Positive = open work shrinking |
+| SLA Compliance | Tickets completed in the period that finished within their SLA (those with a Target start) |
+| In Progress On Track | In-progress tickets forecast to finish within SLA (In Progress page) |
+| Blocked / On Hold | Current counts |
+| Comment Coverage | Completed tickets with a human comment, last 3 months (Teams Conversations page) |
+
+### Sections
+
+- **Flow: Created vs Closed**: weekly, last 12 full weeks; hover shows the closing outcomes. Also
+  the last-24h created and resolved counts.
+- **SLA Compliance Trend**: monthly share of Done tickets that met their SLA (CAR tickets excluded), against a target line
+  (`SLA_TARGET`, default 90%). The current month is marked "so far".
+- **Where the Work Is**: open tickets by stage (Backlog, In Progress, Validating, Blocked & On Hold,
+  Release), coloured by SLA risk. In Progress and Backlog use their forecasts. Other stages are
+  Breached past their SLA due date and At Risk once 80% of the SLA is used. Tickets without a Target
+  start, and Release Management (CAR) tickets, are Not assessed.
+- **Needs Attention**: the top 10 open tickets that have breached their SLA, are forecast to miss it,
+  are Blocked/On Hold past their Target End Date, or have waited in the backlog longer than their
+  whole SLA. Most serious first (risk, then priority, then how far past due), each with the reason.
+- **Age of Open Work**: open tickets by age band and priority, plus average age by business lead,
+  oldest first.
+- **Ways of Working**: the biggest friction theme and comment coverage from Teams Conversations.
+
+The old per-assignee age chart was removed from this leadership view. People-level detail is on the
+In Progress and Backlog pages. The old business-lead and assignee age charts also showed the
+*youngest* groups because of a sort bug; the new chart shows the oldest first.
 
 ---
 
@@ -494,6 +555,14 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-10-02
+- Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
+- Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
+- **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
+- The sidebar **Lookback** now drives the Executive Summary's period comparisons
+- Added `tests/test_executive_summary.py`; made a Teams Conversations test independent of the day of the month
+
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
 - The sidebar menu falls back to Overview if a previously selected page name no longer exists
@@ -590,11 +659,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog and Teams Conversations tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold and Executive Summary tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py -q
 ```
 
 ---
