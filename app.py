@@ -18,11 +18,8 @@ from data.build_dataframe_new import build_issues_dataframe
 from reports.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
 from reports.executive_summary import render_executive_summary
 from reports.atc_sequence import build_atc_sequence as _build_atc_sequence
-from reports.capacity_report import (
-    FORECAST_SAMPLE_WEEKS as CAPACITY_SAMPLE_WEEKS,
-    build_capacity_visuals,
-    weeks_to_deliver as capacity_weeks_to_deliver,
-)
+from reports.capacity_report import build_capacity_visuals
+from reports.forecast_report import weeks_to_deliver as forecast_weeks_to_deliver
 from reports.velocity_report import MIN_CELL as VELOCITY_MIN_CELL, PE_TEAM_MEMBERS, build_velocity_visuals
 from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
@@ -35,7 +32,7 @@ from reports.backlog_report import (
 from reports.blocked_report import build_blocked_visuals
 from reports.estimated_size_distribution_report import build_estimated_size_distribution_visuals
 try:
-    from reports.forecast_report import build_forecast_visuals
+    from reports.forecast_report import ACCURACY_HORIZON as FORECAST_ACCURACY_HORIZON, build_forecast_visuals
 except ImportError:
     build_forecast_visuals = None
 try:
@@ -862,8 +859,8 @@ elif selected == "📈  Capacity":
         st.plotly_chart(cap["flow_fig"], width="stretch")
 
         st.subheader("How Much Can We Deliver?")
-        st.caption(f"Monte Carlo from the last {CAPACITY_SAMPLE_WEEKS} weeks of delivery: the whole team's pace, "
-                   "shared with everything else that keeps coming in.")
+        st.caption("From the Delivery Forecast (same numbers as the Forecast page): the whole team's pace, shared "
+                   "with everything else that keeps coming in. Likely = central forecast; at least = low end of the range.")
         fc_cols = st.columns(len(cap["forecast"]) + 1)
         for col, (weeks, fc) in zip(fc_cols, cap["forecast"].items()):
             col.metric(f"Next {weeks} weeks", f"~{fc['likely']:,} tickets",
@@ -872,10 +869,12 @@ elif selected == "📈  Capacity":
         with fc_cols[-1]:
             extra = st.number_input("How long for N more tickets?", min_value=1, max_value=5000, value=100, step=10,
                                     help="For example a new project's ticket count, on top of current work.")
-            eta = capacity_weeks_to_deliver(int(extra), cap["weekly_throughput"])
+            eta = forecast_weeks_to_deliver(int(extra), cap["forecast_table"])
             if eta:
-                st.caption(f"With the whole team: likely **{eta['likely']} weeks**, safely **{eta['safe']} weeks**. "
-                           "Only spare capacity is truly free, so expect longer while demand stays this high.")
+                likely = f"{eta['likely']} weeks" if eta["likely"] else "over a year"
+                safe = f"{eta['safe']} weeks" if eta["safe"] else "over a year"
+                st.caption(f"With the whole team: likely **{likely}**, safely **{safe}**. Only spare capacity is "
+                           "truly free, so expect longer while demand stays this high (see the Forecast page).")
 
         st.divider()
         m1, m2 = st.columns(2)
@@ -1299,68 +1298,105 @@ elif selected == "🗂️  Backlog":
 
 # ── Forecast ─────────────────────────────────────────────────────────────────────
 elif selected == "🔮  Forecast":
-    st.title("🔮 Forecast")
-    st.caption("XGBoost baseline plus advanced lag+seasonality ML forecasting to project future throughput.")
+    st.title("🔮 Delivery Forecast")
+    st.caption(
+        "How many tickets Platform Engineering will likely deliver in the coming weeks, with an honest range. "
+        "PE tickets only (no Features, Initiatives or CAR); full weeks; built from the team's own delivery history."
+    )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     if df_issues is None or (isinstance(df_issues, pd.DataFrame) and df_issues.empty):
         st.info("📥 Fetch Jira tickets from the sidebar to display the Forecast.")
+    elif build_forecast_visuals is None:
+        st.error("⚠️ Forecast module could not be loaded.")
     else:
-        # ── PERIODS selector ──────────────────────────────────────────────────
-        periods = st.slider(
-            "📅 Forecast horizon (months)",
-            min_value=1,
-            max_value=12,
-            value=4,
-            step=1,
-            help="Select how many months into the future to forecast. Changing this value re-runs the XGBoost model.",
-        )
-
-        with st.spinner(f"Training XGBoost model and forecasting {periods} month(s)…"):
-            if build_forecast_visuals is None:
-                st.error("⚠️ Forecast module could not be loaded.")
-                st.stop()
-            fc = build_forecast_visuals(df_issues, periods=periods)
+        with st.spinner("Building the delivery forecast…"):
+            fc = build_forecast_visuals(df_issues)
 
         if fc["error_message"]:
             st.warning(f"⚠️ {fc['error_message']}")
         else:
-            # ── KPI row ───────────────────────────────────────────────────────
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Forecast Periods", f"{periods} mo")
-            c2.metric("MAE", f"{fc['mae']:.1f} tickets")
-            c3.metric("MSE", f"{fc['mse']:.1f}")
-            c4.metric(
-                f"Forecast Low ({periods} mo total)",
-                f"{fc['future_low']:,.0f}",
-            )
-            c5.metric(
-                f"Forecast High ({periods} mo total)",
-                f"{fc['future_high']:,.0f}",
-            )
+            st.info(fc["headline"])
+            if not fc["calibrated"]:
+                st.warning("Not enough history yet to calibrate the range from past forecast errors; the range is a "
+                           "rough estimate from recent weeks.")
+
+            cols = st.columns(len(fc["cards"]))
+            for col, card in zip(cols, fc["cards"]):
+                col.metric(f"Next {card['weeks']} weeks · by {card['by']:%b %d}", f"~{card['likely']:,} tickets",
+                           help="Likely (central forecast). The range below covers about 7 in 10 outcomes.")
+                col.caption(f"Range **{card['low']:,} – {card['high']:,}**")
+            acc = fc["accuracy"]
+            if acc:
+                st.caption(
+                    f"**Track record:** over the last {acc['forecasts']} weeks, the {FORECAST_ACCURACY_HORIZON}-week forecast "
+                    f"was within ±{acc['typical_error']:.0%} of what actually happened on average, and the actual landed "
+                    f"inside the range {acc['inside']:.0%} of the time. Recent pace: {fc['recent_rate']:.0f} tickets/week "
+                    f"(last 4 full weeks, through the week of {fc['last_full_week']:%b %d})."
+                )
 
             st.divider()
-            st.plotly_chart(fc["forecast_fig"], width="stretch")
+            st.subheader("Weekly Delivery: History and Forecast")
+            st.caption("Solid line: tickets delivered each full week. Dashed line and shaded area: the forecast and its likely range.")
+            st.plotly_chart(fc["weekly_fig"], width="stretch")
+
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.subheader("By When? Cumulative Delivery")
+                st.caption("Total tickets delivered from today. Read across a date to see how many will likely be done by then.")
+                st.plotly_chart(fc["cumulative_fig"], width="stretch")
+            with c2:
+                st.subheader("Can We Commit to a Project?")
+                st.caption("Uses the same forecast, but only the share of team capacity the project can have; "
+                           "the rest keeps serving incoming requests.")
+                project = st.number_input("Project size (tickets)", min_value=1, max_value=10000, value=150, step=10)
+                share = st.slider("Share of team capacity for the project", 10, 100, 30, 5, format="%d%%")
+                eta = forecast_weeks_to_deliver(int(project), fc["forecast"], share / 100)
+                if eta:
+                    last = fc["last_full_week"]
+
+                    def _when(weeks):
+                        if weeks is None:
+                            return "more than a year"
+                        return f"{weeks} weeks (≈ {(pd.Timestamp(last) + pd.Timedelta(days=7 * weeks + 6)):%b %d})"
+
+                    st.metric("Likely done in", _when(eta["likely"]))
+                    st.metric("Safe to commit", _when(eta["safe"]),
+                              help="Uses the low end of the forecast range: done by then in roughly 9 of 10 outcomes.")
+                    st.caption("Commit to the safe date; the likely date is a coin flip.")
+
+            st.subheader("Demand vs Delivery Outlook")
+            demand_err = fc.get("demand_typical_error")
             st.caption(
-                "🟦 Actual · 🟢 Model on test data (dotted) · 🟠 Future forecast · "
-                "Shaded band = ±MAE confidence interval"
+                f"Requested vs delivered per week, with forecasts. Over the next 12 weeks: about "
+                f"**{fc['requested_12w']:,.0f} requested** vs **{fc['delivered_12w']:,.0f} delivered**. "
+                + (f"Requests are harder to forecast (typically within ±{demand_err:.0%}), so treat the requested line as a guide."
+                   if demand_err is not None else "")
             )
+            st.plotly_chart(fc["demand_fig"], width="stretch")
 
-            st.divider()
-            st.subheader("Advanced Forecasting (Model Comparison)")
+            if fc["accuracy_fig"] is not None:
+                st.subheader("How Accurate Has This Forecast Been?")
+                st.caption(f"Each point: the {FORECAST_ACCURACY_HORIZON}-week forecast made that week (dashed, with its range at "
+                           "the time) vs what actually happened (solid). Ranges were built only from information "
+                           "available at the time.")
+                st.plotly_chart(fc["accuracy_fig"], width="stretch")
 
-            if fc.get("ml_error"):
-                st.info(f"ℹ️ {fc['ml_error']}")
-            else:
-                a1, a2 = st.columns(2)
-                a1.metric("Best Advanced Model", fc.get("ml_best_model", "N/A"))
-                a2.metric("Best Advanced MAE", f"{fc.get('ml_best_mae', 0):.1f} tickets")
-
-                if fc.get("ml_comparison_fig") is not None:
-                    st.plotly_chart(fc["ml_comparison_fig"], width="stretch")
-
-                if fc.get("ml_future_fig") is not None:
-                    st.plotly_chart(fc["ml_future_fig"], width="stretch")
+            with st.expander("How this forecast works"):
+                st.markdown(
+                    "- **What is counted:** PE tickets moved to Done, in full Monday–Sunday weeks. The current week is never "
+                    "used, so a few days of data can't drag the forecast down.\n"
+                    "- **Central forecast:** the trend of the last 12 weeks, projected forward with the growth **slowing down** "
+                    "each week (a damped trend), rather than assuming it continues forever.\n"
+                    "- **Range:** set from this method's own past mistakes. The forecast was re-run at every past week using only "
+                    "what was known then, and compared with what actually happened; the range covers about 7 in 10 of those outcomes. "
+                    "Because the team has recently kept beating its forecasts, the range leans upward.\n"
+                    "- **Why not a machine-learning model?** With about two years of weekly data, the earlier XGBoost model "
+                    "overfitted and its ranges could go negative. Back-tested on this team's history, this simpler method "
+                    "was more accurate and honest about uncertainty.\n"
+                    "- **Longer horizons** are less certain: at 12 weeks the actual landed inside the range about 6 in 10 times, "
+                    "and when it missed it was usually above, because delivery has been growing quickly."
+                )
 
 
 # ── Distribution of Ticket's Age ─────────────────────────────────────────────────

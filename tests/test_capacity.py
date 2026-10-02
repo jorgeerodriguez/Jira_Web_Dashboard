@@ -1,8 +1,9 @@
 """Capacity: throughput, demand vs capacity, the delivery forecast and load balance.
 
 Leadership uses this page to decide whether the team can take on more, so the rules are pinned:
-only PE tickets moved to Done count as delivered, only full weeks are used, the Monte Carlo is exact
-when every week is the same, and the load charts show the core team rather than one-off contributors.
+only PE tickets moved to Done count as delivered, only full weeks are used,
+the forecast is the same engine as the Forecast page, and the load charts show the core team rather
+than one-off contributors.
 """
 from datetime import timedelta, timezone
 
@@ -32,13 +33,17 @@ def _issue(key, status="Done", closed=None, created=None, assignee="Ana", issuet
     }
 
 
-def test_forecast_is_exact_when_every_week_is_the_same():
-    forecast = cap.forecast_throughput([10] * 12, horizons=(4, 8))
-    assert forecast[4] == {"likely": 40, "at_least": 40}
-    assert forecast[8] == {"likely": 80, "at_least": 80}
-    assert cap.weeks_to_deliver(35, [10] * 12) == {"likely": 4, "safe": 4}
-    assert cap.weeks_to_deliver(0, [10] * 12) is None
-    assert cap.forecast_throughput([]) == {}
+def test_capacity_forecast_matches_the_forecast_page():
+    from reports import forecast_report as fr
+    wed = _LAST_WEEK_MONDAY + pd.Timedelta(days=2)
+    rows = [_issue(f"D-{w}-{i}", closed=wed - pd.Timedelta(days=7 * w)) for w in range(10) for i in range(5)]
+    df = pd.DataFrame(rows)
+    out = cap.build_capacity_visuals(df)
+    _, delivered, _, _ = fr.weekly_series(df)
+    engine = fr.delivery_forecast(delivered).set_index("h")
+    for weeks, card in out["forecast"].items():
+        assert card["likely"] == round(engine.loc[weeks, "likely"])
+        assert card["at_least"] == round(engine.loc[weeks, "low"])
 
 
 def test_only_pe_done_tickets_in_full_weeks_count_as_delivered():

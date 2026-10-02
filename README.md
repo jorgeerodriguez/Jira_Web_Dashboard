@@ -14,6 +14,7 @@ It supports:
 - **Personal Dashboard** with prioritized attention and Epic-only view
 	- **Apparent Tardiness Cost (ATC)** ticket sequencing: suggests a work order that minimizes weighted tardiness across a person's open tickets
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
+- **Delivery Forecast**: how many tickets PE will likely deliver in the next 4, 8 and 12 weeks with a calibrated range, a "can we commit to a project?" calculator, a demand vs delivery outlook, and the forecast's own track record — see [How the Delivery Forecast works](#how-the-delivery-forecast-works)
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
 - **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
@@ -83,6 +84,7 @@ Jira_Web_Dashboard/
 │   ├── test_capacity.py
 │   ├── test_trend.py
 │   ├── test_velocity_flow.py
+│   ├── test_forecast.py
 │   └── ...
 └── backup/
 ```
@@ -116,8 +118,6 @@ Run the dashboard:
 Open: http://localhost:8501
 
 Notes:
-- **Apple Silicon Macs** install the regular `xgboost` package; Linux (CI, Docker) installs
-  `xgboost-cpu`. `requirements.txt` picks the right one per platform.
 - The project folder lives in Google Drive. Don't let Drive sync `.venv` between machines: a
   virtualenv built on an Intel Mac will not load on Apple Silicon. If imports fail with an
   "incompatible architecture" error, delete `.venv` and recreate it.
@@ -194,7 +194,7 @@ Templates provided:
 - Rebuilt the **In Progress** report as an SLA-aware completion forecast (P50/P85 dates, risk vs SLA and Target End Date, execution velocity by priority per assignee)
 - Rebuilt the **Executive Summary** as a leadership view built on the SLA, forecast and conversation reports (headlines, trend tiles, flow, SLA trend, stage risk, needs-attention list, aging)
 - **Executive Summary** now counts tickets only (no Features/Initiatives) across every KPI, chart and table, and calculates **Created (24h)** / **Resolved (24h)** from Jira data
-- **Forecast** report trains on tickets only, with completed meaning status `Done`
+- Rebuilt the **Forecast** as a calibrated Delivery Forecast (damped trend + back-tested ranges) shared with Capacity; XGBoost removed
 - Jira fetch now loads `statuscategorychangedate` (when a ticket moved to Done)
 - Updated Streamlit layout API usage (`width="stretch"` / `width="content"`)
 - Fixed Jira fetch JQL lookback syntax (`created >= -730d`)
@@ -218,12 +218,10 @@ These rules are shared across reports so the numbers agree:
   Release Management **"Change and Release" (CAR)** tickets follow the release process and have no PE
   SLA: they are never judged against it and are not counted in SLA compliance. The rule is
   `sla_applies()` in `reports/in_progress_report.py` (`SLA_EXEMPT_PROJECTS`, `SLA_EXEMPT_ISSUE_TYPES`).
-- **Completed / Resolved**: status `Done`. The Capacity report is the exception and also counts
-  Release Management's `Released Successfully to Production`.
-- **When it finished**: most Done tickets have no Jira resolution date. The Forecast uses `updated`
-  (the resolution date when Jira has one). The In Progress, Backlog, Executive Summary and Teams
-  Conversations reports use `status_category_changed` (Jira's `statuscategorychangedate`), which later
-  comments or edits don't move.
+- **Completed / Resolved**: status `Done`.
+- **When it finished**: most Done tickets have no Jira resolution date, so every report uses
+  `status_category_changed` (Jira's `statuscategorychangedate`, when the ticket moved to Done), which
+  later comments or edits don't move.
 
 ---
 
@@ -532,6 +530,53 @@ which only counted tickets created.
 
 ---
 
+## How the Delivery Forecast works
+
+The **Forecast** page ("Delivery Forecast") answers *how many tickets will we likely deliver, and can
+we commit to a project?* Code: `reports/forecast_report.py`, which is also the engine behind the
+Capacity page's forecast. PE tickets only, Done dated when it moved, full Monday–Sunday weeks (the
+current week is never used).
+
+### Method, chosen by back-testing
+
+- **Central forecast: a damped trend.** A line is fitted to the log of weekly delivery over the last
+  12 weeks (`TREND_WEEKS`) and projected forward with the slope shrinking 20% each week (`DAMPING` =
+  0.8), so growth is assumed to slow rather than continue forever.
+- **Range: calibrated from past errors (conformal intervals).** The forecast is re-run at every past
+  week using only data known at the time (`backtest`), compared with what actually happened, and the
+  10th–90th percentiles of the last 52 errors per horizon set the range. Errors on neighbouring weeks
+  overlap, so this nominal 80% band covers about **7 in 10** outcomes out of sample. With fewer than 12
+  past errors, the range falls back to resampling recent weeks, and the page says so.
+- **The central estimate is not shifted by past errors.** Back-tested, doing that was no better
+  calibrated and less accurate, and it assumed recent growth would continue.
+
+Back-test on this team's history (as of 2026-10-02, 40 forecasts each):
+
+| Horizon | Actual inside the range | Typical error of the central forecast |
+| --- | --- | --- |
+| 4 weeks | 80% | ±23% |
+| 8 weeks | 70% | ±25% |
+| 12 weeks | 62% | ±27% |
+
+When the actual fell outside the range it was usually *above* it, because delivery grew quickly
+during 2026. The earlier XGBoost model was removed: it was trained on about 12 monthly rows, its
+multi-step forecast shifted every feature (not just the lags), it used day-of-week features on
+month-start dates, and its ±MAE band could go negative. `xgboost` is no longer a dependency.
+
+### What the page shows
+
+- **Headline** in plain English, and cards for the next 4, 8 and 12 weeks (likely value, range, end date).
+- **Weekly Delivery: History and Forecast**: 26 weeks of actuals, then 12 weeks of forecast with its range.
+- **By When? Cumulative Delivery**: total tickets delivered from today, with the range.
+- **Can We Commit to a Project?**: project size and the share of team capacity it can use give a
+  *likely* date and a *safe to commit* date (the low end of the range).
+- **Demand vs Delivery Outlook**: requested vs delivered per week with forecasts. Requests are harder to
+  forecast (typical error about ±33%), so the page treats that line as a guide.
+- **How Accurate Has This Forecast Been?**: each past 4-week forecast and its range at the time
+  against what actually happened, with the track record in the caption.
+
+---
+
 ## How Capacity works
 
 The **Capacity** page answers *how much do we deliver, does it keep up with demand, how much more can
@@ -548,11 +593,12 @@ moved. Weeks run Monday to Sunday, and only full weeks are used.
 | Demand / Capacity | Requested ÷ delivered, last 4 weeks; the delta shows spare tickets per week (negative = demand outrunning delivery) |
 
 - **Demand vs Capacity**: weekly requested vs delivered for the last 26 weeks, with 4-week averages.
-- **How Much Can We Deliver?**: a Monte Carlo (10,000 runs) that resamples the last 12 weeks of
-  delivery. For the next 4, 8 and 12 weeks it shows the likely total (P50) and the total reached in
-  85% of runs. The **"How long for N more tickets?"** calculator gives likely (P50) and safe (P85)
-  weeks. Both use the whole team's pace, which is shared with incoming demand, so a new project only
-  gets the spare capacity unless something else is deprioritised.
+- **How Much Can We Deliver?**: the next 4, 8 and 12 weeks from the
+  [Delivery Forecast](#how-the-delivery-forecast-works) engine (likely total and the low end of its
+  range), so Capacity and Forecast always show the same numbers. The **"How long for N more
+  tickets?"** calculator gives likely and safe weeks. Both use the whole team's pace, which is shared
+  with incoming demand, so a new project only gets the spare capacity unless something else is
+  deprioritised.
 - **Where Capacity Goes**: monthly share of delivered tickets by work type (Planned = Story, Task,
   Sub-task; Reactive = Bug, Hotfix, Incident, Support, Security) and by priority, last 6 months, with
   the share of sized tickets.
@@ -563,7 +609,7 @@ moved. Weeks run Monday to Sunday, and only full weeks are used.
 
 It replaced a "Total Tickets Worked per Year" chart (any ticket *updated* in a year, with only 24
 months of data) and monthly created vs completed bars that counted Features and CAR tickets and dated
-completions by last update. `build_capacity_data`, which feeds the Forecast page, is unchanged.
+completions by last update.
 
 ---
 
@@ -726,6 +772,8 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt the **Forecast** page as a Delivery Forecast: damped-trend central estimate with ranges calibrated from back-tested past errors (about 7 in 10 outcomes), next 4/8/12-week cards, weekly and cumulative charts, a "can we commit to a project?" calculator, demand vs delivery outlook and the forecast's own track record (see [How the Delivery Forecast works](#how-the-delivery-forecast-works))
+- Capacity's "How much can we deliver?" now uses the same engine (its flat Monte Carlo back-tested 17–26% low); removed `build_capacity_data` and the `xgboost` dependency
 - Rebuilt **Velocity** around flow: lead-time promise (50/85/95%), waiting vs in progress by priority, size vs effort, an SLA reality check per Priority × Size and what was delivered; tickets picked by completion date, business days (see [How Velocity works](#how-velocity-works))
 - Date-based tests now use the company holiday calendar, so they pass in weeks with a holiday
 - Rebuilt **Trend** as "are we getting better?": an improvement scorecard (last full month vs the 3 before), 12-month small multiples with targets, and a team contribution heatmap; PE tickets only, business days, lead time and cycle time measured correctly (see [How Trend works](#how-trend-works))
@@ -735,7 +783,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py` and `tests/test_velocity_flow.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py` and `tests/test_forecast.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -833,11 +881,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader, capacity, trend and velocity tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader, capacity, trend, velocity and forecast tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py -q
 ```
 
 ---

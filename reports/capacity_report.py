@@ -5,7 +5,8 @@ PE tickets only (no Features, Initiatives or Release Management CAR tickets); de
 Done, dated when it moved (status_category_changed). Weeks run Monday to Sunday and only full weeks
 are used, so the current week never drags an average down.
 
-`build_capacity_data` (monthly created/completed counts) is kept unchanged for the Forecast report.
+"How much can we deliver?" uses the Delivery Forecast engine (reports/forecast_report.py), so this page
+and the Forecast page always give the same numbers.
 """
 from __future__ import annotations
 
@@ -14,66 +15,10 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-DEFAULT_COMPLETED_STATUSES = ("Done", "Released Successfully to Production")
-
-
-def build_capacity_data(
-    df_issues: pd.DataFrame,
-    completed_statuses: tuple[str, ...] = DEFAULT_COMPLETED_STATUSES,
-) -> pd.DataFrame:
-    """Build monthly created/completed capacity dataframe from Jira issues.
-
-    A ticket counts as completed when its status is one of `completed_statuses`.
-    """
-    if df_issues is None or df_issues.empty:
-        return pd.DataFrame(columns=["date", "created", "completed"])
-
-    required = {"year_created", "month_created", "year_updated", "month_updated", "status"}
-    if not required.issubset(df_issues.columns):
-        return pd.DataFrame(columns=["date", "created", "completed"])
-
-    scope = df_issues.copy()
-    if "project_name" in scope.columns:
-        scope = scope[scope["project_name"].isin(["DevOps", "Release Management"])].copy()
-
-    created = (
-        scope.groupby(["year_created", "month_created"])
-        .size()
-        .reset_index(name="created")
-        .rename(columns={"year_created": "year", "month_created": "month"})
-    )
-
-    completed_scope = scope[scope["status"].isin(completed_statuses)].copy()
-    completed = (
-        completed_scope.groupby(["year_updated", "month_updated"])
-        .size()
-        .reset_index(name="completed")
-        .rename(columns={"year_updated": "year", "month_updated": "month"})
-    )
-
-    for df in (created, completed):
-        if not df.empty:
-            df["date"] = pd.to_datetime(df[["year", "month"]].assign(day=1), errors="coerce")
-            df.drop(columns=["year", "month"], inplace=True)
-
-    total = pd.merge(created, completed, on="date", how="outer")
-    if total.empty:
-        return pd.DataFrame(columns=["date", "created", "completed"])
-
-    total["created"] = total["created"].fillna(0).astype(int)
-    total["completed"] = total["completed"].fillna(0).astype(int)
-    total = total[total["date"].dt.year > 2022].sort_values("date")
-    return total
-
-
 # ── Capacity page ───────────────────────────────────────────────────────────────
 
 WEEKS = 26
 KPI_WEEKS = 4                 # KPIs compare the last 4 full weeks with the 4 before
-FORECAST_SAMPLE_WEEKS = 12    # the Monte Carlo samples from the last 12 full weeks of throughput
-FORECAST_HORIZONS = (4, 8, 12)
-SIMULATIONS = 10_000
-RNG_SEED = 7
 LOAD_WEEKS = 8                # load balance: delivery share over the last 8 full weeks
 CORE_MIN_DELIVERED = 4        # charts show the core team: work in progress now, or 4+ delivered in LOAD_WEEKS
 MIX_MONTHS = 6
@@ -86,40 +31,9 @@ GRID = "rgba(148,163,184,0.25)"
 
 
 def _empty_payload(message: str | None = None) -> dict:
-    return {"error_message": message, "kpis": {}, "flow_fig": None, "forecast": {}, "weekly_throughput": [],
+    return {"error_message": message, "kpis": {}, "flow_fig": None, "forecast": {}, "forecast_table": pd.DataFrame(),
             "type_mix_fig": None, "priority_mix_fig": None, "wip_fig": None, "share_fig": None,
             "weekly_df": pd.DataFrame(), "people_df": pd.DataFrame()}
-
-
-def forecast_throughput(weekly: list[float], horizons=FORECAST_HORIZONS, simulations: int = SIMULATIONS,
-                        seed: int = RNG_SEED) -> dict:
-    """Monte Carlo: tickets delivered over each horizon, resampling past weeks' throughput.
-
-    Returns {weeks: {"likely": P50, "at_least": the total reached in 85% of runs}}.
-    """
-    sample = np.asarray([w for w in weekly if pd.notna(w)], dtype=float)
-    if sample.size == 0:
-        return {}
-    rng = np.random.default_rng(seed)
-    out = {}
-    for weeks in horizons:
-        totals = rng.choice(sample, size=(simulations, weeks)).sum(axis=1)
-        out[weeks] = {"likely": int(np.percentile(totals, 50)), "at_least": int(np.percentile(totals, 15))}
-    return out
-
-
-def weeks_to_deliver(tickets: int, weekly: list[float], simulations: int = SIMULATIONS,
-                     seed: int = RNG_SEED, max_weeks: int = 520) -> dict | None:
-    """Monte Carlo: weeks until `tickets` more are delivered at the sampled pace (P50 and P85)."""
-    sample = np.asarray([w for w in weekly if pd.notna(w)], dtype=float)
-    if tickets <= 0 or sample.size == 0 or sample.max() <= 0:
-        return None
-    rng = np.random.default_rng(seed)
-    horizon = min(max_weeks, int(np.ceil(tickets / max(sample.mean(), 0.1) * 3)) + 4)
-    cumulative = rng.choice(sample, size=(simulations, horizon)).cumsum(axis=1)
-    reached = cumulative >= tickets
-    weeks = np.where(reached.any(axis=1), reached.argmax(axis=1) + 1, horizon)
-    return {"likely": int(np.percentile(weeks, 50)), "safe": int(np.percentile(weeks, 85))}
 
 
 def _work_type(issuetype: pd.Series) -> pd.Series:
@@ -199,7 +113,8 @@ def _people_figures(people: pd.DataFrame) -> tuple[go.Figure, go.Figure]:
 
 def build_capacity_visuals(df_issues: pd.DataFrame) -> dict:
     """Capacity page: throughput vs demand, capacity forecast, where capacity goes, load balance."""
-    from reports import executive_summary as es   # local import: Forecast imports this module
+    from reports import executive_summary as es
+    from reports import forecast_report as fr
     from reports import in_progress_report as ipr
 
     if df_issues is None or df_issues.empty:
@@ -234,7 +149,6 @@ def build_capacity_visuals(df_issues: pd.DataFrame) -> dict:
     throughput_prev = float(prev["delivered"].mean()) if len(prev) else None
     open_t = t[~t["is_closed"]]
     queue = int(open_t["stage"].isin(["Backlog", "In Progress"]).sum())
-    sample = weekly["delivered"].tail(FORECAST_SAMPLE_WEEKS).tolist()
     payload = _empty_payload()
     payload["kpis"] = {
         "throughput": throughput,
@@ -249,8 +163,13 @@ def build_capacity_visuals(df_issues: pd.DataFrame) -> dict:
         if len(delivered[delivered["week"].isin(last["week"])]) else None,
     }
     payload["flow_fig"] = _flow_figure(weekly)
-    payload["forecast"] = forecast_throughput(sample)
-    payload["weekly_throughput"] = sample
+    _, delivered_history, _, _ = fr.weekly_series(df_issues)
+    forecast = fr.delivery_forecast(delivered_history)
+    payload["forecast_table"] = forecast
+    payload["forecast"] = {
+        h: {"likely": int(round(row["likely"])), "at_least": int(round(row["low"]))}
+        for h, row in forecast.set_index("h").loc[list(fr.HORIZONS)].iterrows()
+    }
 
     # ── Where capacity goes: last 6 months of delivered work ──
     months = pd.period_range(today.to_period("M") - (MIX_MONTHS - 1), today.to_period("M"), freq="M")
