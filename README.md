@@ -14,6 +14,7 @@ It supports:
 - **Personal Dashboard** with prioritized attention and Epic-only view
 	- **Apparent Tardiness Cost (ATC)** ticket sequencing: suggests a work order that minimizes weighted tardiness across a person's open tickets
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
+- **SLA**: the daily view of breached, late and at-risk work. Two breach rates against the **under 10%** goal (SLA came due / completed late), a trend, where breaches come from, what's coming due, and two searchable, filterable action tables (**SLA Detail** and **Breached Tickets**) with the latest human comment and a Jira link — see [How the SLA page works](#how-the-sla-page-works)
 - **Delivery Forecast**: how many tickets PE will likely deliver in the next 4, 8 and 12 weeks with a calibrated range, a "can we commit to a project?" calculator, a demand vs delivery outlook, and the forecast's own track record — see [How the Delivery Forecast works](#how-the-delivery-forecast-works)
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
@@ -85,6 +86,7 @@ Jira_Web_Dashboard/
 │   ├── test_trend.py
 │   ├── test_velocity_flow.py
 │   ├── test_forecast.py
+│   ├── test_sla.py
 │   └── ...
 └── backup/
 ```
@@ -210,7 +212,7 @@ These rules are shared across reports so the numbers agree:
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
   Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age, Distribution per
-  Business Leader, Capacity, Trend, Velocity and Teams Conversations reports. The Executive
+  Business Leader, Capacity, Trend, Velocity, SLA and Teams Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
   `EXCLUDED_ASSIGNEES`, so their counts agree. The Size Distribution report excludes Features
   only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
@@ -530,6 +532,48 @@ which only counted tickets created.
 
 ---
 
+## How the SLA page works
+
+The **SLA** page is the daily view of where work is breached, late or at risk, and of the breach rate
+against the team's goal of **under 10%**. Code: `reports/service_level_agreement_report.py`. SLAs are the
+Priority × Size table (`SLA_BUSINESS_DAYS`) in business days from **Target start**, unsized = Medium.
+PE tickets only; CAR tickets have no PE SLA. Tickets closed as Will Not Do or Rolled Back are never
+judged: closing stale work is hygiene, not a late delivery.
+
+### Two breach rates, both against the goal
+
+| Breach rate | Of which tickets | Breached when | Why |
+| --- | --- | --- | --- |
+| **SLA came due** | SLA due date in the window | Done after the due date, **or still open past it** | Strict: a breach can't hide until the ticket is finished |
+| **Completed late** | Moved to Done in the window | Done after the due date | Same as the Trend and Executive Summary pages |
+
+The window is 7, 30 (default) or 90 days. Each tile shows the change against the previous window,
+✓/✖ against the goal, and "x of n tickets". As of 2026-10-02: last 30 days 10.3% (above goal) and 5.8%;
+last 90 days 9.4% and 6.1%.
+
+Other KPIs: open tickets already breached, at risk or likely late, coming due in the next 10 business
+days, and **No SLA Clock** (open tickets without a Target start, a data gap to fix in Jira).
+
+### Filters, charts and tables
+
+- **Filters** (assignee, business lead, priority, stage of open work) narrow every number, chart and table.
+- **Breach Rate Trend**: monthly, both definitions, with the 10% goal line.
+- **Where Breaches Come From**: share of tickets that missed their SLA by Priority × Size (last 90 days).
+- **Coming Due**: open tickets overdue or due in the next 10 business days, by forecast risk.
+- **Open Work by Stage**: open tickets by stage and SLA risk, as on the Executive Summary.
+- **SLA Detail**: open tickets that are breached, likely late or at risk (optionally all open tickets),
+  most urgent first. Columns include business days to SLA (negative = overdue), SLA due, forecast finish
+  (P85), SLA used, priority, size, stage, Jira status, assignee, business lead, Target End, last comment
+  date, business days silent and the latest human comment (author and excerpt).
+- **Breached Tickets**: still-open breached tickets first (most overdue first), then, optionally, tickets
+  completed late in the window, with days overdue, SLA due, completion date and the latest comment.
+- Both tables have a **search box**, a **CSV download** and a Jira link on every ticket.
+
+It replaced a report that used a flat 90-calendar-day SLA (or Target End − created) from creation, only
+looked at currently open tickets, and used red-green charts.
+
+---
+
 ## How the Delivery Forecast works
 
 The **Forecast** page ("Delivery Forecast") answers *how many tickets will we likely deliver, and can
@@ -772,6 +816,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt the **SLA** page around the real SLA table: two breach rates (SLA came due / completed late) against the under-10% goal with 7/30/90-day windows, trend, Priority × Size breach map, coming-due chart, open work by stage, filters, and searchable, downloadable **SLA Detail** and **Breached Tickets** tables with the latest human comment (see [How the SLA page works](#how-the-sla-page-works))
 - Rebuilt the **Forecast** page as a Delivery Forecast: damped-trend central estimate with ranges calibrated from back-tested past errors (about 7 in 10 outcomes), next 4/8/12-week cards, weekly and cumulative charts, a "can we commit to a project?" calculator, demand vs delivery outlook and the forecast's own track record (see [How the Delivery Forecast works](#how-the-delivery-forecast-works))
 - Capacity's "How much can we deliver?" now uses the same engine (its flat Monte Carlo back-tested 17–26% low); removed `build_capacity_data` and the `xgboost` dependency
 - Rebuilt **Velocity** around flow: lead-time promise (50/85/95%), waiting vs in progress by priority, size vs effort, an SLA reality check per Priority × Size and what was delivered; tickets picked by completion date, business days (see [How Velocity works](#how-velocity-works))
@@ -783,7 +828,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py` and `tests/test_forecast.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py` and `tests/test_sla.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -881,11 +926,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader, capacity, trend, velocity and forecast tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader, capacity, trend, velocity, forecast and SLA tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py -q
 ```
 
 ---

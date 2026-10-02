@@ -1,530 +1,346 @@
+"""SLA: the daily view of where work is breached, late or at risk, and the breach rate against the goal.
+
+SLA = the Priority x Size table in business days (in_progress_report.SLA_BUSINESS_DAYS), counted from
+each ticket's Target start; unsized tickets use Medium. PE tickets only: no Features or Initiatives, and
+Release Management (CAR) tickets have no PE SLA. Tickets without a Target start have no SLA clock and
+are counted separately as a data gap.
+
+Two breach rates, both measured against BREACH_GOAL (10%):
+- SLA came due: of tickets whose SLA due date fell in the window, the share that missed it. A ticket
+  still open past its due date counts as breached now, so a breach cannot hide until it is finished.
+  Tickets closed without delivery (Will Not Do, Rolled Back) are not judged at all: closing stale
+  work is backlog hygiene, not a late delivery.
+- Completed late: of tickets moved to Done in the window, the share finished after their SLA due date
+  (the definition used on the Trend and Executive Summary pages).
+
+Open tickets use the same risk as the Executive Summary: In Progress and Backlog from their forecasts,
+other stages Breached past due and At Risk once 80% of the SLA is used.
+"""
 from __future__ import annotations
 
-import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
+
+from reports import executive_summary as es
+from reports import in_progress_report as ipr
+from reports.backlog_report import build_backlog_visuals
+
+try:
+    from reports.word_of_the_month_report import clean_comment
+except ImportError:
+    def clean_comment(text: str) -> str:
+        return str(text or "")
 
 
-TIME_PERIOD_DAYS = 90
-JIRA_BROWSE_BASE_URL = "https://entercomdigitalservices.atlassian.net/browse/"
-
-# Practical PE-team SLA baselines when no ticket-specific deadline exists.
-# All priorities currently use 90 days, but this structure is intentionally
-# kept priority-specific so it can be tuned later without changing the report logic.
-PRIORITY_SLA_DAYS = {
-    "blocker": 90,
-    "highest": 90,
-    "critical": 90,
-    "urgent": 90,
-    "high": 90,
-    "medium": 90,
-    "low": 90,
-    "lowest": 90,
-}
+JIRA_BROWSE_BASE_URL = ipr.JIRA_BROWSE_BASE_URL
+BREACH_GOAL = 0.10
+WINDOWS = (7, 30, 90)
+DEFAULT_WINDOW = 30
+HEATMAP_DAYS = 90         # where breaches come from: a 90-day window keeps cells big enough to read
+TREND_MONTHS = 6
+DUE_SOON_BD = 10          # "coming due": the next 10 business days
+MIN_CELL = 5
+ACTION_RISKS = ("Breached", "Likely Late", "At Risk")
+RATE_COLORS = ("#2a78d6", "#eb6834")   # SLA came due, completed late (categorical slots 1 and 2)
+INK = ipr.INK
+GRID = es.GRID
 
 
-def _empty_payload() -> dict[str, Any]:
+def _empty_payload(message: str | None = None) -> dict[str, Any]:
+    return {"error_message": message, "kpis": {}, "filter_options": {}, "trend_fig": None, "heatmap_fig": None,
+            "stage_fig": None, "due_soon_fig": None, "detail_df": pd.DataFrame(), "breached_df": pd.DataFrame(),
+            "sla_table_df": sla_table()}
+
+
+def sla_table() -> pd.DataFrame:
+    rows = [{"Priority": p, **{s: f"{d} bd" for s, d in sizes.items()}} for p, sizes in ipr.SLA_BUSINESS_DAYS.items()]
+    return pd.DataFrame(rows).rename(columns={"XL": "XLarge"})
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────────
+
+def _signed_busdays(today: pd.Timestamp, due: pd.Series, hol: np.ndarray) -> pd.Series:
+    """Business days from today to the due date: positive = left, negative = overdue."""
+    now = pd.Series(today, index=due.index)
+    ahead = ipr._busdays_between(now, due, hol)
+    behind = ipr._busdays_between(due, now, hol)
+    return pd.Series(np.where(due >= today, ahead, -behind), index=due.index).where(due.notna())
+
+
+def _last_comment(comments) -> tuple[pd.Timestamp, str]:
+    if not isinstance(comments, list) or not comments:
+        return pd.NaT, ""
+    latest = max((c for c in comments if pd.notna(c.get("created"))), key=lambda c: c["created"], default=None)
+    if latest is None:
+        return pd.NaT, ""
+    text = " ".join(clean_comment(latest.get("body", "")).split())
+    return latest["created"], f"{latest.get('author', '')}: {text[:140]}{'…' if len(text) > 140 else ''}"
+
+
+def _apply_filters(frame: pd.DataFrame, filters: dict | None, with_stage: bool) -> pd.DataFrame:
+    if not filters:
+        return frame
+    out = frame
+    for key, col in (("assignees", "assignee_name"), ("leads", "lead"), ("priorities", "priority_bucket")):
+        chosen = filters.get(key)
+        if chosen:
+            out = out[out[col].isin(chosen)]
+    if with_stage and filters.get("stages"):
+        out = out[out["stage"].isin(filters["stages"])]
+    return out
+
+
+def _judged(t: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
+    """PE tickets with an SLA clock, with whether each met its SLA (NaN = not judged)."""
+    j = t[t["sla_applies"] & t["sla_due"].notna()].copy()
+    done = j["outcome"].eq("Done")
+    not_delivered = j["is_closed"] & ~done                       # Will Not Do, Rolled Back: never judged
+    j = j[~not_delivered].copy()
+    done = j["outcome"].eq("Done")
+    j["breached"] = np.where(done, j["closed_day"] > j["sla_due"], j["sla_due"] < today)
+    j["judged_on_due"] = j["sla_due"] < today
+    return j
+
+
+def _rates(j: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> dict:
+    due = j[j["judged_on_due"] & (j["sla_due"] >= start) & (j["sla_due"] < end)]
+    done = j[j["outcome"].eq("Done") & (j["closed_day"] >= start) & (j["closed_day"] < end)]
     return {
-        "total_tickets": 0,
-        "on_track": 0,
-        "at_risk": 0,
-        "breached": 0,
-        "unknown": 0,
-        "breach_rate": 0.0,
-        "at_risk_rate": 0.0,
-        "median_elapsed_days": 0.0,
-        "median_sla_target_days": 0.0,
-        "status_fig": None,
-        "priority_fig": None,
-        "box_fig": None,
-        "heatmap_fig": None,
-        "trend_fig": None,
-        "scatter_fig": None,
-        "detail_df": pd.DataFrame(),
-        "breached_df": pd.DataFrame(),
+        "due_rate": float(due["breached"].mean()) if len(due) else None, "due_n": int(len(due)),
+        "due_breached": int(due["breached"].sum()),
+        "done_rate": float(done["breached"].mean()) if len(done) else None, "done_n": int(len(done)),
+        "done_late": int(done["breached"].sum()),
     }
 
 
-def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for col in candidates:
-        if col in df.columns:
-            return col
-    return None
+# ── Figures ─────────────────────────────────────────────────────────────────────
+
+def _trend_figure(j: pd.DataFrame, today: pd.Timestamp) -> tuple[go.Figure, pd.DataFrame]:
+    current = today.to_period("M")
+    months = pd.period_range(current - (TREND_MONTHS - 1), current, freq="M")
+    rows = []
+    for m in months:
+        start, end = m.start_time, min(m.end_time.normalize() + pd.Timedelta(days=1), today)
+        r = _rates(j, start, end)
+        rows.append({"month": m, "label": m.strftime("%b %Y") + (" (so far)" if m == current else ""), **r})
+    trend = pd.DataFrame(rows)
+    fig = go.Figure()
+    for col, n_col, name, color in [("due_rate", "due_n", "SLA came due: missed", RATE_COLORS[0]),
+                                    ("done_rate", "done_n", "Completed late", RATE_COLORS[1])]:
+        fig.add_trace(go.Scatter(
+            x=trend["label"], y=trend[col], name=name, mode="lines+markers+text", line=dict(color=color, width=2),
+            marker=dict(size=9, color=np.where(trend["month"] == current, "white", color), line=dict(color=color, width=2)),
+            text=[f"{v:.0%}" if pd.notna(v) else "" for v in trend[col]], textposition="top center",
+            customdata=trend[[n_col]], hovertemplate=f"{name}: %{{y:.1%}} of %{{customdata[0]}} tickets<extra></extra>",
+        ))
+    fig.add_hline(y=BREACH_GOAL, line_dash="dash", line_color=INK, line_width=1.5,
+                  annotation_text=f"Goal: under {BREACH_GOAL:.0%}", annotation_position="top left",
+                  annotation_font_color=INK)
+    top = max(float(trend[["due_rate", "done_rate"]].max().max() or 0), BREACH_GOAL) * 1.35
+    fig.update_yaxes(tickformat=".0%", range=[0, top], title="Breach rate", gridcolor=GRID)
+    fig.update_xaxes(title=None)
+    fig.update_layout(height=340, legend_title_text="", legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                      margin=dict(l=10, r=10, t=40, b=10))
+    return fig, trend
 
 
-def _normalize_text(value: Any, default: str = "Unknown") -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return default
-    text = str(value).strip()
-    return text if text else default
+def _heatmap_figure(j: pd.DataFrame, today: pd.Timestamp) -> go.Figure | None:
+    due = j[j["judged_on_due"] & (j["sla_due"] >= today - pd.Timedelta(days=HEATMAP_DAYS))]
+    if due.empty:
+        return None
+    sizes = ["Small", "Medium", "Large", "XL", "Unestimated"]
+    z, text = [], []
+    for p in ipr.PRIORITY_ORDER:
+        z_row, t_row = [], []
+        for s in sizes:
+            cell = due[(due["priority_bucket"] == p) & (due["size"] == s)]
+            if cell.empty:
+                z_row.append(np.nan)
+                t_row.append("")
+                continue
+            rate = float(cell["breached"].mean())
+            z_row.append(rate)
+            flag = "*" if len(cell) < MIN_CELL else ""
+            t_row.append(f"{rate:.0%}{flag}<br>{int(cell['breached'].sum())}/{len(cell)}")
+        z.append(z_row)
+        text.append(t_row)
+    fig = go.Figure(go.Heatmap(
+        z=z, x=["Small", "Medium", "Large", "XLarge", "Unsized"], y=ipr.PRIORITY_ORDER, text=text,
+        texttemplate="%{text}", zmin=0, zmax=max(0.3, np.nanmax(z) if np.isfinite(np.nanmax(z)) else 0.3),
+        colorscale=[[0, "#f8fafc"], [BREACH_GOAL / 0.3, "#fde2d4"], [1, "#eb6834"]], xgap=2, ygap=2,
+        colorbar=dict(title="Missed", tickformat=".0%"),
+        hovertemplate="%{y} × %{x}: %{z:.0%} missed their SLA<br>%{text}<extra></extra>",
+    ))
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+    return fig
 
 
-def _canonical_priority(value: Any) -> str:
-    text = _normalize_text(value, "None").lower().replace(" ", "")
-    if text in {"p1", "prio1"}:
-        return "Urgent"
-    if text in {"p2", "prio2"}:
-        return "High"
-    if text in {"p3", "prio3"}:
-        return "Medium"
-    if text in {"p4", "prio4"}:
-        return "Low"
-    mapping = {
-        "highest": "Urgent",
-        "critical": "Urgent",
-        "urgent": "Urgent",
-        "blocker": "Urgent",
-        "high": "High",
-        "medium": "Medium",
-        "low": "Low",
-        "lowest": "None",
-        "nopriority": "None",
-        "none": "None",
-        "": "None",
-    }
-    return mapping.get(text, "None")
+def _due_soon_figure(open_t: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray) -> go.Figure | None:
+    rows = open_t[open_t["sla_due"].notna()].copy()
+    if rows.empty:
+        return None
+    horizon = ipr._add_busdays(pd.Series([today]), pd.Series([float(DUE_SOON_BD)]), hol).iloc[0]
+    rows = rows[rows["sla_due"] <= horizon]
+    if rows.empty:
+        return None
+    rows["bucket"] = np.where(rows["sla_due"] < today, "Overdue", rows["sla_due"].dt.strftime("%a %b %d"))
+    order = ["Overdue"] + [d.strftime("%a %b %d") for d in pd.bdate_range(today, horizon) if d >= today]
+    counts = rows.groupby(["bucket", "risk"]).size().unstack(fill_value=0).reindex(order, fill_value=0)
+    fig = go.Figure()
+    for risk in es.RISK_ORDER:
+        if risk in counts.columns and counts[risk].sum():
+            label = es.RISK_LABELS[risk]
+            fig.add_trace(go.Bar(
+                x=counts.index, y=counts[risk], name=label,
+                marker=dict(color=es.RISK_COLORS[label], line=dict(color="rgba(255,255,255,0.9)", width=2)),
+                hovertemplate="%{x} · " + label + ": %{y} ticket(s)<extra></extra>",
+            ))
+    fig.update_yaxes(title="Open tickets", gridcolor=GRID, dtick=1 if counts.values.max() <= 8 else None)
+    fig.update_xaxes(title="SLA due")
+    fig.update_layout(barmode="stack", height=320, legend_title_text="",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(l=10, r=10, t=40, b=10))
+    return fig
 
 
-def _priority_sla_days(priority: str) -> int:
-    return PRIORITY_SLA_DAYS.get(priority.lower(), 90)
+# ── Tables ──────────────────────────────────────────────────────────────────────
+
+def _comment_columns(frame: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray) -> pd.DataFrame:
+    comments = frame["comments"] if "comments" in frame.columns else pd.Series([None] * len(frame), index=frame.index)
+    last = comments.apply(_last_comment)
+    when = ipr._to_day(pd.Series([w for w, _ in last], index=frame.index), ipr.LOCAL_TZ)
+    return pd.DataFrame({
+        "Last Comment": when.dt.date,
+        "Silent (bd)": ipr._busdays_between(when.fillna(frame["created_day"]), pd.Series(today, index=frame.index),
+                                            hol).astype("Int64"),
+        "Latest Comment": [text for _, text in last],
+    }, index=frame.index)
 
 
-def _safe_datetime(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, utc=True, errors="coerce")
+def _detail_table(open_t: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray, include_on_track: bool) -> pd.DataFrame:
+    risks = list(ACTION_RISKS) + (["On Track", "Not Assessed"] if include_on_track else [])
+    rows = open_t[open_t["risk"].isin(risks)].copy()
+    if rows.empty:
+        return pd.DataFrame()
+    rows["to_sla"] = _signed_busdays(today, rows["sla_due"], hol)
+    rank = {r: i for i, r in enumerate(es.RISK_ORDER)}
+    rows = rows.assign(_r=rows["risk"].map(rank)).sort_values(["_r", "to_sla"], na_position="last")
+    started = rows["start_day"].where(rows["start_day"] <= today)
+    used = ipr._busdays_between(started, pd.Series(today, index=rows.index), hol) / rows["sla_bd"]
+    table = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + rows["key"].astype(str),
+        "SLA Status": rows["risk"].map(es.RISK_LABELS),
+        "Days to SLA (bd)": rows["to_sla"].round().astype("Int64"),
+        "SLA Due": rows["sla_due"].dt.date,
+        "Forecast Finish": pd.to_datetime(rows["forecast_p85"], errors="coerce").dt.date,
+        "SLA Used %": (used * 100).round(0),
+        "Priority": rows["priority_bucket"],
+        "Size": rows["size"],
+        "SLA (bd)": rows["sla_bd"],
+        "Stage": rows["stage"],
+        "Jira Status": rows["status"],
+        "Assignee": rows["assignee_name"],
+        "Business Lead": rows["lead"],
+        "Target End": rows["target_end_day"].dt.date,
+        "Summary": rows.get("summary", pd.Series("", index=rows.index)).fillna("").astype(str).str[:120],
+    })
+    return pd.concat([table, _comment_columns(rows, today, hol)], axis=1).reset_index(drop=True)
 
 
-def _sigmoid(x: float) -> float:
-    # Smooth risk score between 0 and 1.
-    return 1.0 / (1.0 + math.exp(-x))
+def _breached_table(j: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray, start: pd.Timestamp,
+                    include_completed: bool, stages: list | None = None) -> pd.DataFrame:
+    open_breached = j[~j["is_closed"] & j["breached"].astype(bool)].copy()
+    if stages:
+        open_breached = open_breached[open_breached["stage"].isin(stages)]
+    open_breached["state"] = "Open: still breached"
+    open_breached["overdue"] = ipr._busdays_between(open_breached["sla_due"], pd.Series(today, index=open_breached.index), hol)
+    frames = [open_breached]
+    if include_completed:
+        late = j[j["outcome"].eq("Done") & j["breached"].astype(bool) & (j["closed_day"] >= start)].copy()
+        late["state"] = "Completed late"
+        late["overdue"] = ipr._busdays_between(late["sla_due"], late["closed_day"], hol)
+        frames.append(late)
+    rows = pd.concat(frames)
+    if rows.empty:
+        return pd.DataFrame()
+    rows = rows.assign(_s=rows["state"].ne("Open: still breached")).sort_values(["_s", "overdue"], ascending=[True, False])
+    table = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + rows["key"].astype(str),
+        "State": rows["state"],
+        "Days Overdue (bd)": rows["overdue"].astype("Int64"),
+        "SLA Due": rows["sla_due"].dt.date,
+        "Completed": rows["closed_day"].dt.date,
+        "Priority": rows["priority_bucket"],
+        "Size": rows["size"],
+        "SLA (bd)": rows["sla_bd"],
+        "Jira Status": rows["status"],
+        "Assignee": rows["assignee_name"],
+        "Business Lead": rows["lead"],
+        "Summary": rows.get("summary", pd.Series("", index=rows.index)).fillna("").astype(str).str[:120],
+    })
+    return pd.concat([table, _comment_columns(rows, today, hol)], axis=1).reset_index(drop=True)
 
 
-def _build_risk_score(elapsed: float, target: float, is_closed: bool) -> float:
-    if pd.isna(elapsed) or pd.isna(target) or target <= 0:
-        return 0.0
-    if is_closed:
-        return 1.0 if elapsed > target else 0.0
-    progress = elapsed / target
-    # 0.8 => low risk, 1.0 => high risk; slope tuned for leadership use.
-    return float(max(0.0, min(1.0, _sigmoid((progress - 0.82) * 10.0))))
+# ── Entry point ─────────────────────────────────────────────────────────────────
 
-
-def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = TIME_PERIOD_DAYS) -> dict[str, Any]:
-    """Build SLA visuals for the PE team using priority-based targets over the last N days.
-
-    Best-practice approach used here:
-    - Filter to tickets created or resolved in the last N days.
-    - Derive SLA target days from ticket-specific target end date when available.
-    - Fall back to conservative priority-based SLA targets.
-    - Use robust stats (median, p75, breach rate, at-risk rate) and interactive Plotly charts.
-    """
+def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_WINDOW, filters: dict | None = None,
+                      include_on_track: bool = False, include_completed_late: bool = True) -> dict[str, Any]:
+    """`filters` keys: assignees, leads, priorities, stages (lists; empty = all)."""
     if df_issues is None or df_issues.empty:
-        return _empty_payload()
-
-    required = {"status", "priority_name", "assignee_name", "created"}
+        return _empty_payload("No ticket data available.")
+    required = {"key", "status", "assignee_name", "issuetype", "created", "updated"}
     if not required.issubset(df_issues.columns):
-        return _empty_payload()
+        return _empty_payload("Ticket data is missing required columns.")
 
-    df = df_issues.copy()
-    df["priority_label"] = df["priority_name"].apply(_canonical_priority)
-    df["assignee_label"] = df["assignee_name"].apply(lambda x: _normalize_text(x, "Unassigned"))
-    df["status_label"] = df["status"].apply(lambda x: _normalize_text(x, "Unknown"))
+    today = ipr.today_local()
+    hol = ipr._calendar_holidays(today)
+    facts = es._facts(df_issues, today, hol)
+    pe = facts[facts["sla_applies"]]
+    ip = ipr.build_in_progress_visuals(df_issues, risk_basis="SLA")
+    bl = build_backlog_visuals(df_issues, risk_basis="SLA")
+    open_all = es._stage_risk(facts, today, hol, ip, bl)
+    open_all = open_all[open_all["sla_applies"]]
 
-    allowed_statuses = {
-        "in progress",
-        "on hold",
-        "blocked",
-        "to do",
-        "validating",
-        "tech discovery required",
+    payload = _empty_payload()
+    payload["filter_options"] = {
+        "assignees": sorted(set(pe["assignee_name"].dropna())),
+        "leads": sorted(set(pe["lead"].dropna())),
+        "priorities": [p for p in ipr.PRIORITY_ORDER if (pe["priority_bucket"] == p).any()],
+        "stages": [s for s in es.STAGE_ORDER if (open_all["stage"] == s).any()],
     }
 
-    created_col = _first_existing_column(df, ["created", "Created"])
-    updated_col = _first_existing_column(df, ["updated", "Updated", "last_updated"])
-    resolved_col = _first_existing_column(df, ["resolved", "resolutiondate", "resolved_date", "completed_date", "done_date"])
-    target_end_col = _first_existing_column(df, ["target_end_date", "project_due_date", "Target End Date"])
-    key_col = _first_existing_column(df, ["key", "Key", "ticket", "Ticket"])
-    summary_col = _first_existing_column(df, ["summary", "Summary"])
-    lead_col = _first_existing_column(df, ["bussiness_lead", "business_lead", "Business Lead"])
+    t = _apply_filters(pe, filters, with_stage=False)
+    open_t = _apply_filters(open_all, filters, with_stage=True)
+    j = _judged(t, today)
+    start = today - pd.Timedelta(days=int(time_period_days))
+    prev_start = start - pd.Timedelta(days=int(time_period_days))
+    now_r, prev_r = _rates(j, start, today), _rates(j, prev_start, start)
 
-    # Exclude CAR project tickets from SLA analysis.
-    car_mask = pd.Series(False, index=df.index)
-    if "project_name" in df.columns:
-        car_mask = car_mask | df["project_name"].astype(str).str.strip().str.upper().eq("CAR")
-    if "project_key" in df.columns:
-        car_mask = car_mask | df["project_key"].astype(str).str.strip().str.upper().eq("CAR")
-    if key_col is not None:
-        car_mask = car_mask | df[key_col].astype(str).str.strip().str.upper().str.startswith("CAR-")
-    df = df[~car_mask].copy()
-    if df.empty:
-        return _empty_payload()
+    def delta(key):
+        return None if now_r[key] is None or prev_r[key] is None else now_r[key] - prev_r[key]
 
-    df = df[df["status_label"].str.lower().isin(allowed_statuses)].copy()
-    if df.empty:
-        return _empty_payload()
-
-    df["created_dt"] = _safe_datetime(df[created_col])
-    if updated_col is not None:
-        df["updated_dt"] = _safe_datetime(df[updated_col])
-    else:
-        df["updated_dt"] = pd.NaT
-    if resolved_col is not None:
-        df["resolved_dt"] = _safe_datetime(df[resolved_col])
-    else:
-        df["resolved_dt"] = pd.NaT
-    if target_end_col is not None:
-        df["target_end_dt"] = _safe_datetime(df[target_end_col])
-    else:
-        df["target_end_dt"] = pd.NaT
-
-    now = pd.Timestamp.now(tz="UTC")
-    window_start = now.normalize() - pd.Timedelta(days=time_period_days)
-
-    # Keep tickets created or resolved in the SLA review window.
-    df = df[(df["created_dt"] >= window_start) | (df["resolved_dt"] >= window_start)].copy()
-    if df.empty:
-        return _empty_payload()
-
-    done_statuses = {"done", "closed", "resolved", "complete", "completed"}
-    df["is_closed"] = df["status_label"].str.lower().isin(done_statuses) | df["resolved_dt"].notna()
-
-    df["resolved_or_now_dt"] = df["resolved_dt"].where(df["resolved_dt"].notna(), now)
-    # If this is still open but has been updated more recently than created, keep the latest reliable timestamp.
-    df.loc[~df["is_closed"], "resolved_or_now_dt"] = now
-
-    df["elapsed_days"] = (df["resolved_or_now_dt"] - df["created_dt"]).dt.total_seconds() / 86400.0
-    df["elapsed_days"] = pd.to_numeric(df["elapsed_days"], errors="coerce")
-
-    # SLA target days: prefer ticket-specific target end date if present; otherwise derive from priority.
-    priority_target_days = df["priority_label"].apply(_priority_sla_days)
-    if target_end_col is not None:
-        ticket_target_days = (df["target_end_dt"] - df["created_dt"]).dt.total_seconds() / 86400.0
-        ticket_target_days = pd.to_numeric(ticket_target_days, errors="coerce")
-        df["sla_target_days"] = ticket_target_days.where(ticket_target_days > 0, priority_target_days)
-    else:
-        df["sla_target_days"] = priority_target_days
-
-    df["remaining_days"] = df["sla_target_days"] - df["elapsed_days"]
-    df["risk_score"] = [
-        _build_risk_score(elapsed, target, closed)
-        for elapsed, target, closed in zip(df["elapsed_days"], df["sla_target_days"], df["is_closed"])
-    ]
-
-    def _sla_status(row: pd.Series) -> str:
-        elapsed = row["elapsed_days"]
-        target = row["sla_target_days"]
-        if pd.isna(elapsed) or pd.isna(target) or target <= 0:
-            return "Unknown"
-        if row["is_closed"]:
-            return "Breached" if elapsed > target else "On Track"
-        if elapsed > target:
-            return "Breached"
-        if elapsed >= (0.8 * target):
-            return "At Risk"
-        return "On Track"
-
-    df["sla_status"] = df.apply(_sla_status, axis=1)
-    status_order = ["On Track", "At Risk", "Breached", "Unknown"]
-    priority_order = ["Urgent", "High", "Medium", "Low", "None"]
-    df["priority_label"] = pd.Categorical(df["priority_label"], categories=priority_order, ordered=True)
-
-    # Overall KPIs
-    total_tickets = int(len(df))
-    on_track = int((df["sla_status"] == "On Track").sum())
-    at_risk = int((df["sla_status"] == "At Risk").sum())
-    breached = int((df["sla_status"] == "Breached").sum())
-    unknown = int((df["sla_status"] == "Unknown").sum())
-    breach_rate = float(breached / total_tickets * 100.0) if total_tickets else 0.0
-    at_risk_rate = float(at_risk / total_tickets * 100.0) if total_tickets else 0.0
-    median_elapsed_days = float(df["elapsed_days"].median()) if not df["elapsed_days"].dropna().empty else 0.0
-    median_target_days = float(df["sla_target_days"].median()) if not df["sla_target_days"].dropna().empty else 0.0
-
-    # Counts and rates by priority.
-    by_priority = (
-        df.groupby(["priority_label", "sla_status"], observed=True)
-        .size()
-        .reset_index(name="count")
-    )
-    priority_totals = df.groupby("priority_label", observed=True).size().reset_index(name="total")
-    priority_summary = (
-        df.groupby("priority_label", observed=True)
-        .agg(
-            total_tickets=("sla_status", "size"),
-            breached=("sla_status", lambda s: int((s == "Breached").sum())),
-            at_risk=("sla_status", lambda s: int((s == "At Risk").sum())),
-            on_track=("sla_status", lambda s: int((s == "On Track").sum())),
-            median_elapsed_days=("elapsed_days", "median"),
-            p75_elapsed_days=("elapsed_days", lambda s: float(s.quantile(0.75)) if not s.dropna().empty else 0.0),
-            median_target_days=("sla_target_days", "median"),
-        )
-        .reset_index()
-    )
-    priority_summary["breach_rate_pct"] = priority_summary["breached"] / priority_summary["total_tickets"] * 100.0
-    priority_summary["at_risk_rate_pct"] = priority_summary["at_risk"] / priority_summary["total_tickets"] * 100.0
-    priority_summary["on_track_rate_pct"] = priority_summary["on_track"] / priority_summary["total_tickets"] * 100.0
-    priority_summary["priority_label"] = priority_summary["priority_label"].astype(str)
-
-    # Interactive visual 1: overall SLA status mix.
-    status_fig = px.pie(
-        df,
-        names="sla_status",
-        color="sla_status",
-        category_orders={"sla_status": status_order},
-        title="SLA Status Mix (last 90 days)",
-        hole=0.48,
-        color_discrete_map={
-            "On Track": "#16a34a",
-            "At Risk": "#f59e0b",
-            "Breached": "#dc2626",
-            "Unknown": "#94a3b8",
-        },
-    )
-    status_fig.update_layout(height=390, legend_title_text="SLA Status")
-
-    # Interactive visual 2: priority distribution of SLA status.
-    priority_fig = px.bar(
-        by_priority,
-        x="priority_label",
-        y="count",
-        color="sla_status",
-        barmode="stack",
-        category_orders={"priority_label": priority_order, "sla_status": status_order},
-        title="SLA Performance by Priority",
-        labels={"priority_label": "Priority", "count": "Tickets"},
-        color_discrete_map={
-            "On Track": "#16a34a",
-            "At Risk": "#f59e0b",
-            "Breached": "#dc2626",
-            "Unknown": "#94a3b8",
-        },
-        hover_data={"count": True},
-    )
-    priority_fig.update_layout(height=420, xaxis_title="Priority", yaxis_title="Ticket Count")
-
-    # Interactive visual 3: elapsed days vs SLA target days, with a robust box layout.
-    box_fig = px.box(
-        df,
-        x="priority_label",
-        y="elapsed_days",
-        color="sla_status",
-        points="outliers",
-        category_orders={"priority_label": priority_order, "sla_status": status_order},
-        title="Elapsed Days vs SLA Target by Priority",
-        labels={"priority_label": "Priority", "elapsed_days": "Elapsed Days"},
-        color_discrete_map={
-            "On Track": "#16a34a",
-            "At Risk": "#f59e0b",
-            "Breached": "#dc2626",
-            "Unknown": "#94a3b8",
-        },
-        hover_data=["sla_target_days", "remaining_days", "risk_score"],
-    )
-    box_fig.update_layout(height=450, xaxis_title="Priority", yaxis_title="Elapsed Days")
-
-    # Interactive visual 4: breach risk heatmap by assignee and priority.
-    assignee_priority = (
-        df.groupby(["assignee_label", "priority_label"], observed=True)
-        .agg(
-            total=("sla_status", "size"),
-            breached=("sla_status", lambda s: int((s == "Breached").sum())),
-            breach_rate=("sla_status", lambda s: float((s == "Breached").mean() * 100.0)),
-        )
-        .reset_index()
-    )
-    top_assignees = (
-        df["assignee_label"].value_counts().head(15).index.tolist()
-    )
-    heatmap_df = assignee_priority[assignee_priority["assignee_label"].isin(top_assignees)].copy()
-
-    heatmap_fig = px.density_heatmap(
-        heatmap_df,
-        x="priority_label",
-        y="assignee_label",
-        z="breach_rate",
-        histfunc="avg",
-        color_continuous_scale="RdYlGn_r",
-        category_orders={"priority_label": priority_order},
-        title="SLA Breach Rate Heatmap by Assignee (Top 15)",
-        labels={"priority_label": "Priority", "assignee_label": "Assignee", "breach_rate": "Breach Rate %"},
-        text_auto=True,
-    )
-    heatmap_fig.update_layout(height=520, xaxis_title="Priority", yaxis_title="Assignee")
-
-    # Interactive visual 5: weekly trend of SLA health.
-    weekly = df.copy()
-    weekly["week"] = weekly["created_dt"].dt.to_period("W").dt.start_time
-    trend_df = (
-        weekly.groupby("week", as_index=False)
-        .agg(
-            created=("sla_status", "size"),
-            breached=("sla_status", lambda s: int((s == "Breached").sum())),
-            at_risk=("sla_status", lambda s: int((s == "At Risk").sum())),
-            on_track=("sla_status", lambda s: int((s == "On Track").sum())),
-        )
-    )
-    trend_df["breach_rate_pct"] = trend_df.apply(
-        lambda r: (r["breached"] / r["created"] * 100.0) if r["created"] else 0.0,
-        axis=1,
-    )
-    trend_fig = px.line(
-        trend_df,
-        x="week",
-        y=["created", "breached", "at_risk"],
-        markers=True,
-        title="SLA Trend Over Time (Created Tickets by Week)",
-        labels={"value": "Tickets", "week": "Week"},
-    )
-    trend_fig.update_layout(height=380, xaxis_title="Week", yaxis_title="Ticket Count", legend_title_text="Metric")
-
-    # Detail table for leadership (focus on actionable tickets only).
-    detail_source = df[df["sla_status"].isin(["At Risk", "Breached"])].copy()
-
-    detail_df = detail_source[
-        [
-            c for c in [
-                key_col,
-                summary_col,
-                "priority_label",
-                "assignee_label",
-                "status_label",
-                "created_dt",
-                "target_end_dt",
-                "resolved_dt",
-                "sla_target_days",
-                "elapsed_days",
-                "remaining_days",
-                "risk_score",
-                "sla_status",
-            ]
-            if c is not None and c in df.columns
-        ]
-    ].copy()
-    detail_df.columns = [
-        "Ticket" if c == key_col else
-        "Summary" if c == summary_col else
-        "Priority" if c == "priority_label" else
-        "Assignee" if c == "assignee_label" else
-        "Status" if c == "status_label" else
-        "Created" if c == "created_dt" else
-        "Target End" if c == "target_end_dt" else
-        "Resolved" if c == "resolved_dt" else
-        "SLA Target Days" if c == "sla_target_days" else
-        "Elapsed Days" if c == "elapsed_days" else
-        "Remaining Days" if c == "remaining_days" else
-        "Risk Score" if c == "risk_score" else
-        "SLA Status"
-        for c in detail_df.columns
-    ]
-    if "Ticket" in detail_df.columns:
-        detail_df["Ticket"] = detail_df["Ticket"].astype(str).apply(lambda t: f"{JIRA_BROWSE_BASE_URL}{t}")
-    if "Summary" in detail_df.columns:
-        detail_df["Summary"] = detail_df["Summary"].fillna("").astype(str).str[:180]
-
-    # Keep urgent-first ordering for leadership review.
-    if "SLA Status" in detail_df.columns:
-        status_order_map = {"Breached": 0, "At Risk": 1}
-        detail_df["__status_sort"] = detail_df["SLA Status"].map(status_order_map).fillna(99)
-    else:
-        detail_df["__status_sort"] = 99
-    if "Risk Score" in detail_df.columns:
-        detail_df = detail_df.sort_values(["__status_sort", "Risk Score"], ascending=[True, False])
-    else:
-        detail_df = detail_df.sort_values(["__status_sort"], ascending=[True])
-    detail_df = detail_df.drop(columns=["__status_sort"])
-
-    breached_df = df[df["sla_status"] == "Breached"].copy()
-    breached_df = breached_df.sort_values(["risk_score", "elapsed_days"], ascending=[False, False])
-    breached_df = breached_df[
-        [
-            c for c in [
-                key_col,
-                summary_col,
-                lead_col,
-                "priority_label",
-                "assignee_label",
-                "elapsed_days",
-                "sla_target_days",
-                "remaining_days",
-                "risk_score",
-            ]
-            if c is not None and c in breached_df.columns
-        ]
-    ].copy()
-    breached_df.columns = [
-        "Ticket" if c == key_col else
-        "Summary" if c == summary_col else
-        "Business Lead" if c == lead_col else
-        "Priority" if c == "priority_label" else
-        "Assignee" if c == "assignee_label" else
-        "Elapsed Days" if c == "elapsed_days" else
-        "SLA Target Days" if c == "sla_target_days" else
-        "Remaining Days" if c == "remaining_days" else
-        "Risk Score"
-        for c in breached_df.columns
-    ]
-    if "Ticket" in breached_df.columns:
-        breached_df["Ticket"] = breached_df["Ticket"].astype(str).apply(lambda t: f"{JIRA_BROWSE_BASE_URL}{t}")
-    if "Summary" in breached_df.columns:
-        breached_df["Summary"] = breached_df["Summary"].fillna("").astype(str).str[:180]
-
-    # Scatter plot at the bottom for breached tickets grouped by assignee and business lead when available.
-    scatter_fig = None
-    if not breached_df.empty:
-        scatter_source = breached_df.copy()
-        if "Business Lead" not in scatter_source.columns:
-            scatter_source["Business Lead"] = "No Business Lead"
-        scatter_source["Business Lead"] = scatter_source["Business Lead"].fillna("No Business Lead").astype(str).str.strip()
-        scatter_source["Assignee"] = scatter_source["Assignee"].fillna("Unassigned").astype(str).str.strip()
-
-        scatter_agg = (
-            scatter_source.groupby(["Assignee", "Business Lead"], as_index=False)
-            .agg(
-                Breached_Tickets=("Ticket", "size"),
-                Avg_Elapsed_Days=("Elapsed Days", "mean"),
-                Avg_Risk_Score=("Risk Score", "mean"),
-                Avg_SLA_Target_Days=("SLA Target Days", "mean"),
-            )
-        )
-
-        scatter_fig = px.scatter(
-            scatter_agg,
-            x="Assignee",
-            y="Business Lead",
-            size="Breached_Tickets",
-            color="Avg_Risk_Score",
-            color_continuous_scale="RdYlGn_r",
-            size_max=34,
-            title="Breached Tickets by Assignee and Business Lead",
-            hover_name="Assignee",
-            hover_data={
-                "Breached_Tickets": True,
-                "Avg_Elapsed_Days": ":.1f",
-                "Avg_SLA_Target_Days": ":.1f",
-                "Avg_Risk_Score": ":.2f",
-                "Business Lead": True,
-            },
-        )
-        scatter_fig.update_layout(height=480, xaxis_title="Assignee", yaxis_title="Business Lead")
-        scatter_fig.update_xaxes(tickangle=45)
-
-    return {
-        "total_tickets": total_tickets,
-        "on_track": on_track,
-        "at_risk": at_risk,
-        "breached": breached,
-        "unknown": unknown,
-        "breach_rate": breach_rate,
-        "at_risk_rate": at_risk_rate,
-        "median_elapsed_days": median_elapsed_days,
-        "median_sla_target_days": median_target_days,
-        "status_fig": status_fig,
-        "priority_fig": priority_fig,
-        "box_fig": box_fig,
-        "heatmap_fig": heatmap_fig,
-        "trend_fig": trend_fig,
-        "scatter_fig": scatter_fig,
-        "detail_df": detail_df,
-        "breached_df": breached_df,
-        "priority_summary_df": priority_summary,
+    horizon = ipr._add_busdays(pd.Series([today]), pd.Series([float(DUE_SOON_BD)]), hol).iloc[0]
+    open_with_clock = open_t["sla_due"].notna()
+    payload["kpis"] = {
+        **now_r,
+        "due_rate_delta": delta("due_rate"), "done_rate_delta": delta("done_rate"),
+        "open_breached": int(open_t["risk"].eq("Breached").sum()),
+        "open_at_risk": int(open_t["risk"].isin(["Likely Late", "At Risk"]).sum()),
+        "due_soon": int((open_with_clock & (open_t["sla_due"] >= today) & (open_t["sla_due"] <= horizon)).sum()),
+        "open_total": int(len(open_t)),
+        "no_clock": int((~open_with_clock).sum()),
+        "goal": BREACH_GOAL,
+        "window_days": int(time_period_days),
     }
+    payload["trend_fig"], payload["trend_df"] = _trend_figure(j, today)
+    payload["heatmap_fig"] = _heatmap_figure(j, today)
+    payload["stage_fig"] = es._stage_figure(open_t) if not open_t.empty else None
+    payload["due_soon_fig"] = _due_soon_figure(open_t, today, hol)
+    payload["detail_df"] = _detail_table(open_t, today, hol, include_on_track)
+    payload["breached_df"] = _breached_table(j, today, hol, start, include_completed_late,
+                                             (filters or {}).get("stages"))
+    payload["as_of"] = today.date()
+    return payload

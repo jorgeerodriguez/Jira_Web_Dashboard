@@ -54,10 +54,16 @@ try:
 except (ImportError, OSError):
     build_word_of_the_month_visuals = None
 try:
-    from reports.service_level_agreement_report import build_sla_visuals, PRIORITY_SLA_DAYS
+    from reports.service_level_agreement_report import (
+        DEFAULT_WINDOW as SLA_DEFAULT_WINDOW,
+        DUE_SOON_BD as SLA_DUE_SOON_BD,
+        HEATMAP_DAYS as SLA_HEATMAP_DAYS,
+        MIN_CELL as SLA_MIN_CELL,
+        WINDOWS as SLA_WINDOWS,
+        build_sla_visuals,
+    )
 except ImportError:
     build_sla_visuals = None
-    PRIORITY_SLA_DAYS = {}
 try:
     from reports.probability_completion_report import (
         build_completion_on_time_model,
@@ -1722,93 +1728,152 @@ elif selected == "💬  Teams Conversations":
 # ── SLA ─────────────────────────────────────────────────────────────────────────
 elif selected == "🛡️  SLA (Service Level Agreements)":
     st.title("🛡️ SLA (Service Level Agreements)")
-    st.caption("Priority-based SLA performance for the last 90 days.")
-
-    if PRIORITY_SLA_DAYS:
-        sla_box_html = """
-        <div style="
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 14px;
-            padding: 0.85rem 1rem;
-            background: linear-gradient(180deg, rgba(248,250,252,0.95), rgba(241,245,249,0.95));
-            margin: 0.25rem 0 1rem 0;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-        ">
-            <div style="font-size: 0.92rem; font-weight: 700; color: #0f172a; margin-bottom: 0.35rem;">
-                SLA reference thresholds by priority
-            </div>
-            <div style="font-size: 0.84rem; color: #334155; line-height: 1.55;">
-                All priorities currently use <strong>90 days</strong> as the baseline reference point.<br/>
-                <span style="color:#475569;">
-                    Blocker: 90 · Highest: 90 · Critical: 90 · Urgent: 90 · High: 90 · Medium: 90 · Low: 90 · Lowest: 90
-                </span>
-            </div>
-        </div>
-        """
-        st.markdown(sla_box_html, unsafe_allow_html=True)
+    st.caption(
+        "Where work is breached, late or at risk, and the breach rate against the goal. SLAs are the Priority × Size "
+        "table in business days from Target start. PE tickets only (no Features, Initiatives or CAR tickets)."
+    )
 
     if build_sla_visuals is None:
         st.error("service_level_agreement_report module could not be loaded.")
         st.stop()
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    sla = build_sla_visuals(df_issues, time_period_days=90)
-
-    if sla["status_fig"] is None:
+    if df_issues is None or df_issues.empty:
         st.info("📥 Fetch Jira tickets from the sidebar to see SLA visuals.")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Tickets in SLA Window", f"{sla['total_tickets']:,}")
-        c2.metric("Breach Rate", f"{sla['breach_rate']:.1f}%")
-        c3.metric("At Risk", f"{sla['at_risk']:,}")
-        c4.metric("Median Elapsed Days", f"{sla['median_elapsed_days']:.1f}")
+        st.stop()
 
-        st.divider()
+    options = build_sla_visuals(df_issues)["filter_options"]
+    w1, f1, f2, f3, f4 = st.columns([2, 3, 3, 2, 2])
+    with w1:
+        window = st.radio("Breach rate window", SLA_WINDOWS, index=SLA_WINDOWS.index(SLA_DEFAULT_WINDOW),
+                          format_func=lambda d: f"{d} days", horizontal=True, key="sla_window")
+    with f1:
+        sel_assignees = st.multiselect("Assignee", options.get("assignees", []), key="sla_assignees")
+    with f2:
+        sel_leads = st.multiselect("Business Lead", options.get("leads", []), key="sla_leads")
+    with f3:
+        sel_priorities = st.multiselect("Priority", options.get("priorities", []), key="sla_priorities")
+    with f4:
+        sel_stages = st.multiselect("Stage (open work)", options.get("stages", []), key="sla_stages")
+    filters = {"assignees": sel_assignees, "leads": sel_leads, "priorities": sel_priorities, "stages": sel_stages}
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(sla["status_fig"], width="stretch")
-        with col2:
-            st.plotly_chart(sla["priority_fig"], width="stretch")
+    t1, t2 = st.columns(2)
+    with t1:
+        include_on_track = st.toggle("SLA Detail: also show on-track and not-assessed open tickets", value=False,
+                                     key="sla_include_on_track")
+    with t2:
+        include_completed = st.toggle(f"Breached Tickets: include tickets completed late in the last {window} days",
+                                      value=True, key="sla_include_completed")
 
-        st.plotly_chart(sla["box_fig"], width="stretch")
+    sla = build_sla_visuals(df_issues, time_period_days=window, filters=filters,
+                            include_on_track=include_on_track, include_completed_late=include_completed)
+    if sla["error_message"]:
+        st.error(f"❌ {sla['error_message']}")
+        st.stop()
 
-        col3, col4 = st.columns(2)
-        with col3:
+    kp = sla["kpis"]
+    goal = kp["goal"]
+
+    def _rate_tile(col, label, rate, delta, breached, n, help_text):
+        if rate is None:
+            col.metric(label, "—", help=help_text)
+            col.caption("No tickets in this window.")
+            return
+        col.metric(label, f"{rate:.1%}", f"{delta * 100:+.1f} pts vs previous {window}d" if delta is not None else None,
+                   delta_color="inverse", help=help_text)
+        verdict = "✓ under goal" if rate < goal else "✖ above goal"
+        col.caption(f"**{verdict}** (goal < {goal:.0%}) · {breached} of {n} tickets")
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    _rate_tile(k1, "Breach Rate · SLA came due", kp["due_rate"], kp["due_rate_delta"], kp["due_breached"], kp["due_n"],
+               "Of tickets whose SLA due date fell in the window, the share that missed it, including tickets still "
+               "open past their due date.")
+    _rate_tile(k2, "Breach Rate · completed late", kp["done_rate"], kp["done_rate_delta"], kp["done_late"], kp["done_n"],
+               "Of tickets moved to Done in the window, the share finished after their SLA due date "
+               "(as on the Trend and Executive Summary pages).")
+    k3.metric("✖ Open & Breached", f"{kp['open_breached']}", help="Open tickets already past their SLA due date.")
+    k4.metric("! At Risk / Likely Late", f"{kp['open_at_risk']}", help="Open tickets forecast to miss, or close to, their SLA.")
+    k5.metric(f"Due in Next {SLA_DUE_SOON_BD} bd", f"{kp['due_soon']}", help="Open tickets whose SLA comes due soon.")
+    k6.metric("No SLA Clock", f"{kp['no_clock']}", help="Open tickets without a Target start: they can't be judged. "
+              "Set a Target start in Jira.")
+
+    st.divider()
+    g1, g2 = st.columns([3, 2])
+    with g1:
+        st.subheader("Breach Rate Trend")
+        st.caption("Monthly, both definitions, against the goal. Hollow marker = current month so far.")
+        st.plotly_chart(sla["trend_fig"], width="stretch")
+    with g2:
+        st.subheader("Where Breaches Come From")
+        st.caption(f"SLA came due in the last {SLA_HEATMAP_DAYS} days: share missed by Priority × Size "
+                   f"(missed / due). * = fewer than {SLA_MIN_CELL} tickets.")
+        if sla["heatmap_fig"] is not None:
             st.plotly_chart(sla["heatmap_fig"], width="stretch")
-        with col4:
-            st.plotly_chart(sla["trend_fig"], width="stretch")
 
-        st.subheader("SLA Detail")
-        st.dataframe(
-            sla["detail_df"],
-            width="stretch",
-            column_config={
-                "Ticket": st.column_config.LinkColumn(
-                    "Ticket",
-                    help="Open Jira ticket",
-                    display_text=r".*/([^/]+)$",
-                )
-            },
+    g3, g4 = st.columns(2)
+    with g3:
+        st.subheader("Coming Due")
+        st.caption(f"Open tickets overdue or with their SLA due in the next {SLA_DUE_SOON_BD} business days, by forecast risk.")
+        if sla["due_soon_fig"] is not None:
+            st.plotly_chart(sla["due_soon_fig"], width="stretch")
+        else:
+            st.success("Nothing overdue or coming due soon.")
+    with g4:
+        st.subheader("Open Work by Stage")
+        st.caption("Open tickets by stage and SLA risk (same rules as the Executive Summary).")
+        if sla["stage_fig"] is not None:
+            st.plotly_chart(sla["stage_fig"], width="stretch")
+
+    def _searchable_table(title, caption, frame, key, file_name, extra_config=None):
+        st.subheader(title)
+        st.caption(caption)
+        if frame.empty:
+            st.success("No tickets to show with these filters.")
+            return
+        s1, s2 = st.columns([4, 1])
+        with s1:
+            query = st.text_input("Search", key=f"{key}_search", placeholder="Ticket, assignee, summary, comment…",
+                                  label_visibility="collapsed")
+        shown = frame
+        if query:
+            text = frame.astype(str).apply(lambda col: col.str.contains(query, case=False, regex=False))
+            shown = frame[text.any(axis=1)]
+        with s2:
+            st.download_button("⬇️ CSV", shown.to_csv(index=False).encode("utf-8"), file_name=file_name,
+                               mime="text/csv", key=f"{key}_csv", width="stretch")
+        config = {
+            "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira to comment or review",
+                                                  display_text=r".*/([^/]+)$"),
+            "Latest Comment": st.column_config.TextColumn("Latest Comment", width="large"),
+            "Summary": st.column_config.TextColumn("Summary", width="medium"),
+        }
+        config.update(extra_config or {})
+        st.dataframe(shown, width="stretch", hide_index=True, column_config=config, height=min(560, 38 + 35 * len(shown)))
+        st.caption(f"{len(shown)} of {len(frame)} tickets")
+
+    st.divider()
+    _searchable_table(
+        "SLA Detail",
+        "Open tickets that are breached, likely late or at risk, most urgent first. Days to SLA: negative = business days "
+        "overdue. Forecast Finish is the safe (P85) date from the In Progress / Backlog forecasts.",
+        sla["detail_df"], "sla_detail", "sla_detail.csv",
+        {"SLA Used %": st.column_config.ProgressColumn("SLA Used %", format="%d%%", min_value=0, max_value=100)},
+    )
+    _searchable_table(
+        "Breached Tickets",
+        "Still-open breached tickets first (most overdue first), then tickets completed late in the window.",
+        sla["breached_df"], "sla_breached", "sla_breached.csv",
+    )
+
+    with st.expander("SLA table and definitions"):
+        st.dataframe(sla["sla_table_df"], width="stretch", hide_index=True)
+        st.markdown(
+            "- The SLA clock starts at **Target start** and counts **business days** (weekends and company holidays "
+            "excluded). Unsized tickets use the Medium column.\n"
+            "- **Release Management (CAR)** tickets follow the release process and have no PE SLA.\n"
+            "- Tickets closed as **Will Not Do** or **Rolled Back** are never judged.\n"
+            f"- **Goal:** both breach rates under {goal:.0%}."
         )
-
-        if isinstance(sla.get("breached_df"), pd.DataFrame) and not sla["breached_df"].empty:
-            st.subheader("Breached Tickets")
-            st.dataframe(
-                sla["breached_df"],
-                width="stretch",
-                column_config={
-                    "Ticket": st.column_config.LinkColumn(
-                        "Ticket",
-                        help="Open Jira ticket",
-                        display_text=r".*/([^/]+)$",
-                    )
-                },
-            )
-
-        if sla.get("scatter_fig") is not None:
-            st.subheader("Breached Ticket Distribution by Assignee and Business Lead")
-            st.plotly_chart(sla["scatter_fig"], width="stretch")
 
 
 # ── Probability of completion on time ─────────────────────────────────────────
