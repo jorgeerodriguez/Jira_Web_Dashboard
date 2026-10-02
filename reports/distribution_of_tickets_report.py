@@ -1,278 +1,200 @@
-"""
-distribution_of_tickets_report.py
-──────────────────────────────────
-Builds Plotly visualisations for the Distribution of Ticket's Age page.
+"""Distribution of Ticket's Age: how old open work is against its SLA, and where it has gone quiet.
 
-Public API
-----------
-build_distribution_visuals(df_issues: pd.DataFrame) -> dict
-    Returns a dict with keys:
-        box_fig       – Plotly Figure: box plot of days_old by status
-        violin_fig    – Plotly Figure: violin plot of velocity_days by status
-        median_age    – int: median ticket age (days)
-        p75_age       – int: 75th-percentile ticket age (days)
-        open_count    – int: number of open tickets analysed
-        error_message – str | None
-"""
+Open tickets only, tickets-only (no Features or Initiatives), grouped into the same stages as the
+Executive Summary. Age is in business days. Four views:
 
+- Age against SLA -- share of each ticket's SLA already used (business days since Target start /
+  Priority x Size SLA), by stage, with the 100% line. Release Management (CAR) tickets have no PE SLA
+  and are not judged.
+- Silence -- business days since the last human comment (or since creation when nobody has
+  commented), by stage. Long silence flags forgotten work.
+- Age trend -- median and 75th-percentile age of the tickets that were open at the end of each of the
+  last 12 weeks, reconstructed from created and closed dates.
+- Table -- every open ticket with its age, SLA used and silence, past-SLA and quietest first.
+"""
+from __future__ import annotations
+
+import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
-# Statuses to exclude from both charts
-_EXCLUDE_STATUSES = {
-    "Done",
-    "Will Not Do",
-    "Released Successfully to Production",
-    "❌ Rolled Back",
-    "Prepare Release",
-    "Plan Release",
-    "Post Implementation Review",
-    "Deploy Release",
-    "Test and Validate",
-    "Review Release Plan",
-}
-
-# Additional statuses excluded only from the violin chart
-_VIOLIN_EXTRA_EXCLUDE = {
-    "Resource Constrained",
-    "Blocked For Development",
-    "Plan Release",
-    "Technical Debt",
-}
+from reports import executive_summary as es
+from reports import in_progress_report as ipr
 
 
-def _filter_open(df: pd.DataFrame, extra_exclude: set = None) -> pd.DataFrame:
-    """Return rows whose status is not in the excluded sets."""
-    exclude = _EXCLUDE_STATUSES | (extra_exclude or set())
-    return df[~df["status"].isin(exclude)].copy()
+JIRA_BROWSE_BASE_URL = ipr.JIRA_BROWSE_BASE_URL
+SILENT_THRESHOLD_BD = 10
+TREND_WEEKS = 12
+SILENCE_BANDS = [(-1, 4, "Under 5 days"), (4, 9, "5–9 days"), (9, 19, "10–19 days"), (19, 100_000, "20+ days")]
+SILENCE_SHADES = ["#cfe0f6", "#7fb0ea", "#2a78d6", "#0b3d91"]   # one hue, light = recent, dark = quiet
+SERIES_COLORS = es.SERIES_COLORS
+INK = ipr.INK
+GRID = es.GRID
 
 
-def _risk_band(age_days: float) -> str:
-    """Classify ticket age into executive-friendly risk bands."""
-    if age_days >= 90:
-        return "Critical"
-    if age_days >= 60:
-        return "Aging"
-    if age_days >= 30:
-        return "Watch"
-    return "Healthy"
+def _empty_payload(message: str | None = None) -> dict:
+    return {
+        "open_count": 0, "median_age_bd": None, "past_sla": 0, "silent_count": 0, "oldest": None,
+        "sla_fig": None, "silence_fig": None, "trend_fig": None,
+        "status_df": pd.DataFrame(), "tickets_df": pd.DataFrame(), "error_message": message,
+    }
+
+
+def _last_human_comment(comments) -> pd.Timestamp:
+    if not isinstance(comments, list):
+        return pd.NaT
+    times = [c["created"] for c in comments if pd.notna(c.get("created"))]
+    return max(times) if times else pd.NaT
+
+
+def _open_tickets(df_issues: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray) -> tuple[pd.DataFrame, pd.DataFrame]:
+    t = es._facts(df_issues, today, hol)
+    o = t[~t["is_closed"]].copy()
+    now = pd.Series(today, index=o.index)
+    o["age_bd"] = ipr._busdays_between(o["created_day"], now, hol).fillna(0)
+    started = o["start_day"].where(o["start_day"] <= today)
+    o["sla_used"] = (ipr._busdays_between(started, now, hol) / o["sla_bd"]).where(o["sla_applies"])
+    comments = o["comments"] if "comments" in o.columns else pd.Series([None] * len(o), index=o.index)
+    o["last_human_day"] = ipr._to_day(comments.apply(_last_human_comment), ipr.LOCAL_TZ)
+    o["silent_bd"] = ipr._busdays_between(o["last_human_day"].fillna(o["created_day"]), now, hol).fillna(0)
+    o["silence_band"] = pd.cut(o["silent_bd"], [b[0] for b in SILENCE_BANDS] + [SILENCE_BANDS[-1][1]],
+                               labels=[b[2] for b in SILENCE_BANDS])
+    return t, o
+
+
+def _stage_label(o: pd.DataFrame) -> dict:
+    counts = o["stage"].value_counts()
+    return {s: f"{s} ({counts[s]})" for s in counts.index}
+
+
+def _sla_figure(o: pd.DataFrame) -> go.Figure | None:
+    judged = o[o["sla_used"].notna()]
+    if judged.empty:
+        return None
+    stages = [s for s in es.STAGE_ORDER if s in set(judged["stage"])]
+    fig = go.Figure()
+    for stage in stages:
+        rows = judged[judged["stage"] == stage]
+        fig.add_trace(go.Box(
+            x=rows["sla_used"], y=[f"{stage} ({len(rows)})"] * len(rows), orientation="h", name=stage,
+            marker=dict(color=SERIES_COLORS[0], size=7, opacity=0.75), line=dict(color=SERIES_COLORS[0], width=2),
+            fillcolor="rgba(42,120,214,0.15)", boxpoints="all", jitter=0.4, pointpos=0,
+            customdata=np.stack([rows["key"], rows["priority_bucket"], rows["sla_bd"], rows["age_bd"]], axis=-1),
+            hovertemplate="<b>%{customdata[0]}</b><br>%{x:.0%} of a %{customdata[2]}-day SLA used"
+                          "<br>%{customdata[1]} priority · %{customdata[3]} business days old<extra></extra>",
+            showlegend=False,
+        ))
+    fig.add_vline(x=1.0, line_width=2, line_dash="dash", line_color=INK)
+    fig.add_annotation(x=1.0, y=1, xref="x", yref="paper", text="SLA due", showarrow=False,
+                       xanchor="left", yanchor="bottom", font={"color": INK})
+    upper = max(1.25, float(judged["sla_used"].quantile(0.97)) * 1.1)
+    fig.update_xaxes(tickformat=".0%", range=[0, upper], title="Share of SLA used", gridcolor=GRID)
+    fig.update_yaxes(autorange="reversed", title=None)
+    fig.update_layout(height=max(300, 70 * len(stages) + 100), margin=dict(l=10, r=10, t=30, b=10))
+    return fig
+
+
+def _silence_figure(o: pd.DataFrame) -> go.Figure:
+    labels = _stage_label(o)
+    stages = [s for s in es.STAGE_ORDER if s in labels]
+    counts = (o.groupby(["stage", "silence_band"], observed=False).size().unstack(fill_value=0)
+              .reindex(stages, fill_value=0))
+    fig = go.Figure()
+    for band, shade in zip([b[2] for b in SILENCE_BANDS], SILENCE_SHADES):
+        fig.add_trace(go.Bar(
+            y=[labels[s] for s in stages], x=counts[band] if band in counts else [0] * len(stages),
+            name=band, orientation="h",
+            marker=dict(color=shade, line=dict(color="rgba(255,255,255,0.9)", width=2)),
+            hovertemplate="%{y} · last human comment " + band + " ago: %{x} ticket(s)<extra></extra>",
+        ))
+    fig.update_yaxes(autorange="reversed", title=None)
+    fig.update_xaxes(title="Open tickets", gridcolor=GRID)
+    fig.update_layout(barmode="stack", height=max(280, 46 * len(stages) + 110),
+                      legend_title_text="Since last human comment (business days)",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(l=10, r=10, t=50, b=10))
+    return fig
+
+
+def _trend_figure(t: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray) -> tuple[go.Figure, pd.DataFrame]:
+    week_ends = pd.date_range(end=today, periods=TREND_WEEKS, freq="W-SUN")
+    rows = []
+    for end in week_ends:
+        open_then = t[(t["created_day"] <= end) & (t["closed_day"].isna() | (t["closed_day"] > end))]
+        ages = ipr._busdays_between(open_then["created_day"], pd.Series(end, index=open_then.index), hol).dropna()
+        rows.append({"week_end": end, "open": len(open_then),
+                     "median": float(ages.median()) if len(ages) else np.nan,
+                     "p75": float(ages.quantile(0.75)) if len(ages) else np.nan})
+    trend = pd.DataFrame(rows)
+    fig = go.Figure()
+    for col, name, color in [("median", "Median age", SERIES_COLORS[0]), ("p75", "75th percentile", SERIES_COLORS[1])]:
+        fig.add_trace(go.Scatter(
+            x=trend["week_end"], y=trend[col], name=name, mode="lines+markers", line=dict(color=color, width=2),
+            marker=dict(size=8), customdata=trend[["open"]],
+            hovertemplate=f"{name}: %{{y:.0f}} business days (%{{customdata[0]}} open)<extra></extra>",
+        ))
+    fig.update_xaxes(title="Week ending", tickformat="%b %d", gridcolor=GRID)
+    fig.update_yaxes(title="Age of open tickets (business days)", rangemode="tozero", gridcolor=GRID)
+    fig.update_layout(height=320, hovermode="x unified", legend_title_text="",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(l=10, r=10, t=40, b=10))
+    return fig, trend
 
 
 def build_distribution_visuals(df_issues: pd.DataFrame) -> dict:
-    """
-    Build ticket-age distribution charts from *df_issues*.
+    if df_issues is None or df_issues.empty:
+        return _empty_payload("No ticket data available.")
+    required = {"key", "status", "assignee_name", "issuetype", "created", "updated"}
+    if not required.issubset(df_issues.columns):
+        return _empty_payload("Ticket data is missing required columns.")
 
-    Parameters
-    ----------
-    df_issues : pd.DataFrame
-        The master issues DataFrame produced by build_issues_dataframe().
+    today = ipr.today_local()
+    hol = ipr._calendar_holidays(today)
+    t, o = _open_tickets(df_issues, today, hol)
+    if o.empty:
+        return _empty_payload("No open tickets.")
 
-    Returns
-    -------
-    dict with keys: box_fig, violin_fig, median_age, p75_age,
-                    open_count, error_message
-    """
-    result = {
-        "box_fig": None,
-        "violin_fig": None,
-        "median_age": None,
-        "p75_age": None,
-        "open_count": 0,
+    trend_fig, trend = _trend_figure(t, today, hol)
+    oldest = o.sort_values("age_bd", ascending=False).iloc[0]
+
+    status_df = (o.groupby(["stage", "status"])
+                 .agg(tickets=("key", "size"), median_age=("age_bd", "median"), median_silent=("silent_bd", "median"),
+                      past_sla=("sla_used", lambda s: int((s > 1).sum())))
+                 .reset_index())
+    status_df["_order"] = status_df["stage"].map({s: i for i, s in enumerate(es.STAGE_ORDER)})
+    status_df = status_df.sort_values(["_order", "tickets"], ascending=[True, False]).drop(columns="_order")
+    status_df.columns = ["Stage", "Status", "Open Tickets", "Median Age (bd)", "Median Silence (bd)", "Past SLA"]
+
+    table = o.assign(_past=o["sla_used"].fillna(0) > 1).sort_values(
+        ["_past", "sla_used", "silent_bd"], ascending=[False, False, False], na_position="last")
+    summary = table["summary"] if "summary" in table.columns else pd.Series("", index=table.index)
+    tickets_df = pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + table["key"].astype(str),
+        "Stage": table["stage"],
+        "Status": table["status"],
+        "Priority": table["priority_bucket"],
+        "Size": table["size"],
+        "Age (bd)": table["age_bd"].astype(int),
+        "SLA Used %": (table["sla_used"] * 100).round(0),
+        "Silent (bd)": table["silent_bd"].astype(int),
+        "Last Human Comment": table["last_human_day"].dt.date,
+        "Assignee": table["assignee_name"],
+        "Business Lead": table["lead"],
+        "Summary": summary.fillna("").astype(str).str[:90],
+    })
+
+    median_age = float(o["age_bd"].median())
+    return {
+        "open_count": int(len(o)),
+        "median_age_bd": median_age,
+        "past_sla": int((o["sla_used"] > 1).sum()),
+        "silent_count": int((o["silent_bd"] >= SILENT_THRESHOLD_BD).sum()),
+        "oldest": {"key": oldest["key"], "age_bd": int(oldest["age_bd"]), "stage": oldest["stage"]},
+        "sla_fig": _sla_figure(o),
+        "silence_fig": _silence_figure(o),
+        "trend_fig": trend_fig,
+        "trend_df": trend,
+        "status_df": status_df,
+        "tickets_df": tickets_df,
+        "open_df": o,
+        "p75_age_bd": float(o["age_bd"].quantile(0.75)),
         "error_message": None,
     }
-
-    if df_issues is None or df_issues.empty:
-        result["error_message"] = "No ticket data available."
-        return result
-
-    # ── Box plot: days_old by status ─────────────────────────────────────────
-    try:
-        df_box = _filter_open(df_issues)
-
-        if "days_old" not in df_box.columns:
-            result["error_message"] = "Column 'days_old' not found in data."
-            return result
-
-        df_box = df_box.dropna(subset=["days_old", "status"])
-        df_box["days_old"] = pd.to_numeric(df_box["days_old"], errors="coerce")
-        df_box = df_box.dropna(subset=["days_old"])
-
-        # Sort statuses by median age descending so the most aged appear first
-        order = (
-            df_box.groupby("status")["days_old"]
-            .median()
-            .sort_values(ascending=False)
-            .index.tolist()
-        )
-
-        box_fig = px.box(
-            df_box,
-            x="status",
-            y="days_old",
-            color="status",
-            category_orders={"status": order},
-            title="Distribution of Ticket Age by Status",
-            labels={"status": "Status", "days_old": "Ticket Age (days)"},
-            color_discrete_sequence=px.colors.qualitative.Vivid,
-        )
-        box_fig.update_layout(
-            xaxis_tickangle=-45,
-            showlegend=False,
-            height=450,
-            yaxis=dict(rangemode="tozero"),
-        )
-
-        result["box_fig"] = box_fig
-        result["open_count"] = len(df_box)
-        result["median_age"] = int(df_box["days_old"].median())
-        result["p75_age"] = int(df_box["days_old"].quantile(0.75))
-
-    except Exception as exc:
-        result["error_message"] = f"Box plot error: {exc}"
-        return result
-
-    # ── Executive violin view: ticket age risk by status ────────────────────
-    try:
-        df_violin = _filter_open(df_issues, extra_exclude=_VIOLIN_EXTRA_EXCLUDE)
-
-        age_column = "days_old" if "days_old" in df_violin.columns else "velocity_days"
-        if age_column not in df_violin.columns:
-            return result
-
-        df_violin = df_violin.dropna(subset=[age_column, "status"])
-        df_violin[age_column] = pd.to_numeric(df_violin[age_column], errors="coerce")
-        df_violin = df_violin.dropna(subset=[age_column])
-
-        summary = (
-            df_violin.groupby("status")[age_column]
-            .agg(ticket_count="size", median_age="median", mean_age="mean", max_age="max")
-            .reset_index()
-        )
-        p75_series = df_violin.groupby("status")[age_column].quantile(0.75)
-        summary["p75_age"] = summary["status"].map(p75_series)
-        summary["risk_band"] = summary["median_age"].apply(_risk_band)
-
-        violin_order = (
-            summary.sort_values(["median_age", "ticket_count"], ascending=[False, False])["status"]
-            .tolist()
-        )
-        summary = summary.set_index("status").loc[violin_order].reset_index()
-
-        color_map = {
-            "Critical": "#7f1d1d",
-            "Aging": "#9a3412",
-            "Watch": "#1d4ed8",
-            "Healthy": "#0f766e",
-        }
-
-        x_upper = max(120, float(df_violin[age_column].max()) * 1.15)
-        violin_fig = go.Figure()
-
-        for _, row in summary.iterrows():
-            status = row["status"]
-            status_df = df_violin[df_violin["status"] == status]
-            customdata = [
-                [
-                    int(row["ticket_count"]),
-                    float(row["median_age"]),
-                    float(row["p75_age"]),
-                    float(row["mean_age"]),
-                    float(row["max_age"]),
-                    row["risk_band"],
-                ]
-            ] * len(status_df)
-
-            violin_fig.add_trace(
-                go.Violin(
-                    x=status_df[age_column],
-                    y=[status] * len(status_df),
-                    name=status,
-                    orientation="h",
-                    legendgroup=row["risk_band"],
-                    scalegroup=status,
-                    spanmode="hard",
-                    box_visible=True,
-                    meanline_visible=True,
-                    line_color=color_map[row["risk_band"]],
-                    fillcolor=color_map[row["risk_band"]],
-                    opacity=0.45,
-                    points=False,
-                    customdata=customdata,
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "Ticket age: %{x:.0f} days<br>"
-                        "Open tickets: %{customdata[0]}<br>"
-                        "Median age: %{customdata[1]:.0f} days<br>"
-                        "75th percentile: %{customdata[2]:.0f} days<br>"
-                        "Average age: %{customdata[3]:.0f} days<br>"
-                        "Oldest ticket: %{customdata[4]:.0f} days<br>"
-                        "Risk band: %{customdata[5]}<extra></extra>"
-                    ),
-                )
-            )
-
-        violin_fig.add_vrect(x0=0, x1=30, fillcolor="#dbeafe", opacity=0.22, line_width=0)
-        violin_fig.add_vrect(x0=30, x1=60, fillcolor="#e0f2fe", opacity=0.20, line_width=0)
-        violin_fig.add_vrect(x0=60, x1=90, fillcolor="#ffedd5", opacity=0.22, line_width=0)
-        violin_fig.add_vrect(x0=90, x1=x_upper, fillcolor="#fee2e2", opacity=0.24, line_width=0)
-
-        violin_fig.add_vline(x=30, line_width=1, line_dash="dot", line_color="#2563eb")
-        violin_fig.add_vline(x=60, line_width=1, line_dash="dot", line_color="#f59e0b")
-        violin_fig.add_vline(x=90, line_width=1.5, line_dash="dash", line_color="#b91c1c")
-
-        violin_fig.add_trace(
-            go.Scatter(
-                x=summary["median_age"],
-                y=summary["status"],
-                mode="markers+text",
-                text=[
-                    f"Median {median:.0f}d · P75 {p75:.0f}d · n={count}"
-                    for median, p75, count in zip(
-                        summary["median_age"], summary["p75_age"], summary["ticket_count"]
-                    )
-                ],
-                textposition="middle right",
-                marker=dict(size=10, color="#0f172a", symbol="diamond"),
-                name="Median summary",
-                hovertemplate=(
-                    "<b>%{y}</b><br>"
-                    "Median age: %{x:.0f} days<extra></extra>"
-                ),
-                showlegend=False,
-            )
-        )
-
-        violin_fig.update_layout(
-            title="Executive View: Ticket Age Risk by Status",
-            xaxis_title="Ticket Age (days)",
-            yaxis_title=None,
-            xaxis=dict(range=[0, x_upper]),
-            yaxis=dict(categoryorder="array", categoryarray=violin_order),
-            height=max(460, 110 + 65 * len(violin_order)),
-            showlegend=False,
-            margin=dict(l=20, r=180, t=70, b=20),
-            paper_bgcolor="#000000",
-            plot_bgcolor="#000000",
-            font=dict(color="#f8fafc"),
-        )
-        violin_fig.add_annotation(
-            x=x_upper,
-            y=1.08,
-            xref="x",
-            yref="paper",
-            text="Healthy <30d · Watch 30-59d · Aging 60-89d · Critical 90d+",
-            showarrow=False,
-            xanchor="right",
-            font=dict(size=11, color="#e2e8f0"),
-        )
-
-        violin_fig.update_xaxes(showgrid=True, gridcolor="#334155", zeroline=False)
-        violin_fig.update_yaxes(showgrid=False)
-
-        result["violin_fig"] = violin_fig
-
-    except Exception as exc:
-        result["error_message"] = f"Violin plot error: {exc}"
-
-    return result

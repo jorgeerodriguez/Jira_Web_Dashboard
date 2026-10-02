@@ -19,6 +19,7 @@ It supports:
 - **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
 - **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
+- **Distribution of Ticket's Age**: open-work age against SLA, where work has gone quiet (no human comment), and whether open work is getting older — see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
 - Trend report includes completed-ticket trend per PE team member
@@ -74,6 +75,7 @@ Jira_Web_Dashboard/
 │   ├── test_word_of_the_month.py
 │   ├── test_blocked_on_hold.py
 │   ├── test_executive_summary.py
+│   ├── test_ticket_age.py
 │   └── ...
 └── backup/
 ```
@@ -200,7 +202,8 @@ These rules are shared across reports so the numbers agree:
 - **Ticket**: any issue type except **Feature** and **Initiative**. Those are containers tracked
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
-  Summary, In Progress, Backlog, Blocked & On Hold and Teams Conversations reports. The Executive
+  Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age and Teams
+  Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
   `EXCLUDED_ASSIGNEES`, so their counts agree. The Trend and Size Distribution reports exclude Features
   only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
@@ -464,6 +467,31 @@ comments weren't loaded, and general-purpose sentiment misreads normal DevOps wo
 
 ---
 
+## How Distribution of Ticket's Age works
+
+The **Distribution of Ticket's Age** page shows how old open work is *against its SLA* and where it
+has gone quiet. Code: `reports/distribution_of_tickets_report.py`. Open tickets only, tickets-only,
+ages in business days, grouped into the same stages as the Executive Summary (so its open and
+past-SLA counts match).
+
+- **KPIs**: open tickets, median age (with the 75th percentile in the tooltip), tickets past their
+  SLA, tickets silent for `SILENT_THRESHOLD_BD` (10) or more business days, and the oldest ticket.
+- **Age Against SLA**: per stage, each ticket's share of its SLA already used (business days since
+  Target start ÷ Priority × Size SLA), with a dashed line at 100%. Tickets without a Target start,
+  and Release Management (CAR) tickets, are not shown.
+- **Where Work Has Gone Quiet**: per stage, business days since the last human comment (or since
+  creation when nobody has commented), in bands: under 5, 5–9, 10–19, 20+.
+- **Is Open Work Getting Older?**: median and 75th-percentile age of the tickets that were open at
+  the end of each of the last 12 weeks, reconstructed from created and closed dates.
+- **By status** (expander) and a table of every open ticket, past-SLA first, then by SLA used and
+  silence.
+
+It replaced the earlier box plot and violin chart, which showed calendar days since creation by
+status, twice, with fixed 30/60/90-day bands that ignored each ticket's SLA. The violin chart also
+used a hard-coded black background.
+
+---
+
 ## How ticket sequencing works (Apparent Tardiness Cost)
 
 The **Personal Dashboard**'s suggested sequence and calendar are built with this method, and the
@@ -559,9 +587,10 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py` and `tests/test_ticket_age.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -659,11 +688,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold and Executive Summary tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary and ticket age tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py -q
 ```
 
 ---

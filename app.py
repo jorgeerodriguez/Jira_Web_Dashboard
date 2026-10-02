@@ -35,7 +35,10 @@ try:
 except ImportError:
     build_forecast_visuals = None
 try:
-    from reports.distribution_of_tickets_report import build_distribution_visuals
+    from reports.distribution_of_tickets_report import (
+        SILENT_THRESHOLD_BD as DIST_SILENT_THRESHOLD_BD,
+        build_distribution_visuals,
+    )
 except ImportError:
     build_distribution_visuals = None
 try:
@@ -1264,7 +1267,10 @@ elif selected == "🔮  Forecast":
 # ── Distribution of Ticket's Age ─────────────────────────────────────────────────
 elif selected == "📊  Distribution of Ticket's Age":
     st.title("📊 Distribution of Ticket's Age")
-    st.caption("How old are the currently open tickets?")
+    st.caption(
+        "How old open work is against its SLA, and where it has gone quiet. Open tickets only (no Features or "
+        "Initiatives), ages in business days, grouped by stage as on the Executive Summary."
+    )
 
     if build_distribution_visuals is None:
         st.error("distribution_of_tickets_report module could not be loaded.")
@@ -1275,25 +1281,57 @@ elif selected == "📊  Distribution of Ticket's Age":
         st.warning("⚠️ No Jira data loaded yet. Please fetch tickets from the Overview page first.")
         st.stop()
 
-    with st.spinner("Building distribution charts…"):
+    with st.spinner("Measuring ticket age…"):
         dist = build_distribution_visuals(df_issues)
 
-    if dist["error_message"] and dist["box_fig"] is None:
+    if dist["error_message"]:
         st.error(f"❌ {dist['error_message']}")
         st.stop()
 
-    # KPI row
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Open Tickets Analysed", dist["open_count"])
-    k2.metric("Median Age (days)", dist["median_age"])
-    k3.metric("75th Percentile (days)", dist["p75_age"])
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Open Tickets", f"{dist['open_count']:,}")
+    k2.metric("Median Age", f"{dist['median_age_bd']:.0f} bd",
+              help=f"Business days since creation. 75th percentile: {dist['p75_age_bd']:.0f} bd.")
+    k3.metric("Past SLA", f"{dist['past_sla']}",
+              help="Open tickets that have used more than their whole SLA since Target start. "
+                   "Release Management (CAR) tickets have no PE SLA and are not counted.")
+    k4.metric(f"Silent {DIST_SILENT_THRESHOLD_BD}+ bd", f"{dist['silent_count']}",
+              help=f"No human comment in {DIST_SILENT_THRESHOLD_BD} or more business days (or since creation).")
+    k5.metric("Oldest Ticket", f"{dist['oldest']['age_bd']} bd",
+              help=f"{dist['oldest']['key']} ({dist['oldest']['stage']})")
 
-    st.plotly_chart(dist["box_fig"], width="stretch")
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Age Against SLA")
+        st.caption("Share of each ticket's SLA already used, by stage. Right of the dashed line = past its SLA. "
+                   "Tickets without a Target start and CAR tickets are not shown.")
+        if dist["sla_fig"] is not None:
+            st.plotly_chart(dist["sla_fig"], width="stretch")
+        else:
+            st.info("No open tickets with a Target start and a PE SLA.")
+    with c2:
+        st.subheader("Where Work Has Gone Quiet")
+        st.caption("Business days since the last human comment (or since creation if nobody has commented).")
+        st.plotly_chart(dist["silence_fig"], width="stretch")
 
-    if dist["violin_fig"] is not None:
-        st.plotly_chart(dist["violin_fig"], width="stretch")
-    elif dist["error_message"]:
-        st.warning(f"Violin plot skipped: {dist['error_message']}")
+    st.subheader("Is Open Work Getting Older?")
+    st.caption("Age of the tickets that were open at the end of each week, last 12 weeks.")
+    st.plotly_chart(dist["trend_fig"], width="stretch")
+
+    with st.expander("By status"):
+        st.dataframe(dist["status_df"], width="stretch", hide_index=True)
+
+    st.subheader("Open Tickets: Past SLA and Quietest First")
+    st.dataframe(
+        dist["tickets_df"],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Ticket": st.column_config.LinkColumn("Ticket", help="Open Jira ticket", display_text=r".*/([^/]+)$"),
+            "SLA Used %": st.column_config.ProgressColumn("SLA Used %", format="%d%%", min_value=0, max_value=100),
+        },
+    )
 
 
 # ── Distribution per Business Leader ─────────────────────────────────────────────
