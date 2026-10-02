@@ -18,7 +18,11 @@ from data.build_dataframe_new import build_issues_dataframe
 from reports.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
 from reports.executive_summary import render_executive_summary
 from reports.atc_sequence import build_atc_sequence as _build_atc_sequence
-from reports.capacity_report import build_capacity_visuals
+from reports.capacity_report import (
+    FORECAST_SAMPLE_WEEKS as CAPACITY_SAMPLE_WEEKS,
+    build_capacity_visuals,
+    weeks_to_deliver as capacity_weeks_to_deliver,
+)
 from reports.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
 from reports.trend_report import build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
@@ -829,26 +833,84 @@ elif selected == "📅  Tickets Older Than 90 Days":
 # ── Capacity ───────────────────────────────────────────────────────────────────
 elif selected == "📈  Capacity":
     st.title("📈 Capacity")
-    st.caption("Team incoming and completed work capacity.")
+    st.caption(
+        "How much Platform Engineering delivers, whether it keeps up with demand, how much more it can take on, "
+        "where the time goes, and how evenly the load is spread. PE tickets only; full weeks (Mon–Sun)."
+    )
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     cap = build_capacity_visuals(df_issues)
 
-    if cap["capacity_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see capacity visuals.")
+    if cap["error_message"] or cap["flow_fig"] is None:
+        st.info(cap["error_message"] or "📥 Fetch Jira tickets from the sidebar to see capacity visuals.")
     else:
-        if cap.get("yearly_total_fig") is not None:
-            st.plotly_chart(cap["yearly_total_fig"], width="stretch")
+        kp = cap["kpis"]
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Delivered / Week", f"{kp['throughput']:.0f}",
+                  f"{kp['throughput_change']:+.0%}" if kp["throughput_change"] is not None else None,
+                  help="Average PE tickets moved to Done per week, last 4 full weeks vs the 4 before.")
+        k2.metric("Engineers Delivering", f"{kp['engineers']:.1f}",
+                  help="Average number of people who delivered at least one ticket per week, last 4 weeks.")
+        k3.metric("Per Engineer / Week", f"{kp['per_engineer']:.1f}" if kp["per_engineer"] else "—")
+        k4.metric("Weeks of Work Queued", f"{kp['weeks_queued']:.1f}" if kp["weeks_queued"] is not None else "—",
+                  help=f"{kp['queue']} tickets in Backlog or In Progress ÷ weekly delivery.")
+        k5.metric("Demand / Capacity", f"{kp['demand_ratio']:.2f}" if kp["demand_ratio"] else "—",
+                  f"{kp['spare_per_week']:+.1f} tickets/week spare", delta_color="normal",
+                  help="Requested ÷ delivered over the last 4 weeks. Above 1.0, demand is outrunning delivery.")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Avg Created / month", f"{cap['avg_created']:.1f}")
-        c2.metric("Avg Completed / month", f"{cap['avg_completed']:.1f}")
-        c3.metric("Latest Created", f"{cap['latest_created']:,}")
-        c4.metric("Latest Completed", f"{cap['latest_completed']:,}")
+        st.subheader("Demand vs Capacity")
+        st.caption("PE tickets requested vs delivered each week, last 26 full weeks. Thick lines are 4-week averages.")
+        st.plotly_chart(cap["flow_fig"], width="stretch")
+
+        st.subheader("How Much Can We Deliver?")
+        st.caption(f"Monte Carlo from the last {CAPACITY_SAMPLE_WEEKS} weeks of delivery: the whole team's pace, "
+                   "shared with everything else that keeps coming in.")
+        fc_cols = st.columns(len(cap["forecast"]) + 1)
+        for col, (weeks, fc) in zip(fc_cols, cap["forecast"].items()):
+            col.metric(f"Next {weeks} weeks", f"~{fc['likely']:,} tickets",
+                       help=f"Likely (P50). At least {fc['at_least']:,} in 85% of simulations.")
+            col.caption(f"At least **{fc['at_least']:,}** (85% confidence)")
+        with fc_cols[-1]:
+            extra = st.number_input("How long for N more tickets?", min_value=1, max_value=5000, value=100, step=10,
+                                    help="For example a new project's ticket count, on top of current work.")
+            eta = capacity_weeks_to_deliver(int(extra), cap["weekly_throughput"])
+            if eta:
+                st.caption(f"With the whole team: likely **{eta['likely']} weeks**, safely **{eta['safe']} weeks**. "
+                           "Only spare capacity is truly free, so expect longer while demand stays this high.")
 
         st.divider()
-        st.plotly_chart(cap["capacity_fig"], width="stretch")
-        st.subheader("Capacity Monthly Detail")
-        st.dataframe(cap["capacity_table"], width="stretch")
+        m1, m2 = st.columns(2)
+        with m1:
+            st.subheader("Where Capacity Goes: Work Type")
+            reactive = cap.get("reactive_share")
+            st.caption("Planned = Story, Task, Sub-task. Reactive = Bug, Hotfix, Incident, Support, Security. "
+                       + (f"Reactive work: {reactive:.0%} of the last 6 months." if reactive is not None else ""))
+            st.plotly_chart(cap["type_mix_fig"], width="stretch")
+        with m2:
+            st.subheader("Where Capacity Goes: Priority")
+            urgent = cap.get("urgent_share")
+            st.caption("Share of delivered tickets by priority, last 6 months. "
+                       + (f"Urgent: {urgent:.0%}." if urgent is not None else "")
+                       + (f" Sized tickets (last 4 weeks): {kp['sized_share']:.0%}." if kp.get("sized_share") is not None else ""))
+            st.plotly_chart(cap["priority_mix_fig"], width="stretch")
+
+        st.divider()
+        st.subheader("Load Balance")
+        st.caption("For balancing work across the team, not for judging individuals. "
+                   + (f"The top 3 people delivered {kp['top3_share']:.0%} of tickets in the last 8 weeks. "
+                      if kp.get("top3_share") is not None else "")
+                   + f"Charts show the core team ({kp.get('core_team', 0)} people); "
+                   f"{kp.get('occasional', 0)} occasional contributors are in the table.")
+        l1, l2 = st.columns(2)
+        with l1:
+            if cap["wip_fig"] is not None:
+                st.plotly_chart(cap["wip_fig"], width="stretch")
+        with l2:
+            if cap["share_fig"] is not None:
+                st.plotly_chart(cap["share_fig"], width="stretch")
+        with st.expander("Per engineer"):
+            st.dataframe(cap["people_df"], width="stretch", hide_index=True)
+        with st.expander("Weekly detail"):
+            st.dataframe(cap["weekly_df"], width="stretch", hide_index=True)
 
 
 # ── Trend ──────────────────────────────────────────────────────────────────────

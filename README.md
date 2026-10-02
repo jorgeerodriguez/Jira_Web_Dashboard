@@ -20,6 +20,7 @@ It supports:
 - **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket's Age**: open-work age against SLA, where work has gone quiet (no human comment), and whether open work is getting older — see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works)
+- **Capacity**: weekly delivery vs demand, a Monte Carlo delivery forecast with a "how long for N more tickets?" calculator, where capacity goes (planned vs reactive, priority), and load balance across the team — see [How Capacity works](#how-capacity-works)
 - **Distribution per Business Leader**: a service scorecard per requesting business lead (requested, delivered, wait, SLA met, open past SLA, top friction) with demand, SLA and priority charts — see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
@@ -78,6 +79,7 @@ Jira_Web_Dashboard/
 │   ├── test_executive_summary.py
 │   ├── test_ticket_age.py
 │   ├── test_business_leader.py
+│   ├── test_capacity.py
 │   └── ...
 └── backup/
 ```
@@ -205,7 +207,7 @@ These rules are shared across reports so the numbers agree:
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
   Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age, Distribution per
-  Business Leader and Teams Conversations reports. The Executive
+  Business Leader, Capacity and Teams Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
   `EXCLUDED_ASSIGNEES`, so their counts agree. The Trend and Size Distribution reports exclude Features
   only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
@@ -527,6 +529,41 @@ which only counted tickets created.
 
 ---
 
+## How Capacity works
+
+The **Capacity** page answers *how much do we deliver, does it keep up with demand, how much more can
+we take on, where does the time go, and is the load balanced?* Code: `reports/capacity_report.py`.
+PE tickets only (no Features, Initiatives or CAR tickets). *Delivered* = moved to Done, dated when it
+moved. Weeks run Monday to Sunday, and only full weeks are used.
+
+| KPI | Meaning |
+| --- | --- |
+| Delivered / Week | Average over the last 4 full weeks, % change vs the 4 before |
+| Engineers Delivering | Average number of people who delivered at least one ticket per week |
+| Per Engineer / Week | Delivered per week ÷ engineers delivering |
+| Weeks of Work Queued | Tickets in Backlog or In Progress ÷ delivered per week |
+| Demand / Capacity | Requested ÷ delivered, last 4 weeks; the delta shows spare tickets per week (negative = demand outrunning delivery) |
+
+- **Demand vs Capacity**: weekly requested vs delivered for the last 26 weeks, with 4-week averages.
+- **How Much Can We Deliver?**: a Monte Carlo (10,000 runs) that resamples the last 12 weeks of
+  delivery. For the next 4, 8 and 12 weeks it shows the likely total (P50) and the total reached in
+  85% of runs. The **"How long for N more tickets?"** calculator gives likely (P50) and safe (P85)
+  weeks. Both use the whole team's pace, which is shared with incoming demand, so a new project only
+  gets the spare capacity unless something else is deprioritised.
+- **Where Capacity Goes**: monthly share of delivered tickets by work type (Planned = Story, Task,
+  Sub-task; Reactive = Bug, Hotfix, Incident, Support, Security) and by priority, last 6 months, with
+  the share of sized tickets.
+- **Load Balance**: tickets in progress per person (with the team's typical level) and each person's
+  share of delivery over the last 8 weeks (with an even-split line). It's meant for balancing work,
+  not for judging individuals. The charts show the core team (work in progress, or 4+ delivered in
+  8 weeks); everyone is in the table, along with weekly detail.
+
+It replaced a "Total Tickets Worked per Year" chart (any ticket *updated* in a year, with only 24
+months of data) and monthly created vs completed bars that counted Features and CAR tickets and dated
+completions by last update. `build_capacity_data`, which feeds the Forecast page, is unchanged.
+
+---
+
 ## How ticket sequencing works (Apparent Tardiness Cost)
 
 The **Personal Dashboard**'s suggested sequence and calendar are built with this method, and the
@@ -622,12 +659,13 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt **Capacity**: weekly delivery vs demand KPIs, demand vs capacity trend, Monte Carlo delivery forecast with a "how long for N more tickets?" calculator, planned vs reactive and priority mix, and core-team load balance; PE tickets only, full weeks (see [How Capacity works](#how-capacity-works))
 - Rebuilt **Distribution per Business Leader** as a service scorecard per requesting business lead (requested, delivered, won't do, wait, SLA met, open past SLA, oldest open, top friction) with demand, SLA, wait, priority and open-risk charts; PE tickets only, PE internal work as one row and out of the charts by default, and the hard-coded reassignment of CAR tickets' business lead removed (see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works))
 - Fixed a Backlog crash when the data has no `days_old` column
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py` and `tests/test_business_leader.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py` and `tests/test_capacity.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -725,11 +763,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age and business leader tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader and capacity tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py -q
 ```
 
 ---
