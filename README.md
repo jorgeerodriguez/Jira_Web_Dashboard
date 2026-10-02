@@ -24,7 +24,7 @@ It supports:
 - **Distribution per Business Leader**: a service scorecard per requesting business lead (requested, delivered, wait, SLA met, open past SLA, top friction) with demand, SLA and priority charts — see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
-- Trend report includes completed-ticket trend per PE team member
+- **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, plus team contribution over time — see [How Trend works](#how-trend-works)
 
 ---
 
@@ -80,6 +80,7 @@ Jira_Web_Dashboard/
 │   ├── test_ticket_age.py
 │   ├── test_business_leader.py
 │   ├── test_capacity.py
+│   ├── test_trend.py
 │   └── ...
 └── backup/
 ```
@@ -207,9 +208,9 @@ These rules are shared across reports so the numbers agree:
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
   Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age, Distribution per
-  Business Leader, Capacity and Teams Conversations reports. The Executive
+  Business Leader, Capacity, Trend and Teams Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
-  `EXCLUDED_ASSIGNEES`, so their counts agree. The Trend and Size Distribution reports exclude Features
+  `EXCLUDED_ASSIGNEES`, so their counts agree. The Size Distribution report excludes Features
   only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
 - **PE SLA scope**: the SLA (Priority × Size, business days) applies to Platform Engineering tickets.
   Release Management **"Change and Release" (CAR)** tickets follow the release process and have no PE
@@ -564,6 +565,39 @@ completions by last update. `build_capacity_data`, which feeds the Forecast page
 
 ---
 
+## How Trend works
+
+The **Trend** page answers *are we getting better, month over month?* Code: `reports/trend_report.py`.
+PE tickets only (no Features, Initiatives or CAR tickets), each counted in the month it moved to Done.
+Times are in business days. Weekly flow and the delivery forecast are on the Capacity page.
+
+| Measure | Meaning | Better when |
+| --- | --- | --- |
+| Delivered | Tickets moved to Done | up |
+| Lead Time (median) | Created → Done | down |
+| Lead Time (85th pct) | 85% of tickets finish within this; how predictable delivery is | down |
+| Cycle Time (median) | Target start → Done (tickets with a Target start) | down |
+| SLA Met | Completed within their SLA (target 90%) | up |
+| Urgent Share | Delivered tickets that were Urgent | down |
+| Reactive Share | Bugs, Hotfixes, Incidents, Support, Security | down |
+| Comment Coverage | Completed tickets with a human comment (target 80%) | up |
+| People Delivering | People who delivered at least one ticket | neutral |
+
+- **Improvement Scorecard**: each measure's last *full* month against the average of the three months
+  before it. The delta is green when the measure moved the right way.
+- **12-Month Trends**: one small chart per measure (12 full months plus the current month, marked
+  "so far" with a hollow marker), with target lines.
+- **Team Contribution Over Time**: delivered tickets per person per month for people with 10+
+  delivered in the window. It's meant for spotting ramp-ups, gaps and load, not for judging
+  individuals.
+- **Monthly detail**: every measure per month, with the SLA sample size.
+
+It replaced a dual-axis flow chart, a "cycle time" that was really created → last update, a
+status-mix chart that grouped *current* statuses by last-update month, and a 16-line per-engineer
+chart.
+
+---
+
 ## How ticket sequencing works (Apparent Tardiness Cost)
 
 The **Personal Dashboard**'s suggested sequence and calendar are built with this method, and the
@@ -659,13 +693,14 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt **Trend** as "are we getting better?": an improvement scorecard (last full month vs the 3 before), 12-month small multiples with targets, and a team contribution heatmap; PE tickets only, business days, lead time and cycle time measured correctly (see [How Trend works](#how-trend-works))
 - Rebuilt **Capacity**: weekly delivery vs demand KPIs, demand vs capacity trend, Monte Carlo delivery forecast with a "how long for N more tickets?" calculator, planned vs reactive and priority mix, and core-team load balance; PE tickets only, full weeks (see [How Capacity works](#how-capacity-works))
 - Rebuilt **Distribution per Business Leader** as a service scorecard per requesting business lead (requested, delivered, won't do, wait, SLA met, open past SLA, oldest open, top friction) with demand, SLA, wait, priority and open-risk charts; PE tickets only, PE internal work as one row and out of the charts by default, and the hard-coded reassignment of CAR tickets' business lead removed (see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works))
 - Fixed a Backlog crash when the data has no `days_old` column
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py` and `tests/test_capacity.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py` and `tests/test_trend.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -763,11 +798,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader and capacity tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age, business leader, capacity and trend tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py -q
 ```
 
 ---

@@ -24,7 +24,7 @@ from reports.capacity_report import (
     weeks_to_deliver as capacity_weeks_to_deliver,
 )
 from reports.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
-from reports.trend_report import build_trend_visuals
+from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
 from reports.backlog_report import (
@@ -916,34 +916,39 @@ elif selected == "📈  Capacity":
 # ── Trend ──────────────────────────────────────────────────────────────────────
 elif selected == "📉  Trend":
     st.title("📉 Trend")
-    st.caption("Leadership trend view for the last 6-9 months from live Jira data.")
+    st.caption(
+        "Are we getting better, month over month? PE tickets only, by the month they moved to Done; times in "
+        "business days. Weekly flow and the delivery forecast are on the Capacity page."
+    )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    tr = build_trend_visuals(df_issues, months=9)
+    tr = build_trend_visuals(df_issues)
 
-    if tr["trend_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see trend visuals.")
+    if tr["error_message"] or tr["multiples_fig"] is None:
+        st.info(tr["error_message"] or "📥 Fetch Jira tickets from the sidebar to see trend visuals.")
     else:
-        kpis = tr.get("kpis", {})
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Created (period)", f"{int(kpis.get('created_total', 0)):,}")
-        c2.metric("Completed (period)", f"{int(kpis.get('completed_total', 0)):,}")
-        c3.metric("Completion Rate", f"{kpis.get('completion_rate', 0.0):.1f}%")
-        c4.metric("Median Cycle Time", f"{kpis.get('median_cycle', 0.0):.1f} days")
-        c5.metric("P75 Cycle Time", f"{kpis.get('p75_cycle', 0.0):.1f} days")
+        st.subheader(f"Improvement Scorecard · {tr['last_full_month']}")
+        st.caption("Last full month vs the average of the 3 months before. Green = moving the right way.")
+        cards = tr["scorecard"]
+        for row_start in range(0, len(cards), 5):
+            cols = st.columns(5)
+            for col, card in zip(cols, cards[row_start:row_start + 5]):
+                col.metric(card["label"], card["value"], card["delta"], delta_color=card["delta_color"],
+                           help=card["help"])
 
         st.divider()
-        if tr.get("flow_fig") is not None:
-            st.plotly_chart(tr["flow_fig"], width="stretch")
-        if tr.get("cycle_fig") is not None:
-            st.plotly_chart(tr["cycle_fig"], width="stretch")
-        if tr["status_mix_fig"] is not None:
-            st.plotly_chart(tr["status_mix_fig"], width="stretch")
-        if tr.get("pe_completion_trend_fig") is not None:
-            st.subheader("Completion Trend by Platform Engineer")
-            st.plotly_chart(tr["pe_completion_trend_fig"], width="stretch")
-        st.subheader("Trend Monthly Detail")
-        st.dataframe(tr["table_df"], width="stretch")
+        st.subheader("12-Month Trends")
+        st.caption("Hollow marker = current month so far. Dashed lines are targets.")
+        st.plotly_chart(tr["multiples_fig"], width="stretch")
+
+        if tr["team_fig"] is not None:
+            st.subheader("Team Contribution Over Time")
+            st.caption(f"Delivered tickets per person per month (people with {TREND_CORE_MIN}+ delivered in the window). "
+                       "For spotting ramp-ups, gaps and load, not for judging individuals.")
+            st.plotly_chart(tr["team_fig"], width="stretch")
+
+        with st.expander("Monthly detail"):
+            st.dataframe(tr["monthly_df"], width="stretch", hide_index=True)
 
 
 # ── Velocity ───────────────────────────────────────────────────────────────────
