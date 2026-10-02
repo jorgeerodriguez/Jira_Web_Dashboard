@@ -7,6 +7,7 @@ month) and colours each delta by whether up is good for that measure.
 """
 from datetime import timedelta, timezone
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,6 +16,7 @@ pytest.importorskip("plotly")
 pytest.importorskip("holidays")
 pytest.importorskip("streamlit")
 
+from reports import in_progress_report as ipr  # noqa: E402
 from reports import trend_report as trend  # noqa: E402
 
 _LOCAL = timezone(timedelta(hours=-6))
@@ -45,14 +47,16 @@ def _done(key, months_ago, lead_days=7, start_days=2, assignee="Ana", priority="
 
 def test_monthly_measures_use_pe_done_tickets_in_business_days():
     rows = [
-        _done("A", 1, lead_days=7),                                  # Wed -> Wed: 5 business days
+        _done("A", 1, lead_days=7),                                  # Wed -> Wed: 5 business days unless a holiday
         _done("B", 1, lead_days=7, priority="Urgent", issuetype="Bug", comments=False),
         _done("F", 1, issuetype="Feature"),                          # not a ticket
         _done("C", 1, issuetype="Change and Release", project="Release Management"),  # CAR
     ]
     month = trend.build_trend_visuals(pd.DataFrame(rows))["monthly"].loc[_CURRENT - 1]
     assert month["delivered"] == 2
-    assert month["lead_median"] == 5
+    week_start = (_mid(1) - pd.Timedelta(days=7)).date()
+    expected = int(np.busday_count(week_start, _mid(1).date(), holidays=ipr._calendar_holidays(_TODAY)))
+    assert month["lead_median"] == expected
     assert month["urgent_share"] == pytest.approx(0.5)
     assert month["reactive_share"] == pytest.approx(0.5)
     assert month["comment_coverage"] == pytest.approx(0.5)

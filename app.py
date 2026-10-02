@@ -23,7 +23,7 @@ from reports.capacity_report import (
     build_capacity_visuals,
     weeks_to_deliver as capacity_weeks_to_deliver,
 )
-from reports.velocity_report import build_velocity_visuals, PE_TEAM_MEMBERS
+from reports.velocity_report import MIN_CELL as VELOCITY_MIN_CELL, PE_TEAM_MEMBERS, build_velocity_visuals
 from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
@@ -954,30 +954,59 @@ elif selected == "📉  Trend":
 # ── Velocity ───────────────────────────────────────────────────────────────────
 elif selected == "⚡  Velocity":
     st.title("⚡ Velocity")
-    st.caption("Execution and backlog velocity from live Jira dataframe.")
+    st.caption(
+        "How fast work flows from request to done, and what slows it. PE tickets completed in the last 90 days "
+        "(picked by completion date, so slow tickets count too); times in business days. "
+        "Speed per person and priority is on the In Progress page."
+    )
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     vel = build_velocity_visuals(df_issues, time_period_days=90)
 
-    if vel["box_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see velocity visuals.")
+    if vel["error_message"] or vel["promise_fig"] is None:
+        st.info(vel["error_message"] or "📥 Fetch Jira tickets from the sidebar to see velocity visuals.")
     else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Completed Tickets (90d)", f"{vel['ticket_count']:,}")
-        c2.metric("Avg Execution Velocity", f"{vel['avg_execution']:.1f} days")
-        c3.metric("Avg Backlog Velocity", f"{vel['avg_backlog']:.1f} days")
+        kp = vel["kpis"]
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Delivered (90d)", f"{kp['delivered']:,}")
+        k2.metric("Lead Time · 50%", f"≤ {kp['lead_p50']:.0f} bd", help="Half of requests were done within this.")
+        k3.metric("Lead Time · 85%", f"≤ {kp['lead_p85']:.0f} bd",
+                  help=f"85% of requests were done within this; 95% within {kp['lead_p95']:.0f} business days.")
+        k4.metric("In Progress (median)", f"{kp['work_median']:.0f} bd" if kp["work_median"] is not None else "—",
+                  help="Target start → Done.")
+        k5.metric("Flow Efficiency", f"{kp['flow_efficiency']:.0%}" if kp["flow_efficiency"] is not None else "—",
+                  help="Share of total lead time spent after Target start; the rest is waiting to start.")
 
-        st.divider()
-        st.plotly_chart(vel["box_fig"], width="stretch")
+        st.subheader("What We Can Promise a Requester")
+        st.caption(f"Lead time (created → Done) of every ticket delivered in the last 90 days: half within "
+                   f"{kp['lead_p50']:.0f}, 85% within {kp['lead_p85']:.0f} and 95% within {kp['lead_p95']:.0f} business days.")
+        st.plotly_chart(vel["promise_fig"], width="stretch")
 
-        h1, h2 = st.columns(2)
-        with h1:
-            if vel["heat_exec_fig"] is not None:
-                st.plotly_chart(vel["heat_exec_fig"], width="stretch")
-        with h2:
-            if vel["heat_backlog_fig"] is not None:
-                st.plotly_chart(vel["heat_backlog_fig"], width="stretch")
+        v1, v2 = st.columns(2)
+        with v1:
+            st.subheader("Waiting vs In Progress, by Priority")
+            st.caption("Share of total lead time spent waiting to start vs after Target start.")
+            st.plotly_chart(vel["wait_work_fig"], width="stretch")
+        with v2:
+            st.subheader("Do Sizes Predict Effort?")
+            st.caption(f"Time in progress by estimated size. {kp['sized_share']:.0%} of delivered tickets were sized.")
+            st.plotly_chart(vel["size_fig"], width="stretch")
 
-        st.plotly_chart(vel["compare_fig"], width="stretch")
+        st.subheader("SLA Reality Check")
+        st.caption("For each Priority × Size: how long 85% of tickets took in progress, as a share of that cell's SLA. "
+                   "Orange (over 100%) = the SLA is tighter than what usually happens; blue (well under) = the SLA is "
+                   f"loose. * = fewer than {VELOCITY_MIN_CELL} tickets, read with care.")
+        st.plotly_chart(vel["sla_reality_fig"], width="stretch")
+
+        d1, d2 = st.columns([3, 2])
+        with d1:
+            st.subheader("What We Delivered")
+            st.caption("Tickets delivered in the last 90 days by priority and size.")
+            st.plotly_chart(vel["delivered_fig"], width="stretch")
+        with d2:
+            st.subheader("By Priority")
+            st.dataframe(vel["priority_df"], width="stretch", hide_index=True)
+            with st.expander("SLA reality check, as a table"):
+                st.dataframe(vel["sla_reality_df"], width="stretch", hide_index=True)
 
 
 # ── In Progress ─────────────────────────────────────────────────────────────────
