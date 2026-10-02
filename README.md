@@ -20,6 +20,7 @@ It supports:
 - **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket's Age**: open-work age against SLA, where work has gone quiet (no human comment), and whether open work is getting older — see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works)
+- **Distribution per Business Leader**: a service scorecard per requesting business lead (requested, delivered, wait, SLA met, open past SLA, top friction) with demand, SLA and priority charts — see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works)
 - **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
 - Trend report includes completed-ticket trend per PE team member
@@ -76,6 +77,7 @@ Jira_Web_Dashboard/
 │   ├── test_blocked_on_hold.py
 │   ├── test_executive_summary.py
 │   ├── test_ticket_age.py
+│   ├── test_business_leader.py
 │   └── ...
 └── backup/
 ```
@@ -202,8 +204,8 @@ These rules are shared across reports so the numbers agree:
 - **Ticket**: any issue type except **Feature** and **Initiative**. Those are containers tracked
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
-  Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age and Teams
-  Conversations reports. The Executive
+  Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age, Distribution per
+  Business Leader and Teams Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
   `EXCLUDED_ASSIGNEES`, so their counts agree. The Trend and Size Distribution reports exclude Features
   only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
@@ -492,6 +494,39 @@ used a hard-coded black background.
 
 ---
 
+## How Distribution per Business Leader works
+
+The **Distribution per Business Leader** page shows the service each requesting business lead gets
+from Platform Engineering. Code: `reports/distribution_by_business_leader.py`.
+
+- **Scope**: PE tickets only. Features, Initiatives and Release Management (CAR) tickets are left out.
+  The page used to reassign every CAR ticket's business lead to one person; that override is gone.
+- **PE internal work**: business leads in `INTERNAL_LEADS` (currently Jorge Rodriguez) are shown as
+  one **Platform Engineering (internal)** row. It is about two-thirds of the volume, so the charts
+  leave it out unless **Include Platform Engineering (internal) in charts** is on. Tickets with no
+  business lead are shown as **Unknown**, a data gap to fix at intake.
+- **Period**: the selected months. *Requested* = created in the period; *Delivered* = moved to Done
+  in the period. Open columns are as of today.
+
+| Scorecard column | Meaning |
+| --- | --- |
+| Requested / Delivered / Won't Do | Tickets created / completed (Done) / closed as Will Not Do in the period |
+| Median Wait (bd) | Business days from request (created) to Done, for delivered tickets |
+| SLA Met % (SLA Sample) | Delivered tickets with a Target start that finished within their SLA |
+| Open Now / Open Past SLA | Open tickets today, and those already past their SLA |
+| Oldest Open (days) | Age of the lead's oldest open ticket |
+| Top Friction in Comments | Most common friction theme (causes only) in delivered tickets' comments, with its share |
+
+Charts: requested vs delivered per lead, monthly demand (last 12 months, top 5 leads and Other),
+SLA met by lead against the 90% target (hollow markers for fewer than 5 delivered tickets), median
+wait by lead, priority mix of requests, and open work by SLA risk. The KPIs include the share of
+requests that are PE internal and the share with no business lead.
+
+It replaced two pie charts (one slice per business lead) and a per-month grid of stacked bars,
+which only counted tickets created.
+
+---
+
 ## How ticket sequencing works (Apparent Tardiness Cost)
 
 The **Personal Dashboard**'s suggested sequence and calendar are built with this method, and the
@@ -587,10 +622,12 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt **Distribution per Business Leader** as a service scorecard per requesting business lead (requested, delivered, won't do, wait, SLA met, open past SLA, oldest open, top friction) with demand, SLA, wait, priority and open-risk charts; PE tickets only, PE internal work as one row and out of the charts by default, and the hard-coded reassignment of CAR tickets' business lead removed (see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works))
+- Fixed a Backlog crash when the data has no `days_old` column
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py` and `tests/test_ticket_age.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py` and `tests/test_business_leader.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -688,11 +725,11 @@ The full suite runs in the darkstar environment, the same as CI:
 ```
 
 CI installs only `requirements-dev.txt` and `darkstar/requirements.txt`, so tests that need the
-Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary and ticket age tests need Plotly)
+Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked & On Hold, Executive Summary, ticket age and business leader tests need Plotly)
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py -q
 ```
 
 ---

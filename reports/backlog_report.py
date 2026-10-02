@@ -270,7 +270,7 @@ def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> d
         "Priority": backlog.get("priority_name", pd.Series("None", index=backlog.index)).fillna("None"),
         "Size": backlog["size"],
         "Days Left": (backlog["target_end_day"] - today).dt.days,
-        "Days Old": pd.to_numeric(backlog.get("days_old", 0), errors="coerce").fillna(0),
+        "Days Old": pd.to_numeric(backlog.get("days_old", pd.Series(0, index=backlog.index)), errors="coerce").fillna(0),
         "Status": "To Do",
         "assignee_name": backlog["assignee_name"],
     })

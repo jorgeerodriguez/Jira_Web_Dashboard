@@ -42,7 +42,10 @@ try:
 except ImportError:
     build_distribution_visuals = None
 try:
-    from reports.distribution_by_business_leader import build_business_leader_visuals
+    from reports.distribution_by_business_leader import (
+        SMALL_SAMPLE as BIZ_SMALL_SAMPLE,
+        build_business_leader_visuals,
+    )
 except ImportError:
     build_business_leader_visuals = None
 try:
@@ -1337,7 +1340,11 @@ elif selected == "📊  Distribution of Ticket's Age":
 # ── Distribution per Business Leader ─────────────────────────────────────────────
 elif selected == "👤  Distribution per Business Leader":
     st.title("👤 Distribution of Tickets per Business Leader")
-    st.caption("Ticket volume broken down by the requesting business leader / owner.")
+    st.caption(
+        "The service each requesting business lead gets from Platform Engineering: what they asked for, what was "
+        "delivered, how long they waited, and whether it met the SLA. PE tickets only (no Features, Initiatives "
+        "or Release Management CAR tickets)."
+    )
 
     if build_business_leader_visuals is None:
         st.error("distribution_by_business_leader module could not be loaded.")
@@ -1354,42 +1361,84 @@ elif selected == "👤  Distribution per Business Leader":
         st.stop()
 
     available_months = seed["available_months"]
-    default_start = seed["start_month"]
-    default_end = seed["end_month"]
-
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns([2, 2, 3])
     with c1:
-        start_month = st.selectbox(
-            "Start month",
-            options=available_months,
-            index=available_months.index(default_start) if default_start in available_months else 0,
-        )
+        start_month = st.selectbox("Start month", available_months,
+                                   index=available_months.index(seed["start_month"]))
     with c2:
-        end_month = st.selectbox(
-            "End month",
-            options=available_months,
-            index=available_months.index(default_end) if default_end in available_months else len(available_months) - 1,
+        end_month = st.selectbox("End month", available_months,
+                                 index=available_months.index(seed["end_month"]))
+    with c3:
+        st.write("")
+        include_internal = st.toggle(
+            "Include Platform Engineering (internal) in charts", value=False,
+            help="PE's own work is most of the volume and would hide the requesting business leads. "
+                 "The scorecard always shows it as its own row.",
         )
 
-    with st.spinner("Building business leader distribution visuals…"):
-        biz = build_business_leader_visuals(df_issues, start_month=start_month, end_month=end_month)
-
-    if biz["error_message"] and biz["stacked_fig"] is None:
+    with st.spinner("Building the business leader view…"):
+        biz = build_business_leader_visuals(df_issues, start_month=start_month, end_month=end_month,
+                                            include_internal=include_internal)
+    if biz["error_message"]:
         st.error(f"❌ {biz['error_message']}")
         st.stop()
 
-    st.caption(f"Showing tickets from **{biz['start_month']}** to **{biz['end_month']}**")
+    kp = biz["kpis"]
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Requesting Leads", f"{kp['requesting_leads']}", help="Business leads who requested tickets in the period.")
+    k2.metric("Requested by Leads", f"{kp['requested_by_leads']:,}",
+              help=f"Out of {kp['requested']:,} PE tickets requested in the period.")
+    k3.metric("Delivered (Done)", f"{kp['delivered']:,}", help="All PE tickets completed in the period.")
+    k4.metric("SLA Met (Leads)", f"{kp['sla_met_leads']:.0%}" if kp["sla_met_leads"] is not None else "—",
+              help="Requesting business leads' delivered tickets that met their SLA.")
+    k5.metric("PE Internal Share", f"{kp['internal_share']:.0%}", help="Requested tickets that are PE's own work.")
+    k6.metric("No Business Lead", f"{kp['unknown_share']:.0%}",
+              help="Requested tickets with no business lead in Jira: a data gap to fix at intake.")
 
-    col1, col2 = st.columns([2, 2])
-    with col1:
-        st.plotly_chart(biz["leader_pie_fig"], width="stretch")
-    with col2:
-        st.plotly_chart(biz["priority_pie_fig"], width="stretch")
+    st.subheader("Service Scorecard")
+    st.caption(f"{biz['start_month']} to {biz['end_month']}. Requested = created in the period; Delivered = moved to Done "
+               "in the period; Wait = business days from request to Done. Open columns are as of today.")
+    st.dataframe(
+        biz["scorecard_df"], width="stretch", hide_index=True,
+        column_config={
+            "SLA Met %": st.column_config.ProgressColumn("SLA Met %", format="%d%%", min_value=0, max_value=100),
+            "Top Friction in Comments": st.column_config.TextColumn("Top Friction in Comments", width="medium"),
+        },
+    )
 
-    st.plotly_chart(biz["stacked_fig"], width="stretch")
+    st.divider()
+    b1, b2 = st.columns(2)
+    with b1:
+        st.subheader("Requested vs Delivered")
+        if biz["demand_fig"] is not None:
+            st.plotly_chart(biz["demand_fig"], width="stretch")
+    with b2:
+        st.subheader("Monthly Demand")
+        st.caption("Tickets requested per month, last 12 months: top 5 leads and Other.")
+        st.plotly_chart(biz["trend_fig"], width="stretch")
 
-    with st.expander("View summary table"):
-        st.dataframe(biz["summary_df"], width="stretch")
+    b3, b4 = st.columns(2)
+    with b3:
+        st.subheader("SLA Met by Business Lead")
+        st.caption(f"Hollow markers: fewer than {BIZ_SMALL_SAMPLE} delivered tickets, so read with care.")
+        if biz["sla_fig"] is not None:
+            st.plotly_chart(biz["sla_fig"], width="stretch")
+    with b4:
+        st.subheader("How Long Requests Wait")
+        if biz["wait_fig"] is not None:
+            st.plotly_chart(biz["wait_fig"], width="stretch")
+
+    b5, b6 = st.columns(2)
+    with b5:
+        st.subheader("Priority Mix of Requests")
+        if biz["priority_fig"] is not None:
+            st.plotly_chart(biz["priority_fig"], width="stretch")
+    with b6:
+        st.subheader("Open Work by SLA Risk")
+        if biz["open_fig"] is not None:
+            st.plotly_chart(biz["open_fig"], width="stretch")
+        else:
+            st.info("No open tickets for these business leads.")
 
 
 # ── Teams Conversations ───────────────────────────────────────────────────────────
