@@ -13,6 +13,10 @@ Two breach rates, both measured against BREACH_GOAL (10%):
 - Completed late: of tickets moved to Done in the window, the share finished after their SLA due date
   (the definition used on the Trend and Executive Summary pages).
 
+Re-planning guard: by default, tickets whose Target start was moved from the dashboard
+(reports/jira_dates.py audit log) are judged on their *original* Target start in the breach rates and
+the Breached Tickets table, so moving dates cannot quietly lower the breach rate.
+
 Open tickets use the same risk as the Executive Summary: In Progress and Backlog from their forecasts,
 other stages Breached past due and At Risk once 80% of the SLA is used.
 """
@@ -286,8 +290,20 @@ def _breached_table(j: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray, start
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
 
+def _original_starts(t: pd.DataFrame, originals: dict, hol: np.ndarray) -> tuple[pd.DataFrame, int]:
+    """Judge re-planned tickets on the Target start they had before their first dashboard update."""
+    hit = t["key"].isin(originals)
+    if not hit.any():
+        return t, 0
+    t = t.copy()
+    t.loc[hit, "start_day"] = pd.to_datetime(t.loc[hit, "key"].map(originals))
+    t.loc[hit, "sla_due"] = ipr._add_busdays(t.loc[hit, "start_day"], t.loc[hit, "sla_bd"].astype(float), hol)
+    return t, int(hit.sum())
+
+
 def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_WINDOW, filters: dict | None = None,
-                      include_on_track: bool = False, include_completed_late: bool = True) -> dict[str, Any]:
+                      include_on_track: bool = False, include_completed_late: bool = True,
+                      judge_original_start: bool = True, original_starts: dict | None = None) -> dict[str, Any]:
     """`filters` keys: assignees, leads, priorities, stages (lists; empty = all)."""
     if df_issues is None or df_issues.empty:
         return _empty_payload("No ticket data available.")
@@ -314,6 +330,15 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_W
 
     t = _apply_filters(pe, filters, with_stage=False)
     open_t = _apply_filters(open_all, filters, with_stage=True)
+    replanned = 0
+    if judge_original_start:
+        if original_starts is None:
+            try:
+                from reports.jira_dates import original_target_starts
+                original_starts = original_target_starts()
+            except Exception:
+                original_starts = {}
+        t, replanned = _original_starts(t, original_starts, hol)
     j = _judged(t, today)
     start = today - pd.Timedelta(days=int(time_period_days))
     prev_start = start - pd.Timedelta(days=int(time_period_days))
@@ -333,6 +358,7 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_W
         "open_total": int(len(open_t)),
         "no_clock": int((~open_with_clock).sum()),
         "goal": BREACH_GOAL,
+        "replanned": replanned,
         "window_days": int(time_period_days),
     }
     payload["trend_fig"], payload["trend_df"] = _trend_figure(j, today)

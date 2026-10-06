@@ -34,6 +34,14 @@ SIMULATIONS = 1000
 RNG_SEED = 7  # fixed so the page shows the same dates on every rerun of the same data
 UNASSIGNED = "Unassigned"
 
+# Start-date confidence, from a back-test of Projected Start against actual start dates (266 past
+# predictions, Jul-Sep 2026): the P50 start was unbiased, but starts land within roughly +/-3 weeks
+# of it. "Safe Start" adds the margin that made 85% of tickets start by it (84% out of sample); the
+# first ticket in a queue is the most predictable.
+START_CONFIDENCE = {1: "High", 2: "Medium", 3: "Medium"}          # queue position -> confidence; 4+ = Low
+SAFE_START_MARGIN_BD = {"High": 16, "Medium": 16, "Low": 9}
+START_TYPICAL_MISS_BD = {"High": 4, "Medium": 8, "Low": 9}
+
 NOT_ASSESSED = "Not Assessed"
 RISK_ORDER = ipr.RISK_ORDER + [NOT_ASSESSED]
 RISK_LABELS = {**ipr.RISK_LABELS, NOT_ASSESSED: "○ Not assessed"}
@@ -61,6 +69,9 @@ def _empty_payload() -> dict:
         "forecast_df": pd.DataFrame(),
         "waiting_df": pd.DataFrame(),
         "tickets_df": pd.DataFrame(),
+        "planning_df": pd.DataFrame(),
+        "today": None,
+        "holidays": None,
     }
 
 
@@ -313,6 +324,13 @@ def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> d
                              ("finish_p50_bd", "finish_p50"), ("finish_p85_bd", "finish_p85")]:
         backlog[date_col] = ipr._add_busdays(today_series(backlog.index), backlog[bd_col], hol)
 
+    backlog["start_confidence"] = np.where(
+        backlog["queue_position"].notna(),
+        backlog["queue_position"].map(lambda q: START_CONFIDENCE.get(int(q), "Low") if pd.notna(q) else None), None)
+    margin = backlog["start_confidence"].map(SAFE_START_MARGIN_BD)
+    backlog["start_safe"] = ipr._add_busdays(backlog["start_p50"], margin.where(backlog["start_p50"].notna()), hol)
+    backlog["target_start_slipped"] = backlog["target_start_day"].notna() & (backlog["target_start_day"] < today)
+
     # ── Risk: SLA runs from Target start; unassigned / undated tickets are not assessed ──
     def risk_against(deadline: pd.Series, can_judge: pd.Series) -> list[str]:
         return [ipr._risk(today, d, p50, p85) if ok else NOT_ASSESSED
@@ -352,7 +370,10 @@ def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> d
         "Size": fc["size_label"],
         "Waiting (bd)": fc["waiting_bd"].astype(int),
         "Target Start": fc["target_start_day"].dt.date,
+        "Target Start Slipped": np.where(fc["target_start_slipped"], "⚠ Slipped", ""),
         "Projected Start": fc["start_p50"].dt.date,
+        "Safe Start": fc["start_safe"].dt.date,
+        "Start Confidence": fc["start_confidence"].fillna(""),
         "Start Slip (bd)": pd.to_numeric(fc["start_slip_bd"]).round(0).astype("Int64"),
         "Finish P50": fc["finish_p50"].dt.date,
         "Finish P85": fc["finish_p85"].dt.date,
@@ -398,5 +419,8 @@ def build_backlog_visuals(df_issues: pd.DataFrame, risk_basis: str = "SLA") -> d
         "sla_grid_fig": ipr._sla_grid_figure(backlog),
         "forecast_df": forecast_df,
         "waiting_df": waiting_df,
+        "planning_df": backlog,          # per-ticket forecast frame, for Target date proposals
+        "today": today,
+        "holidays": hol,
         "tickets_df": _all_tickets_table(backlog),
     }

@@ -25,6 +25,7 @@ from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_tre
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
 from reports.backlog_report import (
+    START_TYPICAL_MISS_BD as BACKLOG_START_MISS,
     RISK_BASES as BACKLOG_RISK_BASES,
     SIMULATIONS as BACKLOG_SIMULATIONS,
     build_backlog_visuals,
@@ -689,6 +690,89 @@ def _build_personal_dashboard(df_issues: pd.DataFrame, assignee_value: str) -> d
     }
 
 
+# ── Target date updates (Backlog, safe mode) ─────────────────────────────────────
+@st.dialog("✏️ Propose Target date updates", width="large")
+def _target_date_dialog(backlog_payload: dict) -> None:
+    from reports import jira_dates
+
+    host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+    allowed, reason = jira_dates.write_permission(host)
+    st.caption(
+        "Proposals come from the Backlog forecast. Nothing is selected and nothing is written until you tick rows, "
+        "review the changes and confirm. Each updated ticket gets a Jira comment, and the last batch can be undone."
+    )
+    if not allowed:
+        st.warning(f"Preview only: {reason}")
+    else:
+        st.success(f"🔓 {reason} Each update still needs your selection and typed confirmation.")
+
+    rule = st.radio("Propose Target start from", ["likely", "safe"], horizontal=True,
+                    format_func=lambda r: "Likely start (P50)" if r == "likely" else "Safe start (85% by then)",
+                    key="tdu_rule")
+    proposals = jira_dates.build_proposals(backlog_payload["planning_df"], backlog_payload["today"],
+                                           backlog_payload["holidays"], rule)
+    if proposals.empty:
+        st.success("No Target dates need updating right now.")
+        return
+
+    st.markdown(f"**{len(proposals)} tickets** have Target dates that look out of date. "
+                "Tick the ones to update; you can edit the new dates.")
+    edited = st.data_editor(
+        proposals, hide_index=True, width="stretch", key=f"tdu_editor_{rule}",
+        disabled=[c for c in proposals.columns if c not in ("Apply", "New Target Start", "New Target End")],
+        column_config={
+            "Apply": st.column_config.CheckboxColumn("Apply", help="Tick to include this ticket"),
+            "New Target Start": st.column_config.DateColumn("New Target Start", format="YYYY-MM-DD"),
+            "New Target End": st.column_config.DateColumn("New Target End", format="YYYY-MM-DD"),
+            "Why": st.column_config.TextColumn("Why", width="medium"),
+        },
+    )
+    selected = edited[edited["Apply"]]
+    errors, warnings = jira_dates.validate(selected, backlog_payload["today"], backlog_payload["holidays"])
+    if not selected.empty:
+        st.markdown("**Dry run: these changes would be sent to Jira**")
+        st.dataframe(selected[["Ticket", "Current Target Start", "New Target Start", "Current Target End",
+                               "New Target End"]], hide_index=True, width="stretch")
+    for message in errors:
+        st.error(message)
+    for message in warnings:
+        st.warning(message)
+
+    phrase = f"UPDATE {len(selected)}"
+    typed = st.text_input(f"Type **{phrase}** to confirm", key="tdu_confirm", disabled=not allowed or selected.empty)
+    ready = allowed and not selected.empty and not errors and typed.strip() == phrase
+    if st.button(f"Update {len(selected)} ticket(s) in Jira", type="primary", disabled=not ready, key="tdu_apply"):
+        jira = st.session_state.get("jira_connector")
+        if jira is None:
+            _, _, jira = validate_jira_connection()
+            st.session_state["jira_connector"] = jira
+        if jira is None:
+            st.error("Could not connect to Jira.")
+            return
+        try:
+            actor = jira.myself().get("displayName", "")
+        except Exception:
+            actor = ""
+        with st.spinner("Updating Jira…"):
+            results = jira_dates.apply_updates(jira, selected, backlog_payload["today"].date(), actor)
+        st.dataframe(results, hide_index=True, width="stretch")
+        updated = int((results["Result"] == "updated").sum())
+        st.success(f"{updated} ticket(s) updated. Fetch Jira tickets again to see the new dates on the dashboard.")
+
+    batch = jira_dates.last_batch()
+    if not batch.empty:
+        with st.expander(f"Undo last batch ({len(batch)} ticket(s), {batch['at'].iloc[0][:16].replace('T', ' ')} UTC)"):
+            st.dataframe(batch[["key", "old_start", "new_start", "old_end", "new_end"]].rename(columns={
+                "key": "Ticket", "old_start": "Restore Start", "new_start": "Current Start",
+                "old_end": "Restore End", "new_end": "Current End"}), hide_index=True, width="stretch")
+            undo_typed = st.text_input("Type **UNDO** to restore these dates", key="tdu_undo_confirm",
+                                       disabled=not allowed)
+            if st.button("Undo last batch", disabled=not allowed or undo_typed.strip() != "UNDO", key="tdu_undo"):
+                jira = st.session_state.get("jira_connector") or validate_jira_connection()[2]
+                with st.spinner("Restoring dates…"):
+                    st.dataframe(jira_dates.undo_batch(jira, batch), hide_index=True, width="stretch")
+
+
 # ── Mock data helpers ───────────────────────────────────────────────────────────
 metrics = load_metrics(report_date=report_date, lookback_days=lookback_days)
 start_date = report_date - timedelta(days=lookback_days - 1)
@@ -1274,7 +1358,20 @@ elif selected == "🗂️  Backlog":
                         "Ticket", help="Open Jira ticket", display_text=r".*/([^/]+)$")},
                 )
 
-        st.subheader("Backlog Forecast Detail")
+        h1, h2 = st.columns([4, 1])
+        with h1:
+            st.subheader("Backlog Forecast Detail")
+        with h2:
+            st.write("")
+            if st.button("✏️ Update Target dates", key="tdu_open", width="stretch",
+                         help="Propose new Target start / end dates from this forecast, review them, and (if enabled) "
+                              "update Jira safely."):
+                _target_date_dialog(backlog)
+        st.caption(
+            f"Projected Start is the likely start (P50); Safe Start is the date 85% of tickets started by in back-tests. "
+            f"Start Confidence by queue position: High (#1, typically within ±{BACKLOG_START_MISS['High']} bd), "
+            f"Medium (#2–3, ±{BACKLOG_START_MISS['Medium']} bd), Low (#4+, ±{BACKLOG_START_MISS['Low']} bd)."
+        )
         st.dataframe(
             backlog["forecast_df"],
             width="stretch",
@@ -1757,16 +1854,22 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         sel_stages = st.multiselect("Stage (open work)", options.get("stages", []), key="sla_stages")
     filters = {"assignees": sel_assignees, "leads": sel_leads, "priorities": sel_priorities, "stages": sel_stages}
 
-    t1, t2 = st.columns(2)
+    t1, t2, t3 = st.columns(3)
     with t1:
         include_on_track = st.toggle("SLA Detail: also show on-track and not-assessed open tickets", value=False,
                                      key="sla_include_on_track")
     with t2:
         include_completed = st.toggle(f"Breached Tickets: include tickets completed late in the last {window} days",
                                       value=True, key="sla_include_completed")
+    with t3:
+        judge_original = st.toggle("Judge re-planned tickets on their original Target start", value=True,
+                                   key="sla_judge_original",
+                                   help="Tickets whose Target dates were moved from the Backlog page keep their original "
+                                        "SLA clock here, so re-planning can't hide a breach.")
 
     sla = build_sla_visuals(df_issues, time_period_days=window, filters=filters,
-                            include_on_track=include_on_track, include_completed_late=include_completed)
+                            include_on_track=include_on_track, include_completed_late=include_completed,
+                            judge_original_start=judge_original)
     if sla["error_message"]:
         st.error(f"❌ {sla['error_message']}")
         st.stop()
@@ -1794,6 +1897,8 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
     k3.metric("✖ Open & Breached", f"{kp['open_breached']}", help="Open tickets already past their SLA due date.")
     k4.metric("! At Risk / Likely Late", f"{kp['open_at_risk']}", help="Open tickets forecast to miss, or close to, their SLA.")
     k5.metric(f"Due in Next {SLA_DUE_SOON_BD} bd", f"{kp['due_soon']}", help="Open tickets whose SLA comes due soon.")
+    if kp.get("replanned"):
+        st.caption(f"🔁 {kp['replanned']} ticket(s) re-planned from the dashboard are judged on their original Target start.")
     k6.metric("No SLA Clock", f"{kp['no_clock']}", help="Open tickets without a Target start: they can't be judged. "
               "Set a Target start in Jira.")
 

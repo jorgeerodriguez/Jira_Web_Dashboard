@@ -230,3 +230,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local audit log of Jira Target date updates made from the dashboard
+.dashboard_audit/

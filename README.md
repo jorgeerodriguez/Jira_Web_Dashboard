@@ -17,7 +17,7 @@ It supports:
 - **SLA**: the daily view of breached, late and at-risk work. Two breach rates against the **under 10%** goal (SLA came due / completed late), a trend, where breaches come from, what's coming due, and two searchable, filterable action tables (**SLA Detail** and **Breached Tickets**) with the latest human comment and a Jira link — see [How the SLA page works](#how-the-sla-page-works)
 - **Delivery Forecast**: how many tickets PE will likely deliver in the next 4, 8 and 12 weeks with a calibrated range, a "can we commit to a project?" calculator, a demand vs delivery outlook, and the forecast's own track record — see [How the Delivery Forecast works](#how-the-delivery-forecast-works)
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
-- **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
+- **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness, plus **safe-mode updates of Jira Target dates** from the forecast — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
 - **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
 - **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
@@ -56,6 +56,7 @@ Jira_Web_Dashboard/
 ├── reports/
 │   ├── __init__.py
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
+│   ├── jira_dates.py            # safe-mode Target date updates (Backlog page)
 │   ├── executive_summary.py
 │   ├── capacity_report.py
 │   ├── trend_report.py
@@ -87,6 +88,7 @@ Jira_Web_Dashboard/
 │   ├── test_velocity_flow.py
 │   ├── test_forecast.py
 │   ├── test_sla.py
+│   ├── test_jira_dates.py
 │   └── ...
 └── backup/
 ```
@@ -396,12 +398,76 @@ SLA?* Backlog means `To Do` and `Tech Discovery Required` tickets (no Features o
 - **Backlog by SLA Cell**, **Waiting Longer Than Their SLA**, the **Backlog Forecast Detail**
   table, and the unchanged **All Backlog Tickets** table
 
-### Limits
+### How reliable is Projected Start?
 
-The duration model is the one back-tested on the In Progress page. The projected *start* dates
-can't be back-tested yet: the dataframe has each ticket's Target start but not the date it actually
-moved to In Progress. Darkstar already stores status transitions, so that's the data to use if
-start-date accuracy needs checking.
+Back-tested in October 2026 with Jira change history: at five past dates (Jul 20 – Sep 14) the backlog
+was rebuilt as it was then (statuses, assignees and Target starts at the time), the forecast was run
+as of that day, and each Projected Start was compared with when the ticket actually left the backlog
+(266 predictions, 157 tickets).
+
+| Prediction | Typical miss | Within 5 bd | Started by that date | Bias |
+| --- | --- | --- | --- | --- |
+| Projected Start (P50) | 8 bd | 39% | 52% | none |
+| Old P85 start | 11.5 bd | 30% | 65% (should be 85%) | early |
+| Target start in Jira | 11 bd | 33% | 12% | starts ~11 bd later |
+
+- **Projected Start** is an honest median but a ±3-week estimate. It is clearly better than the
+  Target start in Jira, which tickets usually start well after; Target dates were edited 686 (start)
+  and 1,082 (end) times across these tickets.
+- **Safe Start** replaces the old P85: Projected Start + 16 business days (queue #1–3) or + 9 (#4+),
+  the margin that made 85% of tickets start by it (84% out of sample). `SAFE_START_MARGIN_BD`.
+- **Start Confidence** by queue position: High (#1, typical miss about 4 bd), Medium (#2–3, about
+  8 bd), Low (#4+, about 9 bd).
+- **Target Start Slipped** marks backlog tickets whose Target start has already passed.
+
+### Updating Target dates (safe mode)
+
+The **✏️ Update Target dates** button next to *Backlog Forecast Detail* opens a review dialog. Code:
+`reports/jira_dates.py`.
+
+1. **Proposals**: tickets whose Target start has passed, is missing, or is more than 2 business days
+   before the projected start, or whose forecast finish is after the Target end. Proposed Target
+   start = Projected Start (or Safe Start); proposed Target end = forecast finish (P85).
+2. **Review**: nothing is selected. Tick rows; the new dates are editable. A dry run shows exactly what
+   would be sent.
+3. **Validation** blocks the batch on any error (missing dates, end before start, start in the past,
+   more than 25 tickets) and warns about non-business days and moves of more than 20 business days.
+4. **Confirmation**: type `UPDATE n` to enable the button.
+5. **No overwriting**: each ticket is re-read just before writing and skipped if its dates changed in
+   Jira since the data was loaded.
+6. **Audit**: every updated ticket gets a Jira comment (old → new dates, forecast date, batch id), and
+   each batch is appended to `.dashboard_audit/jira_date_changes.jsonl` (git-ignored; override with
+   `JIRA_AUDIT_LOG`).
+7. **Undo last batch** (type `UNDO`) restores the old dates, but only where Jira still holds the dates
+   the batch wrote.
+
+**Turning it on.** Writes are **off by default**, and the dialog is preview-only. To enable them on your
+own machine, set this line in the project's `.env` file (git- and Docker-ignored, so it never leaves your
+computer):
+
+```bash
+JIRA_WRITE_ENABLED=true
+```
+
+The file is read fresh each time the dialog opens, so changing the line to `false` (or deleting it)
+turns updates off without restarting. `true`, `1`, `yes` or `on` enable it; an empty value, any other
+value, a missing line or a missing file means off. If `.env` has no value for it, an environment variable
+of the same name is used instead, e.g. for one run:
+
+```bash
+JIRA_WRITE_ENABLED=true .venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
+```
+
+`--server.address 127.0.0.1` keeps the app reachable only from your own computer while writes are on.
+
+Writes are also limited to the machine running the app (`localhost`). The shared deployment has no
+login, so anyone with its URL would otherwise update Jira as the account in the configured token.
+`JIRA_WRITE_ALLOW_REMOTE=true` lifts the localhost limit; don't set it on a shared deployment.
+
+**SLA guard.** The SLA clock starts at Target start, so moving a Target start later also moves the
+SLA due date. By default the SLA page judges re-planned tickets on their **original** Target start (from
+the audit log) in both breach rates and the Breached Tickets table, so re-planning can't lower the
+breach rate. A toggle shows the re-planned view.
 
 ## How Teams Conversations works
 
@@ -816,6 +882,8 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- **Backlog**: Projected Start back-tested against actual starts (honest median, ±3 weeks); new **Safe Start**, **Start Confidence** and **Target Start Slipped** columns; and a **✏️ Update Target dates** button for safe-mode Jira updates (proposals, review, validation, typed confirmation, re-read before write, Jira comment, audit log, undo; off by default and localhost-only) (see [Updating Target dates (safe mode)](#updating-target-dates-safe-mode))
+- **SLA**: re-planned tickets are judged on their original Target start by default, so moving dates can't lower the breach rate
 - Rebuilt the **SLA** page around the real SLA table: two breach rates (SLA came due / completed late) against the under-10% goal with 7/30/90-day windows, trend, Priority × Size breach map, coming-due chart, open work by stage, filters, and searchable, downloadable **SLA Detail** and **Breached Tickets** tables with the latest human comment (see [How the SLA page works](#how-the-sla-page-works))
 - Rebuilt the **Forecast** page as a Delivery Forecast: damped-trend central estimate with ranges calibrated from back-tested past errors (about 7 in 10 outcomes), next 4/8/12-week cards, weekly and cumulative charts, a "can we commit to a project?" calculator, demand vs delivery outlook and the forecast's own track record (see [How the Delivery Forecast works](#how-the-delivery-forecast-works))
 - Capacity's "How much can we deliver?" now uses the same engine (its flat Monte Carlo back-tested 17–26% low); removed `build_capacity_data` and the `xgboost` dependency
@@ -828,7 +896,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py` and `tests/test_sla.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py`, `tests/test_sla.py` and `tests/test_jira_dates.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -930,7 +998,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py -q
 ```
 
 ---

@@ -26,3 +26,5 @@ htmlcov
 .ruff_cache
 
 Docker.raw
+# Local audit log of Jira Target date updates (never ship it in an image)
+.dashboard_audit
