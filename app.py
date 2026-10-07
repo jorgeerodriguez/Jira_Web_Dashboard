@@ -24,6 +24,7 @@ from reports.velocity_report import MIN_CELL as VELOCITY_MIN_CELL, PE_TEAM_MEMBE
 from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
+from reports.assignment_report import build_assignment_visuals
 from reports.backlog_report import (
     START_TYPICAL_MISS_BD as BACKLOG_START_MISS,
     RISK_BASES as BACKLOG_RISK_BASES,
@@ -212,6 +213,7 @@ with st.sidebar:
         "✅  Validating",
         "🚧  Blocked & On Hold",
         "🗂️  Backlog",
+        "🧭  Suggested Assignments",
         "🔮  Forecast",
         "📊  Distribution of Ticket's Age",
         "👤  Distribution per Business Leader",
@@ -776,6 +778,82 @@ def _target_date_dialog(backlog_payload: dict) -> None:
                 jira = st.session_state.get("jira_connector") or validate_jira_connection()[2]
                 with st.spinner("Restoring dates…"):
                     st.dataframe(jira_dates.undo_batch(jira, batch), hide_index=True, width="stretch")
+
+
+# ── Assign in Jira (Suggested Assignments, safe mode) ────────────────────────────
+@st.dialog("✏️ Assign tickets in Jira", width="large")
+def _assign_dialog(asg_payload: dict) -> None:
+    from reports import jira_assign, jira_dates
+
+    host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+    allowed, reason = jira_dates.write_permission(host)
+    st.caption(
+        "Rows come from the Assignment Plan. Nothing is selected and nothing is written until you tick rows, review "
+        "them and confirm. Each assigned ticket gets a Jira comment with the reason, and the last batch can be undone."
+    )
+    if not allowed:
+        st.error(f"Jira updates are not available: {reason}")
+        return
+    st.success(f"🔓 {reason} Each assignment still needs your selection and typed confirmation.")
+
+    accounts = asg_payload["account_ids"]
+    rows = jira_assign.build_rows(asg_payload["plan_df"], asg_payload["current_accounts"])
+    if not accounts:
+        st.warning("No Jira account ids are loaded yet. Fetch Jira tickets again from the sidebar, then reopen this.")
+        return
+    edited = st.data_editor(
+        rows.drop(columns=["Current Account"]), hide_index=True, width="stretch", key="asg_editor",
+        disabled=[c for c in rows.columns if c not in ("Apply", "Assign To")],
+        column_config={
+            "Apply": st.column_config.CheckboxColumn("Apply", help="Tick to include this ticket"),
+            "Assign To": st.column_config.SelectboxColumn("Assign To", options=sorted(accounts), required=True,
+                                                          help="Defaults to the suggestion; pick someone else if needed"),
+            "Why": st.column_config.TextColumn("Why", width="medium"),
+        },
+    )
+    edited["Current Account"] = rows["Current Account"].values
+    selected = edited[edited["Apply"]]
+    errors, warnings = jira_assign.validate(selected, accounts)
+    if not selected.empty:
+        st.markdown("**Dry run: these assignments would be sent to Jira**")
+        st.dataframe(selected[["Ticket", "Current Owner", "Assign To", "SLA Fit"]], hide_index=True, width="stretch")
+    for message in errors:
+        st.error(message)
+    for message in warnings:
+        st.warning(message)
+
+    phrase = f"ASSIGN {len(selected)}"
+    typed = st.text_input(f"Type **{phrase}** to confirm", key="asg_confirm", disabled=selected.empty)
+    ready = not selected.empty and not errors and typed.strip() == phrase
+    if st.button(f"Assign {len(selected)} ticket(s) in Jira", type="primary", disabled=not ready, key="asg_apply"):
+        jira = st.session_state.get("jira_connector")
+        if jira is None:
+            _, _, jira = validate_jira_connection()
+            st.session_state["jira_connector"] = jira
+        if jira is None:
+            st.error("Could not connect to Jira.")
+            return
+        try:
+            actor = jira.myself().get("displayName", "")
+        except Exception:
+            actor = ""
+        with st.spinner("Assigning in Jira…"):
+            results = jira_assign.apply_assignments(jira, selected, accounts, date.today(), actor)
+        st.dataframe(results, hide_index=True, width="stretch")
+        assigned = int((results["Result"] == "updated").sum())
+        st.success(f"{assigned} ticket(s) assigned. Fetch Jira tickets again to refresh the plan.")
+
+    batch = jira_assign.last_batch()
+    if not batch.empty:
+        with st.expander(f"Undo last batch ({len(batch)} ticket(s), {batch['at'].iloc[0][:16].replace('T', ' ')} UTC)"):
+            st.dataframe(batch[["key", "old_owner", "new_owner"]].rename(columns={
+                "key": "Ticket", "old_owner": "Restore Owner", "new_owner": "Current Owner"}),
+                hide_index=True, width="stretch")
+            undo_typed = st.text_input("Type **UNDO** to restore the previous owners", key="asg_undo_confirm")
+            if st.button("Undo last batch", disabled=undo_typed.strip() != "UNDO", key="asg_undo"):
+                jira = st.session_state.get("jira_connector") or validate_jira_connection()[2]
+                with st.spinner("Restoring owners…"):
+                    st.dataframe(jira_assign.undo_batch(jira, batch), hide_index=True, width="stretch")
 
 
 # ── Mock data helpers ───────────────────────────────────────────────────────────
@@ -1405,6 +1483,96 @@ elif selected == "🗂️  Backlog":
                 )
             },
         )
+
+
+# ── Suggested Assignments ────────────────────────────────────────────────────────
+elif selected == "🧭  Suggested Assignments":
+    st.title("🧭 Suggested Assignments")
+    st.caption(
+        "Who should take each unassigned or triage ticket, weighing domain experience, availability, the SLA and team "
+        "load. Nothing changes in Jira unless you use Assign in Jira (safe mode). PE tickets only; Jira data only."
+    )
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    if df_issues is None or df_issues.empty:
+        st.info("📥 Fetch Jira tickets from the sidebar to see suggested assignments.")
+    else:
+        with st.spinner("Trying each ticket in each person's queue…"):
+            asg = build_assignment_visuals(df_issues)
+        if asg["error_message"]:
+            st.warning(asg["error_message"])
+        else:
+            kp = asg["kpis"]
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Tickets to Assign", f"{kp['to_assign']}", help="Open PE tickets that are unassigned or in Triage/Reviewing.")
+            k2.metric("With a Known Domain", f"{kp['with_domain']}",
+                      help="Domain recognised from the title or comments; the rest are suggested on availability alone.")
+            k3.metric("Plan Fits SLA", f"{kp['fit']} of {kp['to_assign']}" if kp["to_assign"] else "—",
+                      help="Suggested owner likely finishes within the SLA (P85).")
+            k4.metric("People in the Plan", f"{kp['people']} of {kp['candidates']}" if kp["to_assign"] else "—",
+                      help=f"Core team members who would receive work. Most to one person: {kp.get('max_per_person', 0)}.")
+
+            with st.expander("How suggestions are made"):
+                st.markdown(
+                    "- **Tickets:** open PE tickets that are unassigned or in Triage / Reviewing, taken in **ATC order** "
+                    "(most urgent first).\n"
+                    "- **Candidates:** people who completed at least 5 PE tickets in the last 90 days, excluding people "
+                    "who have left the team.\n"
+                    "- **Domain experience:** recent tickets in the same domain (from titles and comments, using the same "
+                    "domain list as darkstar's Intake page); recent work counts more.\n"
+                    "- **Availability and SLA:** each ticket is tried in each person's queue (their current work first, "
+                    "then ATC order, at their own speed) using the Backlog forecast. Owners who would finish within the "
+                    "SLA come first.\n"
+                    "- **Balance:** people already above their usual load, or already given tickets in this plan, are "
+                    "ranked a little lower, so work spreads across the team.\n"
+                    "- **Backup** is the next best option; **Stretch** is someone with some experience in the domain who "
+                    "could grow into it."
+                )
+
+            a1, a2 = st.columns([4, 1])
+            with a1:
+                st.subheader("Assignment Plan")
+            with a2:
+                st.write("")
+                from reports.jira_dates import write_permission
+                host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+                assign_allowed, assign_reason = write_permission(host)
+                if st.button("✏️ Assign in Jira", key="asg_open", width="stretch",
+                             disabled=not assign_allowed or asg["plan_df"].empty,
+                             help=("Pick tickets from this plan, review them and assign them in Jira safely."
+                                   if assign_allowed else f"Disabled. {assign_reason}")):
+                    _assign_dialog(asg)
+            if asg["plan_df"].empty:
+                st.success("No unassigned or triage tickets right now.")
+            else:
+                st.download_button("⬇️ Download plan (CSV)", asg["plan_df"].to_csv(index=False).encode("utf-8"),
+                                   file_name="suggested_assignments.csv", mime="text/csv", key="asg_csv")
+                st.dataframe(
+                    asg["plan_df"], width="stretch", hide_index=True,
+                    column_config={
+                        "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira", display_text=r".*/([^/]+)$"),
+                        "Why": st.column_config.TextColumn("Why", width="large"),
+                    },
+                )
+
+                st.subheader("Compare Options for a Ticket")
+                key = st.selectbox("Ticket", list(asg["options"]), key="asg_ticket")
+                st.caption("Every candidate for this ticket, best first: SLA fit, then score.")
+                st.dataframe(asg["options"][key], width="stretch", hide_index=True)
+
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.subheader("Who Knows What")
+                st.caption("Recent tickets per domain and person (recent work counts more). Top domains by volume.")
+                if asg["matrix_fig"] is not None:
+                    st.plotly_chart(asg["matrix_fig"], width="stretch")
+            with c2:
+                st.subheader("Domains Leaning on One Person")
+                st.caption("Share of each domain's recent work done by its top person: candidates for cross-training.")
+                st.dataframe(asg["concentration_df"], width="stretch", hide_index=True, height=360,
+                             column_config={"Top Share %": st.column_config.ProgressColumn(
+                                 "Top Share %", format="%d%%", min_value=0, max_value=100)})
+            with st.expander("Team load used for the suggestions"):
+                st.dataframe(asg["load_df"], width="stretch", hide_index=True)
 
 
 # ── Forecast ─────────────────────────────────────────────────────────────────────

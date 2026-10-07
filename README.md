@@ -14,6 +14,7 @@ It supports:
 - **Personal Dashboard** with prioritized attention and Epic-only view
 	- **Apparent Tardiness Cost (ATC)** ticket sequencing: suggests a work order that minimizes weighted tardiness across a person's open tickets
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
+- **Suggested Assignments**: who should take each unassigned or triage ticket — domain experience, availability, SLA fit and team load combined into an assignment plan with reasons, backups and cross-training suggestions, plus a safe-mode **✏️ Assign in Jira** button — see [How Suggested Assignments works](#how-suggested-assignments-works)
 - **SLA**: the daily view of breached, late and at-risk work. Two breach rates against the **under 10%** goal (SLA came due / completed late), a trend, where breaches come from, what's coming due, and two searchable, filterable action tables (**SLA Detail** and **Breached Tickets**) with the latest human comment and a Jira link — see [How the SLA page works](#how-the-sla-page-works)
 - **Delivery Forecast**: how many tickets PE will likely deliver in the next 4, 8 and 12 weeks with a calibrated range, a "can we commit to a project?" calculator, a demand vs delivery outlook, and the forecast's own track record — see [How the Delivery Forecast works](#how-the-delivery-forecast-works)
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
@@ -55,8 +56,11 @@ Jira_Web_Dashboard/
 │   └── metrics.py
 ├── reports/
 │   ├── __init__.py
+│   ├── assignment_report.py     # Suggested Assignments
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
+│   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
 │   ├── jira_dates.py            # safe-mode Target date updates (Backlog page)
+│   ├── jira_assign.py           # safe-mode Assign in Jira (Suggested Assignments page)
 │   ├── executive_summary.py
 │   ├── capacity_report.py
 │   ├── trend_report.py
@@ -90,6 +94,8 @@ Jira_Web_Dashboard/
 │   ├── test_sla.py
 │   ├── test_jira_dates.py
 │   ├── test_size_distribution.py
+│   ├── test_assignments.py
+│   ├── test_jira_assign.py
 │   └── ...
 └── backup/
 ```
@@ -601,6 +607,63 @@ which only counted tickets created.
 
 ---
 
+## How Suggested Assignments works
+
+The **🧭 Suggested Assignments** page proposes an owner for each open PE ticket that is unassigned or in
+Triage / Reviewing. It uses Jira data only (no darkstar data), and nothing is written to Jira unless you
+use **✏️ Assign in Jira** (below). Code: `reports/assignment_report.py`.
+
+**Candidates** are people who completed at least 5 PE tickets in the last 90 days, minus
+`DEPARTED_MEMBERS` (people who have left PE; their history still counts everywhere else).
+
+Each candidate is scored for each ticket:
+
+| Signal | How |
+| --- | --- |
+| Domain experience | Recent completed (1.0) and active (0.5) tickets in the ticket's primary domain, halving every 120 days. Domains are tagged from the title **and human comments** (79% of PE tickets get a domain, against 67% from titles alone) |
+| Availability and SLA fit | The Backlog queue simulation with the ticket added to the candidate's queue in ATC order, after their In Progress work, at their own speed for that priority. Gives a likely start and a P85 finish, and whether that finish beats the SLA due date (or, with no Target start yet, whether the work fits within the SLA) |
+| Load | A penalty when someone already holds 1.3× their usual WIP, and a smaller one for each ticket the plan has already given them |
+
+Owners who fit the SLA rank first, then by score (60% experience, 40% availability, minus the
+penalties). Tickets are planned in **ATC order**, and each suggestion is added to that person's queue
+before the next ticket is scored, so the plan spreads work. Each ticket shows a **Suggested** owner with
+the reason, a **Backup**, and a **Stretch** (someone with some experience in the domain, for
+cross-training). **Compare Options** lists every candidate for a ticket.
+
+Also on the page: **Who Knows What** (recent tickets per domain and person) and **Domains Leaning on
+One Person** (the top person's share of each domain, for cross-training).
+
+**Taxonomy.** `reports/domains.py` is a copy of darkstar's Intake taxonomy (33 domains);
+`tests/test_assignments.py` fails if the two drift apart, so edit both together.
+
+**Limits.** A back-test (671 tickets, October 2026) found that today's assignee was the top domain expert
+26% of the time and in the top 3 49% of the time, so work isn't routed mainly by expertise today. The
+page balances expertise against availability and the SLA rather than copying past assignments. Whether
+following it improves SLA results can only be measured after using it.
+
+### Assigning in Jira (safe mode)
+
+The **✏️ Assign in Jira** button next to *Assignment Plan* opens a review dialog. Code:
+`reports/jira_assign.py`. It uses the same switch and safeguards as
+[Updating Target dates](#updating-target-dates-safe-mode): **off by default**, disabled unless
+`JIRA_WRITE_ENABLED=true` and the app is opened from localhost.
+
+1. **Review**: one row per planned ticket, nothing selected. **Assign To** defaults to the suggestion and
+   can be changed to any core team member. A dry run shows exactly what would be sent.
+2. **By account id, never by name**: people are assigned by the Jira account id read from their own
+   tickets (`assignee_account_id`). Someone with no known id can't be chosen; fetch Jira tickets again.
+3. **Validation** blocks the batch on any error (no one chosen, no account id, more than 25 tickets) and
+   warns when a ticket is reassigned from its current owner or someone other than the suggestion is chosen.
+4. **Confirmation**: type `ASSIGN n` to enable the button.
+5. **No overwriting**: each ticket's assignee is re-read just before writing; the ticket is skipped if it
+   changed in Jira since the data was loaded.
+6. **Audit**: every assigned ticket gets a Jira comment (who, why, previous owner, batch id), and each row
+   is appended to the same audit log as Target date changes (action `assign`).
+7. **Undo last batch** (type `UNDO`) restores the previous owner (or unassigns), but only where Jira
+   still holds the person the batch assigned.
+
+---
+
 ## How the SLA page works
 
 The **SLA** page is the daily view of where work is breached, late or at risk, and of the breach rate
@@ -931,6 +994,8 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- New **Suggested Assignments** page: an advisory assignment plan for unassigned and triage tickets combining domain experience (titles and comments), availability and SLA fit from the Backlog queue simulation, and load balance, with backups, stretch suggestions, a who-knows-what matrix and single-person domains; shared domain taxonomy in `reports/domains.py` (see [How Suggested Assignments works](#how-suggested-assignments-works))
+- **Suggested Assignments**: **✏️ Assign in Jira** button for safe-mode assignment (review, assign by account id, validation, typed confirmation, re-read before write, Jira comment, audit log, undo; off by default and localhost-only) (see [Assigning in Jira (safe mode)](#assigning-in-jira-safe-mode)); the data loader now keeps each assignee's Jira account id
 - Rebuilt **Distribution of Ticket by Estimated Size** around sizing as a practice: coverage against a 90% target, a data-derived sizing guide, size accuracy, SLA met by size, open work by size, data-backed recommendations and "Needs a Size" / "Likely Undersized" action lists (see [How Distribution by Estimated Size works](#how-distribution-by-estimated-size-works))
 - **Backlog**: Projected Start back-tested against actual starts (honest median, ±3 weeks); new **Safe Start**, **Start Confidence** and **Target Start Slipped** columns; and a **✏️ Update Target dates** button for safe-mode Jira updates (proposals, review, validation, typed confirmation, re-read before write, Jira comment, audit log, undo; off by default and localhost-only) (see [Updating Target dates (safe mode)](#updating-target-dates-safe-mode))
 - **SLA**: re-planned tickets are judged on their original Target start by default, so moving dates can't lower the breach rate
@@ -946,7 +1011,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py`, `tests/test_sla.py`, `tests/test_jira_dates.py` and `tests/test_size_distribution.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py`, `tests/test_sla.py`, `tests/test_jira_dates.py`, `tests/test_size_distribution.py`, `tests/test_assignments.py` and `tests/test_jira_assign.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -1048,7 +1113,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py -q
 ```
 
 ---

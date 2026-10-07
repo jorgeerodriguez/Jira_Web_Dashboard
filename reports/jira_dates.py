@@ -204,7 +204,7 @@ def read_audit() -> pd.DataFrame:
 def original_target_starts() -> dict[str, date]:
     """Each re-planned ticket's Target start before its first dashboard update (for honest SLA judging)."""
     log = read_audit()
-    if log.empty:
+    if log.empty or "old_start" not in log.columns:
         return {}
     applied = log[(log["action"] == "update") & (log["result"] == "updated") & log["old_start"].notna()]
     first = applied.sort_values("at").groupby("key").first()
@@ -213,8 +213,8 @@ def original_target_starts() -> dict[str, date]:
 
 def last_batch() -> pd.DataFrame:
     log = read_audit()
-    if log.empty:
-        return log
+    if log.empty or "action" not in log.columns:
+        return pd.DataFrame()
     updates = log[(log["action"] == "update") & (log["result"] == "updated")]
     if updates.empty:
         return updates

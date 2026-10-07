@@ -198,6 +198,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "issuetype": fields.get("issuetype", {}).get("name", ""),
             "creator_name": creator_name,
             "assignee_name": assignee_name,
+            # Jira account id: what assignments must use (display names are not unique keys).
+            "assignee_account_id": (fields.get("assignee") or {}).get("accountId"),
             "created": created_local,
             "updated": updated_local,
             "resolved": resolved_local,
