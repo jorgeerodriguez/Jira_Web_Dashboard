@@ -24,7 +24,7 @@ It supports:
 - **Distribution of Ticket's Age**: open-work age against SLA, where work has gone quiet (no human comment), and whether open work is getting older — see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works)
 - **Capacity**: weekly delivery vs demand, a Monte Carlo delivery forecast with a "how long for N more tickets?" calculator, where capacity goes (planned vs reactive, priority), and load balance across the team — see [How Capacity works](#how-capacity-works)
 - **Distribution per Business Leader**: a service scorecard per requesting business lead (requested, delivered, wait, SLA met, open past SLA, top friction) with demand, SLA and priority charts — see [How Distribution per Business Leader works](#how-distribution-per-business-leader-works)
-- **Distribution of Ticket by Estimated Size** report, including a Priority × Size risk heatmap
+- **Distribution of Ticket by Estimated Size**: sizing as a practice — coverage against a 90% target, a sizing guide derived from the team's own work, size accuracy, SLA met by size, open work by size, data-backed recommendations, and "Needs a Size" / "Likely Undersized" action lists — see [How Distribution by Estimated Size works](#how-distribution-by-estimated-size-works)
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
 - **Velocity**: what lead time we can promise a requester (50/85/95%), waiting vs in-progress time by priority, whether sizes predict effort, an SLA reality check per Priority × Size, and what was delivered — see [How Velocity works](#how-velocity-works)
 - **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, plus team contribution over time — see [How Trend works](#how-trend-works)
@@ -89,6 +89,7 @@ Jira_Web_Dashboard/
 │   ├── test_forecast.py
 │   ├── test_sla.py
 │   ├── test_jira_dates.py
+│   ├── test_size_distribution.py
 │   └── ...
 └── backup/
 ```
@@ -214,10 +215,10 @@ These rules are shared across reports so the numbers agree:
   through their child tickets. A row is excluded when either its `issuetype` or its `status` is
   `Feature`, `Initiative` (or the `Iniciative` misspelling). Applied in the Forecast, Executive
   Summary, In Progress, Backlog, Blocked & On Hold, Distribution of Ticket's Age, Distribution per
-  Business Leader, Capacity, Trend, Velocity, SLA and Teams Conversations reports. The Executive
+  Business Leader, Capacity, Trend, Velocity, SLA, Estimated Size and Teams Conversations reports. The Executive
   Summary, In Progress, Backlog and Blocked & On Hold pages also leave out the people in
   `EXCLUDED_ASSIGNEES`, so their counts agree. The Size Distribution report excludes Features
-  only, and Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
+  Tickets Older Than 90 Days shows Features and Initiatives in a separate Epics table.
 - **PE SLA scope**: the SLA (Priority × Size, business days) applies to Platform Engineering tickets.
   Release Management **"Change and Release" (CAR)** tickets follow the release process and have no PE
   SLA: they are never judged against it and are not counted in SLA compliance. The rule is
@@ -789,6 +790,52 @@ slow work), shown as averages in per-person box plots and red-green heatmaps.
 
 ---
 
+## How Distribution by Estimated Size works
+
+The **Distribution of Ticket by Estimated Size** page treats sizing as a practice to improve: how much
+work is sized, whether sizes match the real effort, and how each size performs. Code:
+`reports/estimated_size_distribution_report.py`. PE tickets only; *work* = business days from Target
+start to Done (from creation when Target start is earlier).
+
+### KPIs
+
+| KPI | Meaning |
+| --- | --- |
+| Open Tickets Sized | Open PE tickets with an Estimated Size, against the 90% target (`COVERAGE_TARGET`) |
+| New Tickets Sized (30d) | Tickets created in the last 30 days that are sized, vs the 30 days before |
+| Size Accuracy | Completed sized tickets (last 180 days) whose work landed in their size's range in the sizing guide, with the share that took longer (undersized) or less (oversized) |
+| Open & Unsized | Open tickets to size |
+| Work Queued | Open In Progress + Backlog tickets × the typical work of their size |
+
+### Sizing guide
+
+The guide comes from the team's own completed work. The boundary between two sizes sits at the
+geometric midpoint of their typical (median) work. As of 2026-10-07: **Small 0–2, Medium 3–5, Large
+6–12, XL 13+ business days**, from typical work of 1, 3, 7 and 20 days. Sizes with fewer than 10
+completed tickets fall back to `DEFAULT_GUIDE_BD`. Accuracy against it was 57%; Medium was the least
+reliable size, and 47% of Medium tickets finished in Small time.
+
+### Sections
+
+- **What the data suggests changing**: recommendations generated from the numbers, for example size at
+  intake (naming the least-sized groups), sizes that are often bigger or smaller than they look, the
+  SLA treatment of unsized tickets (judged as Medium, though they typically take Small-sized work),
+  splitting XL work, and writing the guide down.
+- **Sizing Adoption**: monthly share of new tickets sized, against the target (it went from about 4% in
+  spring 2026 to about 60% in Sep–Oct).
+- **Where Sizes Are Missing**: coverage by business lead, assignee or issue type (groups below the
+  target in orange).
+- **Do Our Sizes Mean What We Think?**: actual work per size against the shaded guide ranges, plus the
+  guide table with right-sized, undersized and oversized shares.
+- **SLA Met by Size** and **Open Work by Size** (In Progress and Backlog by size and priority).
+- **Needs a Size** (open unsized tickets, oldest first) and **Likely Undersized** (in-progress tickets
+  already past their size's range, with a suggested size), each with Jira links.
+
+It replaced counts and pie charts by size and a Priority × Size heatmap whose "risk" cells were an
+assumption (Urgent/High with Large/XL) rather than a measurement.
+
+---
+
 ## How ticket sequencing works (Apparent Tardiness Cost)
 
 The **Personal Dashboard**'s suggested sequence and calendar are built with this method, and the
@@ -884,6 +931,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
 - **Blocked & On Hold** is now tickets-only (no Features or Initiatives, no `EXCLUDED_ASSIGNEES`), so it agrees with the Executive Summary
+- Rebuilt **Distribution of Ticket by Estimated Size** around sizing as a practice: coverage against a 90% target, a data-derived sizing guide, size accuracy, SLA met by size, open work by size, data-backed recommendations and "Needs a Size" / "Likely Undersized" action lists (see [How Distribution by Estimated Size works](#how-distribution-by-estimated-size-works))
 - **Backlog**: Projected Start back-tested against actual starts (honest median, ±3 weeks); new **Safe Start**, **Start Confidence** and **Target Start Slipped** columns; and a **✏️ Update Target dates** button for safe-mode Jira updates (proposals, review, validation, typed confirmation, re-read before write, Jira comment, audit log, undo; off by default and localhost-only) (see [Updating Target dates (safe mode)](#updating-target-dates-safe-mode))
 - **SLA**: re-planned tickets are judged on their original Target start by default, so moving dates can't lower the breach rate
 - Rebuilt the **SLA** page around the real SLA table: two breach rates (SLA came due / completed late) against the under-10% goal with 7/30/90-day windows, trend, Priority × Size breach map, coming-due chart, open work by stage, filters, and searchable, downloadable **SLA Detail** and **Breached Tickets** tables with the latest human comment (see [How the SLA page works](#how-the-sla-page-works))
@@ -898,7 +946,7 @@ In practical terms, this means the model now uses both binary history and latene
 - Rebuilt **Distribution of Ticket's Age**: age against SLA by stage, silence since the last human comment, weekly age trend (median and 75th percentile), by-status summary and a past-SLA-first ticket table; business days and tickets-only, replacing the duplicate box and violin charts (see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works))
 - Fixed the age-by-business-lead chart, which showed the youngest groups instead of the oldest
 - The sidebar **Lookback** now drives the Executive Summary's period comparisons
-- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py`, `tests/test_sla.py` and `tests/test_jira_dates.py`; made a Teams Conversations test independent of the day of the month
+- Added `tests/test_executive_summary.py`, `tests/test_ticket_age.py`, `tests/test_business_leader.py`, `tests/test_capacity.py`, `tests/test_trend.py`, `tests/test_velocity_flow.py`, `tests/test_forecast.py`, `tests/test_sla.py`, `tests/test_jira_dates.py` and `tests/test_size_distribution.py`; made a Teams Conversations test independent of the day of the month
 
 ### 2026-09-29
 - Renamed the **Word of the Month** page to **Teams Conversations** and the **Blocked** page to **Blocked & On Hold** (menu, page titles and messages; module names unchanged)
@@ -1000,7 +1048,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py -q
 ```
 
 ---

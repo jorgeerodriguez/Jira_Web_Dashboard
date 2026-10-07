@@ -31,7 +31,12 @@ from reports.backlog_report import (
     build_backlog_visuals,
 )
 from reports.blocked_report import build_blocked_visuals
-from reports.estimated_size_distribution_report import build_estimated_size_distribution_visuals
+from reports.estimated_size_distribution_report import (
+    MIN_GROUP as SIZE_MIN_GROUP,
+    OUTCOME_DAYS as SIZE_OUTCOME_DAYS,
+    RECENT_DAYS as SIZE_RECENT_DAYS,
+    build_estimated_size_distribution_visuals,
+)
 try:
     from reports.forecast_report import ACCURACY_HORIZON as FORECAST_ACCURACY_HORIZON, build_forecast_visuals
 except ImportError:
@@ -2301,48 +2306,100 @@ elif selected == "🧑‍💼  Personal Dashboard":
 elif selected == "📏  Distribution of Ticket by Estimated Size":
     st.title("📏 Distribution of Ticket by Estimated Size")
     st.caption(
-        "In Progress (Status = In Progress) vs Backlog (Status = To Do / Tech Discovery Required), "
-        "grouped by estimated_size_name. Features are excluded from both groups."
+        "Sizing as a practice: how much work is sized, whether sizes match the real effort, how each size performs "
+        "against its SLA, and what to size next. PE tickets only; work measured in business days (Target start → Done)."
     )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
     size_visuals = build_estimated_size_distribution_visuals(df_issues)
 
-    if size_visuals["bar_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see the estimated size distribution.")
+    if size_visuals["error_message"]:
+        st.info(size_visuals["error_message"] if df_issues is not None and not df_issues.empty
+                else "📥 Fetch Jira tickets from the sidebar to see the estimated size distribution.")
     else:
-        c1, c2 = st.columns(2)
-        c1.metric("In Progress Tickets", f"{size_visuals['in_progress_count']:,}")
-        c2.metric("Backlog Tickets", f"{size_visuals['backlog_count']:,}")
+        kp = size_visuals["kpis"]
+        target = kp["target"]
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Open Tickets Sized", f"{kp['coverage_open']:.0%}" if kp["coverage_open"] is not None else "—",
+                  help=f"Open PE tickets with an Estimated Size. Target {target:.0%}.")
+        k1.caption(("✓ at target" if (kp["coverage_open"] or 0) >= target else f"✖ below {target:.0%}")
+                   + f" · {kp['open_unsized']} of {kp['open_total']} unsized")
+        k2.metric(f"New Tickets Sized ({SIZE_RECENT_DAYS}d)", f"{kp['coverage_new']:.0%}" if kp["coverage_new"] is not None else "—",
+                  f"{kp['coverage_new_delta'] * 100:+.0f} pts vs previous {SIZE_RECENT_DAYS}d"
+                  if kp["coverage_new_delta"] is not None else None,
+                  help=f"Of {kp['new_total']} PE tickets created in the last {SIZE_RECENT_DAYS} days.")
+        k3.metric("Size Accuracy", f"{kp['accuracy']:.0%}" if kp["accuracy"] is not None else "—",
+                  help=f"Completed sized tickets (last {SIZE_OUTCOME_DAYS} days) whose work landed in their size's range "
+                       "in the sizing guide below.")
+        if kp["accuracy"] is not None:
+            k3.caption(f"{kp['undersized']:.0%} took longer · {kp['oversized']:.0%} took less")
+        k4.metric("Open & Unsized", f"{kp['open_unsized']}", help="Open tickets to size (list below).")
+        k5.metric("Work Queued", f"≈ {kp['queued_bd']:,.0f} bd",
+                  help="Open In Progress + Backlog tickets × the typical work of their size.")
+
+        if size_visuals["recommendations"]:
+            with st.container(border=True):
+                st.markdown("**What the data suggests changing**")
+                st.markdown("\n".join(f"- {r}" for r in size_visuals["recommendations"]))
 
         st.divider()
-        st.plotly_chart(size_visuals["bar_fig"], width="stretch")
+        a1, a2 = st.columns(2)
+        with a1:
+            st.subheader("Sizing Adoption")
+            st.caption("Share of new PE tickets with an Estimated Size, by month created.")
+            st.plotly_chart(size_visuals["adoption_fig"], width="stretch")
+        with a2:
+            st.subheader("Where Sizes Are Missing")
+            if size_visuals["coverage_figs"]:
+                by = st.radio("By", list(size_visuals["coverage_figs"]), horizontal=True, key="size_cov_by",
+                              label_visibility="collapsed")
+                st.caption(f"Orange = below the {target:.0%} target. Groups with at least {SIZE_MIN_GROUP} tickets.")
+                st.plotly_chart(size_visuals["coverage_figs"][by], width="stretch")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if size_visuals["pie_in_progress_fig"] is not None:
-                st.plotly_chart(size_visuals["pie_in_progress_fig"], width="stretch")
-        with col2:
-            if size_visuals["pie_backlog_fig"] is not None:
-                st.plotly_chart(size_visuals["pie_backlog_fig"], width="stretch")
+        st.subheader("Do Our Sizes Mean What We Think?")
+        guide_note = ("derived from the team's own completed work" if size_visuals["guide_from_data"]
+                      else "the default guide (not enough completed work to derive one)")
+        st.caption(f"Actual business days of work per size (last {SIZE_OUTCOME_DAYS} days). Shaded ranges = sizing guide, "
+                   f"{guide_note}.")
+        g1, g2 = st.columns([3, 2])
+        with g1:
+            if size_visuals["accuracy_fig"] is not None:
+                st.plotly_chart(size_visuals["accuracy_fig"], width="stretch")
+        with g2:
+            st.markdown("**Sizing guide and accuracy**")
+            st.dataframe(size_visuals["guide_df"], width="stretch", hide_index=True)
 
-        if size_visuals.get("priority_size_heatmap_fig") is not None:
-            st.subheader("Priority vs. Size Risk Heatmap")
-            st.caption("Cells shaded red (Urgent/High priority + Large/XL size) are most likely to blow resolution targets.")
-            st.plotly_chart(size_visuals["priority_size_heatmap_fig"], width="stretch")
+        o1, o2 = st.columns(2)
+        with o1:
+            st.subheader("SLA Met by Size")
+            st.caption("Completed tickets that finished within their SLA. * = fewer than 5 tickets.")
+            if size_visuals["outcome_fig"] is not None:
+                st.plotly_chart(size_visuals["outcome_fig"], width="stretch")
+            st.dataframe(size_visuals["outcomes_df"], width="stretch", hide_index=True)
+        with o2:
+            st.subheader("Open Work by Size")
+            st.caption("In Progress and Backlog tickets by size and priority.")
+            if size_visuals["load_fig"] is not None:
+                st.plotly_chart(size_visuals["load_fig"], width="stretch")
 
-        st.subheader("Estimated Size Detail")
-        st.dataframe(size_visuals["table_df"], width="stretch")
+        link = {"Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira to set or change the size",
+                                                      display_text=r".*/([^/]+)$")}
+        st.divider()
+        st.subheader("Needs a Size")
+        st.caption("Open tickets without an Estimated Size, oldest first.")
+        if size_visuals["needs_size_df"].empty:
+            st.success("Every open ticket has a size.")
+        else:
+            st.dataframe(size_visuals["needs_size_df"], width="stretch", hide_index=True, column_config=link)
 
-        st.subheader("Ticket Detail")
-        st.dataframe(
-            size_visuals["detail_df"],
-            width="stretch",
-            column_config={
-                "Ticket": st.column_config.LinkColumn(
-                    "Ticket",
-                    help="Open Jira ticket",
-                    display_text=r".*/([^/]+)$",
-                )
-            },
-        )
+        st.subheader("Likely Undersized")
+        st.caption("In-progress tickets already running longer than their size's range in the guide. Consider re-sizing.")
+        if size_visuals["undersized_df"].empty:
+            st.success("No in-progress ticket is running past its size's range.")
+        else:
+            st.dataframe(size_visuals["undersized_df"], width="stretch", hide_index=True, column_config=link)
+
+        with st.expander("All open In Progress and Backlog tickets by size"):
+            st.dataframe(size_visuals["detail_df"], width="stretch", hide_index=True, column_config=link)
+
+
