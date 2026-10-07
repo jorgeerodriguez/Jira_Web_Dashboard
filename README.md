@@ -441,7 +441,8 @@ The **✏️ Update Target dates** button next to *Backlog Forecast Detail* open
 7. **Undo last batch** (type `UNDO`) restores the old dates, but only where Jira still holds the dates
    the batch wrote.
 
-**Turning it on.** Writes are **off by default**, and the dialog is preview-only. To enable them on your
+**Turning it on.** Writes are **off by default**: the **✏️ Update Target dates** button is **disabled** (its
+tooltip says why), and the dialog refuses to show proposals without permission. To enable them on your
 own machine, set this line in the project's `.env` file (git- and Docker-ignored, so it never leaves your
 computer):
 
@@ -449,8 +450,9 @@ computer):
 JIRA_WRITE_ENABLED=true
 ```
 
-The file is read fresh each time the dialog opens, so changing the line to `false` (or deleting it)
-turns updates off without restarting. `true`, `1`, `yes` or `on` enable it; an empty value, any other
+The file is read fresh on every page refresh, so changing the line to `false` (or deleting it) disables
+the button without restarting. The button is also disabled for anyone not opening the app from the
+machine running it (localhost), even when the switch is on. `true`, `1`, `yes` or `on` enable it; an empty value, any other
 value, a missing line or a missing file means off. If `.env` has no value for it, an environment variable
 of the same name is used instead, e.g. for one run:
 

@@ -702,9 +702,9 @@ def _target_date_dialog(backlog_payload: dict) -> None:
         "review the changes and confirm. Each updated ticket gets a Jira comment, and the last batch can be undone."
     )
     if not allowed:
-        st.warning(f"Preview only: {reason}")
-    else:
-        st.success(f"🔓 {reason} Each update still needs your selection and typed confirmation.")
+        st.error(f"Jira updates are not available: {reason}")
+        return
+    st.success(f"🔓 {reason} Each update still needs your selection and typed confirmation.")
 
     rule = st.radio("Propose Target start from", ["likely", "safe"], horizontal=True,
                     format_func=lambda r: "Likely start (P50)" if r == "likely" else "Safe start (85% by then)",
@@ -1363,9 +1363,12 @@ elif selected == "🗂️  Backlog":
             st.subheader("Backlog Forecast Detail")
         with h2:
             st.write("")
-            if st.button("✏️ Update Target dates", key="tdu_open", width="stretch",
-                         help="Propose new Target start / end dates from this forecast, review them, and (if enabled) "
-                              "update Jira safely."):
+            from reports.jira_dates import write_permission
+            host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+            updates_allowed, updates_reason = write_permission(host)
+            if st.button("✏️ Update Target dates", key="tdu_open", width="stretch", disabled=not updates_allowed,
+                         help=("Propose new Target start / end dates from this forecast, review them and update Jira "
+                               "safely." if updates_allowed else f"Disabled. {updates_reason}")):
                 _target_date_dialog(backlog)
         st.caption(
             f"Projected Start is the likely start (P50); Safe Start is the date 85% of tickets started by in back-tests. "
