@@ -1,0 +1,79 @@
+{
+  "as_of": "2026-10-08",
+  "rows_fetched": 6096,
+  "pe_tickets": 3764,
+  "open_pe": 100,
+  "human_comments": 11687,
+  "bot_comments": 4912,
+  "forecast": {
+    "4": {
+      "likely": 324,
+      "low": 257,
+      "high": 512
+    },
+    "8": {
+      "likely": 661,
+      "low": 555,
+      "high": 1183
+    },
+    "12": {
+      "likely": 1004,
+      "low": 826,
+      "high": 1942
+    }
+  },
+  "backtest": {
+    "4": {
+      "coverage": 0.82,
+      "median_ape": 0.22
+    },
+    "8": {
+      "coverage": 0.68,
+      "median_ape": 0.23
+    },
+    "12": {
+      "coverage": 0.6,
+      "median_ape": 0.24
+    }
+  },
+  "backtest_rows": 942,
+  "history_rows": 1631,
+  "start_bt": {
+    "n": 239,
+    "median_err": 0.0,
+    "mae": 7.0,
+    "target_median_err": 9.0,
+    "n_target": 131
+  },
+  "guide": {
+    "Small": [
+      0,
+      2
+    ],
+    "Medium": [
+      3,
+      4
+    ],
+    "Large": [
+      5,
+      12
+    ],
+    "XL": [
+      13,
+      null
+    ]
+  },
+  "size_accuracy": 0.55,
+  "themes_period": "2026-08 to 2026-10",
+  "coverage": 0.6947218259629101,
+  "first_reply_hours": 15.082664999999999,
+  "lead": {
+    "n": 871,
+    "p50": 2.0,
+    "p85": 14.0,
+    "p95": 33.0
+  },
+  "domain_tagged": 0.8,
+  "domain_tagged_title": 0.67,
+  "domains": 33
+}

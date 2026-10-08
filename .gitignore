@@ -233,3 +233,6 @@ __marimo__/
 
 # Local audit log of Jira Target date updates made from the dashboard
 .dashboard_audit/
+
+# Generated white paper and leadership brief PDFs (internal numbers; the GitHub repo is public)
+docs/whitepaper/*.pdf
