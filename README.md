@@ -3,6 +3,7 @@
 Platform Engineering Jira reporting dashboard built with Python + Streamlit.
 
 It supports:
+- a **Welcome** page (the landing page) for the PE team and leadership: what the app is, the three pages to open if you only have a couple of minutes, every page grouped by the question it answers, how to read the numbers, key terms and where the data comes from — see [Welcome page](#welcome-page)
 - live Jira connection validation
 - full ticket fetch + dataframe build (DEVOPS + CAR)
 - multiple analytics reports (capacity, trend, velocity, SLA, forecast, etc.)
@@ -60,6 +61,7 @@ Jira_Web_Dashboard/
 ├── reports/
 │   ├── __init__.py
 │   ├── assignment_report.py     # Suggested Assignments
+│   ├── welcome.py               # Welcome page content and layout
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
 │   ├── change_history.py        # date changes, SLA clock set after the fact, status episodes
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
@@ -101,6 +103,7 @@ Jira_Web_Dashboard/
 │   ├── test_assignments.py
 │   ├── test_jira_assign.py
 │   ├── test_change_history.py
+│   ├── test_welcome.py
 │   └── ...
 └── backup/
 ```
@@ -238,6 +241,23 @@ These rules are shared across reports so the numbers agree:
 - **When it finished**: most Done tickets have no Jira resolution date, so every report uses
   `status_category_changed` (Jira's `statuscategorychangedate`, when the ticket moved to Done), which
   later comments or edits don't move.
+
+---
+
+## Welcome page
+
+The app opens on **👋 Welcome** (`reports/welcome.py`), written for the PE team and leadership:
+
+- a **Start here** prompt to fetch Jira tickets, or the data status once loaded (issues, change history, when fetched);
+- **Got 2 minutes?**: Executive Summary (leadership), SLA (everyone) and Personal Dashboard (PE engineers), each with
+  an Open button;
+- **Find the right page**: every menu page grouped by the question it answers (How are we doing? When will it be
+  done? Where is work stuck? Who does what, and how do we work?), one line each with an Open button;
+- **How to read the numbers** (five principles), **Key terms** and **Where the data comes from**.
+
+The text lives in plain lists at the top of `reports/welcome.py` (`QUICK_START`, `PAGE_GROUPS`, `PRINCIPLES`,
+`GLOSSARY`). When you add, rename or remove a menu page, update `PAGE_GROUPS` too: `tests/test_welcome.py` fails
+if the Welcome page and the menu disagree. The page runs no calculations, so it opens instantly.
 
 ---
 
@@ -1068,6 +1088,7 @@ In practical terms, this means the model now uses both binary history and latene
 ## Release notes
 
 ### 2026-10-09
+- New **Welcome** page, now the landing page (replaces Overview as the default; Overview stays in the menu) (see [Welcome page](#welcome-page))
 - Every fetch now also loads **change history** (status, Target start, Target end) from Jira's bulk changelog endpoint, read-only, about 25–40 seconds (see [Change history](#change-history))
 - **Trend**: Target date measures in the scorecard and small multiples, and a **Target Date Changes** section (outcomes by number of moves, moves by priority and size, most re-planned open tickets)
 - **SLA**: tickets whose **SLA clock was set after the fact** are flagged (warning, Breached Tickets column, own table) and can be left out of the breach rates
@@ -1197,7 +1218,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py -q
 ```
 
 ---

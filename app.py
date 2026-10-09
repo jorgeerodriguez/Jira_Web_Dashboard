@@ -26,6 +26,7 @@ from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_tre
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
 from reports.assignment_report import build_assignment_visuals
+from reports.welcome import WELCOME, render_welcome
 from reports.backlog_report import (
     START_TYPICAL_MISS_BD as BACKLOG_START_MISS,
     RISK_BASES as BACKLOG_RISK_BASES,
@@ -106,7 +107,7 @@ _defaults = {
     "jira_fetch_count": 0,
     "jira_status_counts": {},
     "jira_df_issues": pd.DataFrame(),
-    "selected_menu": "🏠  Overview",  # Default to Overview page
+    "selected_menu": WELCOME,  # Default to the Welcome page
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -191,6 +192,7 @@ with st.sidebar:
 
             st.session_state.update({
                 "jira_change_history": history,
+                "jira_fetched_at": datetime.now() if code == 0 else None,
                 "jira_fetch_code": code,
                 "jira_fetch_message": message,
                 "jira_fetch_count": total_count if code == 0 else 0,
@@ -215,6 +217,7 @@ with st.sidebar:
 
     # Navigation menu
     MENU_ITEMS = [
+        WELCOME,
         "📋  Executive Summary",
         "🏠  Overview",
         "📅  Tickets Older Than 90 Days",
@@ -240,7 +243,7 @@ with st.sidebar:
         "Navigate to",
         MENU_ITEMS,
         index=MENU_ITEMS.index(st.session_state.get("selected_menu"))
-        if st.session_state.get("selected_menu") in MENU_ITEMS else MENU_ITEMS.index("🏠  Overview"),
+        if st.session_state.get("selected_menu") in MENU_ITEMS else MENU_ITEMS.index(WELCOME),
         label_visibility="collapsed",
     )
     if selected != st.session_state.get("selected_menu"):
@@ -878,7 +881,15 @@ start_date = report_date - timedelta(days=lookback_days - 1)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Executive Summary ────────────────────────────────────────────────────────
-if selected == "📋  Executive Summary":
+def _go_to(page: str) -> None:
+    st.session_state["selected_menu"] = page
+
+
+if selected == WELCOME:
+    render_welcome(st, _go_to, st.session_state.get("jira_df_issues"), st.session_state.get("jira_change_history"),
+                   st.session_state.get("jira_fetched_at"))
+
+elif selected == "📋  Executive Summary":
     render_executive_summary(
         st.session_state.get("jira_df_issues", pd.DataFrame()),
         report_date,
