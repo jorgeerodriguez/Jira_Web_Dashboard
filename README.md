@@ -28,7 +28,9 @@ It supports:
 - **Distribution of Ticket by Estimated Size**: sizing as a practice — coverage against a 90% target, a sizing guide derived from the team's own work, size accuracy, SLA met by size, open work by size, data-backed recommendations, and "Needs a Size" / "Likely Undersized" action lists — see [How Distribution by Estimated Size works](#how-distribution-by-estimated-size-works)
 - **Tickets Older Than 90 Days** split into Epics vs. Tickets
 - **Velocity**: what lead time we can promise a requester (50/85/95%), waiting vs in-progress time by priority, whether sizes predict effort, an SLA reality check per Priority × Size, and what was delivered — see [How Velocity works](#how-velocity-works)
-- **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, plus team contribution over time — see [How Trend works](#how-trend-works)
+- **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, Target date changes (moves, re-planning after the date passed, SLA clocks set after the fact), plus team contribution over time — see [How Trend works](#how-trend-works)
+- **Validating**: work waiting for the requester to confirm — time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs — see [How Validating works](#how-validating-works)
+- **Change history**: status and Target date history loaded with every fetch (Jira bulk changelog) — see [Change history](#change-history)
 
 ---
 
@@ -52,12 +54,14 @@ Jira_Web_Dashboard/
 ├── data/
 │   ├── __init__.py
 │   ├── build_dataframe_new.py
+│   ├── fetch_change_history.py  # status / Target date history (bulk changelog)
 │   ├── fetch_all_tickets_for_devops.py
 │   └── metrics.py
 ├── reports/
 │   ├── __init__.py
 │   ├── assignment_report.py     # Suggested Assignments
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
+│   ├── change_history.py        # date changes, SLA clock set after the fact, status episodes
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
 │   ├── jira_dates.py            # safe-mode Target date updates (Backlog page)
 │   ├── jira_assign.py           # safe-mode Assign in Jira (Suggested Assignments page)
@@ -96,6 +100,7 @@ Jira_Web_Dashboard/
 │   ├── test_size_distribution.py
 │   ├── test_assignments.py
 │   ├── test_jira_assign.py
+│   ├── test_change_history.py
 │   └── ...
 └── backup/
 ```
@@ -233,6 +238,28 @@ These rules are shared across reports so the numbers agree:
 - **When it finished**: most Done tickets have no Jira resolution date, so every report uses
   `status_category_changed` (Jira's `statuscategorychangedate`, when the ticket moved to Done), which
   later comments or edits don't move.
+
+---
+
+## Change history
+
+Every **Fetch Jira tickets** also loads the history of three fields, status, Target start and Target end,
+for DevOps-project tickets updated in the last 400 days (`data/fetch_change_history.py`). It uses Jira Cloud's
+bulk changelog endpoint (`POST /rest/api/3/changelog/bulkfetch`, up to 1,000 issues per request), which adds
+about 25–40 seconds to a fetch; it is read-only. Target dates are read as ISO values (`2026-09-11`), not the
+display strings (`11/Sep/26`). If the history can't be loaded the fetch still succeeds, the sidebar says so,
+and history-based views are hidden.
+
+Shared rules (`reports/change_history.py`):
+
+- A Target date change is **set** (empty → date), **moved** (date → another date) or **cleared**. Dates entered
+  on the create screen have no history and are never counted.
+- A move is **after the date passed** when it's made after the old date.
+- **SLA clock set after the fact**: a completed ticket whose Target start was set or moved on or after the day
+  it moved to Done. The SLA clock starts at Target start, so its SLA result was decided after the work
+  finished. As of 2026-10-09: 27% of tickets delivered in the last 180 days, rising from 5–6% (Nov–Dec 2025)
+  to 30–33% (Jul–Sep 2026); most were set the same day the ticket was closed.
+- A **status episode** is one stay in a status, from entering it to the next status change.
 
 ---
 
@@ -701,8 +728,49 @@ days, and **No SLA Clock** (open tickets without a Target start, a data gap to f
   completed late in the window, with days overdue, SLA due, completion date and the latest comment.
 - Both tables have a **search box**, a **CSV download** and a Jira link on every ticket.
 
+### SLA clock set after the fact
+
+With change history loaded, completed tickets whose Target start was set or moved on or after the day they
+were done are flagged: a warning under the KPIs (how many of the window's completed tickets, and how many show
+as met), an **SLA Clock** column in **Breached Tickets**, and a searchable **SLA Clock Set After the Fact** table.
+The toggle **Leave out tickets whose SLA clock was set after the fact** removes them from both breach rates
+(off by default, so the numbers match the other pages). As of 2026-10-09, last 30 days: 110 of 329 completed
+tickets were flagged, all showing as met; leaving them out moved the breach rates from 7.5% to 12.1% (SLA came
+due) and from 6.6% to 10.0% (completed late).
+
 It replaced a report that used a flat 90-calendar-day SLA (or Target End − created) from creation, only
 looked at currently open tickets, and used red-green charts.
+
+---
+
+## How Validating works
+
+The **Validating** page shows work that is finished and waiting for the requester to confirm it. Code:
+`reports/validating_report.py`. PE tickets only; business days; built on the [change history](#change-history),
+where each stay in Validating is an episode.
+
+| KPI | Meaning |
+| --- | --- |
+| In Validating Now | PE tickets in Validating today |
+| Waiting Now (median) | Business days since each ticket entered Validating (not since it was created) |
+| Waiting 5+ bd | Tickets to nudge (`NUDGE_BD`) |
+| Validation Time (P85, 90d) | 85% of validations that ended in the last 90 days took at most this; vs the 90 days before |
+| Sent Back (90d) | Validations that went back to In Progress / To Do / Triage instead of being closed (rework) |
+
+- **Waiting for Confirmation**: tickets in Validating, longest wait first, with the round (times in
+  Validating), SLA due and business days left, requester, business lead and latest human comment.
+- **Validation Time by Month** (median and P85) and **Sent Back to Be Worked On** (monthly rework rate).
+- **How Long Validations Take** (distribution) and **By Requesting Business Lead** (median time to confirm).
+- **SLA Impact and Policy What-ifs** (views only): the completed-late rate if the SLA clock paused during
+  Validating, how many late tickets were late only because of validation time, and how many validations a
+  "close after 5 / 10 / 15 business days without a reply" rule would have affected.
+
+As of 2026-10-09: 37% of PE tickets go through Validating; median 1 business day, P85 3, about half the same
+day; 8% are sent back; 15 of 97 late tickets in the last 180 days were late only because of validation time.
+Without change history the page shows only the list of tickets in Validating.
+
+It replaced counts by assignee and business lead, an "oldest" chart based on days since creation, and a risk
+pie based on Target end (the work is already done at this stage), which also counted Features and CAR tickets.
 
 ---
 
@@ -811,6 +879,15 @@ Times are in business days. Weekly flow and the delivery forecast are on the Cap
   before it. The delta is green when the measure moved the right way.
 - **12-Month Trends**: one small chart per measure (12 full months plus the current month, marked
   "so far" with a hollow marker), with target lines.
+- **Target date measures** (when change history is loaded), per month of delivery: **Target Date Moves per
+  Ticket**, **Delivered Without Date Moves**, **Moves After the Date Passed** and **SLA Clock Set After the
+  Fact**. They join the scorecard and the small multiples.
+- **Target Date Changes** section (tickets delivered in the last 180 days): KPIs (moves per ticket, never
+  moved, moves pushing later, moved after the date passed, SLA clock set after the fact), **Outcomes by How
+  Often Dates Moved** (SLA met and Target end met by 0 / 1 / 2–3 / 4+ moves), moves per ticket by priority and
+  size, and **Most Re-planned Open Tickets** (2+ moves). As of 2026-10-09, 90% of moves pushed the date later
+  and 67% came after the date had passed; SLA met was 97% with no moves and 62% with 4+ (association: late
+  tickets also get re-planned).
 - **Team Contribution Over Time**: delivered tickets per person per month for people with 10+
   delivered in the window. It's meant for spotting ramp-ups, gaps and load, not for judging
   individuals.
@@ -990,6 +1067,13 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-10-09
+- Every fetch now also loads **change history** (status, Target start, Target end) from Jira's bulk changelog endpoint, read-only, about 25–40 seconds (see [Change history](#change-history))
+- **Trend**: Target date measures in the scorecard and small multiples, and a **Target Date Changes** section (outcomes by number of moves, moves by priority and size, most re-planned open tickets)
+- **SLA**: tickets whose **SLA clock was set after the fact** are flagged (warning, Breached Tickets column, own table) and can be left out of the breach rates
+- Rebuilt **Validating** around time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs (see [How Validating works](#how-validating-works))
+- Added `tests/test_change_history.py`
+
 ### 2026-10-02
 - Rebuilt the **Executive Summary** for leadership: generated headlines, seven health tiles compared with the previous Lookback period, weekly flow (created vs closed, all outcomes), monthly SLA compliance trend with target, open work by stage and SLA risk, a top-10 "needs attention" list with reasons, aging by band and priority, oldest work by business lead, and ways-of-working signals (see [How the Executive Summary works](#how-the-executive-summary-works))
 - Release Management "Change and Release" (CAR) tickets are no longer judged against the PE SLA: shown as Not assessed, left out of SLA compliance and the Needs Attention list (`sla_applies()`); the Backlog forecast applies the same rule
@@ -1113,7 +1197,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py -q
 ```
 
 ---

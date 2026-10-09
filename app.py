@@ -15,6 +15,7 @@ from config.validate_and_connect_to_jira import validate_jira_connection
 from data.fetch_all_tickets_for_devops import fetch_all_tickets_for_project
 from reports.tickets_distribution import plot_ticket_distribution
 from data.build_dataframe_new import build_issues_dataframe
+from data.fetch_change_history import fetch_change_history
 from reports.tickets_older_than_90_days import build_tickets_older_than_90_days_visuals
 from reports.executive_summary import render_executive_summary
 from reports.atc_sequence import build_atc_sequence as _build_atc_sequence
@@ -173,6 +174,7 @@ with st.sidebar:
                 "jira_fetch_count": 0,
                 "jira_status_counts": {},
                 "jira_df_issues": pd.DataFrame(),
+                "jira_change_history": pd.DataFrame(),
             })
         else:
             code, message, total_count, _sc = fetch_all_tickets_for_project(
@@ -180,10 +182,15 @@ with st.sidebar:
             )
             # Build dataframe if fetch succeeded
             df_issues = pd.DataFrame()
+            history = pd.DataFrame()
             if code == 0:
                 df_issues = build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR"))
-            
+                # Status and Target date history (Trend, SLA, Validating); empty if it cannot be loaded.
+                with st.spinner("Loading change history…"):
+                    history = fetch_change_history(jira_connector, df_issues)
+
             st.session_state.update({
+                "jira_change_history": history,
                 "jira_fetch_code": code,
                 "jira_fetch_message": message,
                 "jira_fetch_count": total_count if code == 0 else 0,
@@ -196,6 +203,11 @@ with st.sidebar:
         st.caption(f"✅ {st.session_state['jira_fetch_count']:,} tickets fetched")
         if isinstance(st.session_state.get("jira_df_issues"), pd.DataFrame):
             st.caption(f"📄 Dataframe rows: {len(st.session_state['jira_df_issues']):,}")
+        _hist = st.session_state.get("jira_change_history")
+        if isinstance(_hist, pd.DataFrame) and not _hist.empty:
+            st.caption(f"🕘 Change history: {len(_hist):,} status and Target date changes")
+        else:
+            st.caption("🕘 Change history not loaded: history-based views are hidden")
     elif st.session_state["jira_fetch_code"] == 1:
         st.caption(f"❌ 0 records — {st.session_state['jira_fetch_message']}")
 
@@ -1094,7 +1106,7 @@ elif selected == "📉  Trend":
     )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    tr = build_trend_visuals(df_issues)
+    tr = build_trend_visuals(df_issues, history=st.session_state.get("jira_change_history"))
 
     if tr["error_message"] or tr["multiples_fig"] is None:
         st.info(tr["error_message"] or "📥 Fetch Jira tickets from the sidebar to see trend visuals.")
@@ -1118,6 +1130,49 @@ elif selected == "📉  Trend":
             st.caption(f"Delivered tickets per person per month (people with {TREND_CORE_MIN}+ delivered in the window). "
                        "For spotting ramp-ups, gaps and load, not for judging individuals.")
             st.plotly_chart(tr["team_fig"], width="stretch")
+
+        dc = tr.get("date_changes")
+        st.divider()
+        st.subheader("Target Date Changes")
+        if dc is None:
+            st.info("Change history was not loaded with the last fetch, so Target date changes can't be shown. "
+                    "Fetch Jira tickets again.")
+        else:
+            k = dc["kpis"]
+            pct = lambda v: "—" if v is None else f"{v:.0%}"  # noqa: E731
+            st.caption(f"How often Target start and Target end are moved on tickets delivered in the last {dc['days']} days "
+                       f"({k['delivered']:,} tickets). A move changes one date to another; setting a date the first time "
+                       "is not a move. Dates filled in when a ticket is created have no history.")
+            d1, d2, d3, d4, d5 = st.columns(5)
+            d1.metric("Moves per Ticket", "—" if k["moves_per_ticket"] is None else f"{k['moves_per_ticket']:.2f}",
+                      help="Target start + Target end moves, per delivered ticket.")
+            d2.metric("Never Moved", pct(k["stable"]), help="Delivered tickets whose Target dates were never moved.")
+            d3.metric("Moves Pushing Later", pct(k["later"]),
+                      help=f"Moves that made the date later. Typical move: {k['median_shift_bd'] or 0:.0f} business days.")
+            d4.metric("Moved After Date Passed", pct(k["after_passed"]),
+                      help="Moves made after the old date had already passed: re-planning after the fact.")
+            d5.metric("SLA Clock Set After the Fact", pct(k["clock_after_fact"]),
+                      help="Delivered tickets whose Target start (the SLA clock) was set or moved on or after the day "
+                           "they moved to Done. Flagged on the SLA page.")
+            o1, o2 = st.columns([3, 2])
+            with o1:
+                st.markdown("**Outcomes by How Often Dates Moved**")
+                st.caption("Association, not cause: late tickets also get re-planned more.")
+                if dc["outcome_fig"] is not None:
+                    st.plotly_chart(dc["outcome_fig"], width="stretch")
+            with o2:
+                st.markdown("**Moves per Ticket by Priority and Size**")
+                st.caption("Delivered tickets; bigger work is re-planned more.")
+                if dc["heatmap_fig"] is not None:
+                    st.plotly_chart(dc["heatmap_fig"], width="stretch")
+            st.markdown("**Most Re-planned Open Tickets**")
+            if dc["replanned_df"].empty:
+                st.success("No open ticket has had its dates moved twice or more.")
+            else:
+                st.caption("Open tickets whose Target dates moved 2+ times: often a sign the work needs splitting, "
+                           "unblocking or a realistic plan.")
+                st.dataframe(dc["replanned_df"], width="stretch", hide_index=True, column_config={
+                    "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira", display_text=r".*/([^/]+)$")})
 
         with st.expander("Monthly detail"):
             st.dataframe(tr["monthly_df"], width="stretch", hide_index=True)
@@ -1280,41 +1335,113 @@ elif selected == "🔄  In Progress":
 # ── Validating ──────────────────────────────────────────────────────────────────
 elif selected == "✅  Validating":
     st.title("✅ Validating")
-    st.caption("Tickets in QA / validation stage waiting for sign-off.")
+    st.caption(
+        "Work that is finished and waiting for the requester to confirm it. PE tickets only; times in business days. "
+        "The SLA clock keeps running while a ticket waits here."
+    )
 
     df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
-    val = build_validating_visuals(df_issues)
+    val = build_validating_visuals(df_issues, history=st.session_state.get("jira_change_history"))
 
-    if val["oldest_fig"] is None:
-        st.info("📥 Fetch Jira tickets from the sidebar to see Validating visuals.")
+    if val["error_message"]:
+        st.info(val["error_message"])
     else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total in Validating", f"{val['total_validating']:,}")
-        c2.metric("Overdue", f"{val['overdue_tickets']}")
-        c3.metric("Due in 7 Days", f"{val['due_soon_tickets']}")
-        c4.metric("Urgent Priority", f"{val['urgent_tickets']}")
+        kv = val["kpis"]
 
-        st.divider()
+        def _bd(v):
+            return "—" if v is None else f"{v:.1f} bd"
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(val["oldest_fig"], width="stretch")
-        with col2:
-            st.plotly_chart(val["risk_fig"], width="stretch")
+        def _delta_bd(now, before):
+            return None if now is None or before is None else f"{now - before:+.1f} bd vs previous {kv['window_days']}d"
 
-        st.plotly_chart(val["assignee_fig"], width="stretch")
-        st.subheader("Validating Ticket Detail")
-        st.dataframe(
-            val["detail_df"],
-            width="stretch",
-            column_config={
-                "Ticket": st.column_config.LinkColumn(
-                    "Ticket",
-                    help="Open Jira ticket",
-                    display_text=r".*/([^/]+)$",
-                )
-            },
-        )
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("In Validating Now", f"{kv['in_validating']}",
+                  help="PE tickets in Validating today.")
+        c2.metric("Waiting Now (median)", _bd(kv.get("waiting_median")),
+                  help="Business days since each ticket entered Validating (not since it was created).")
+        c3.metric(f"Waiting {kv['nudge_bd']}+ bd", f"{kv['nudge']}",
+                  help="Tickets to nudge: the requester hasn't confirmed for a week or more.")
+        if val["history"]:
+            c4.metric(f"Validation Time (P85, {kv['window_days']}d)", _bd(kv.get("p85")),
+                      _delta_bd(kv.get("p85"), kv.get("p85_prev")), delta_color="inverse",
+                      help=f"85% of validations finished within this many business days (median {_bd(kv.get('p50'))}; "
+                           f"{(kv.get('same_day') or 0):.0%} the same day). {kv.get('validations', 0)} validations ended "
+                           f"in the last {kv['window_days']} days.")
+            rw, rwp = kv.get("rework"), kv.get("rework_prev")
+            c5.metric(f"Sent Back ({kv['window_days']}d)", "—" if rw is None else f"{rw:.0%}",
+                      None if rw is None or rwp is None else f"{(rw - rwp) * 100:+.0f} pts vs previous {kv['window_days']}d",
+                      delta_color="inverse",
+                      help="Validations that went back to In Progress / To Do / Triage instead of being closed: "
+                           f"the work wasn't accepted ({kv.get('rework_n', 0)} tickets).")
+        else:
+            c4.metric("Past SLA", f"{kv['past_sla']}", help="Tickets in Validating already past their SLA due date.")
+            st.info("Change history wasn't loaded with the last fetch, so validation times, rework and SLA impact are "
+                    "hidden. Fetch Jira tickets again.")
+
+        st.subheader("Waiting for Confirmation")
+        st.caption(f"Longest wait first. Round = how many times the ticket has been in Validating. Nudge requesters "
+                   f"waiting {kv['nudge_bd']}+ business days, especially when SLA Left is near or below zero.")
+        if val["waiting_df"].empty:
+            st.success("Nothing is waiting in Validating.")
+        else:
+            st.dataframe(val["waiting_df"], width="stretch", hide_index=True, column_config={
+                "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira", display_text=r".*/([^/]+)$"),
+                "Latest Comment": st.column_config.TextColumn("Latest Comment", width="large"),
+            })
+
+        if val["history"]:
+            st.divider()
+            v1, v2 = st.columns(2)
+            with v1:
+                st.subheader("Validation Time by Month")
+                st.caption("Business days from entering Validating to leaving it, by the month it ended. "
+                           "Hollow marker = current month so far.")
+                if val["trend_fig"] is not None:
+                    st.plotly_chart(val["trend_fig"], width="stretch")
+            with v2:
+                st.subheader("Sent Back to Be Worked On")
+                st.caption("Share of validations each month that didn't pass: a quality signal.")
+                if val["rework_fig"] is not None:
+                    st.plotly_chart(val["rework_fig"], width="stretch")
+
+            v3, v4 = st.columns(2)
+            with v3:
+                st.subheader("How Long Validations Take")
+                st.caption(f"Validations that ended in the last {kv['outcome_days']} days.")
+                if val["dist_fig"] is not None:
+                    st.plotly_chart(val["dist_fig"], width="stretch")
+            with v4:
+                st.subheader("By Requesting Business Lead")
+                st.caption(f"Median time to confirm, last {kv['outcome_days']} days (leads with 5+ validations).")
+                if val["lead_fig"] is not None:
+                    st.plotly_chart(val["lead_fig"], width="stretch")
+                    with st.expander("Table"):
+                        st.dataframe(val["lead_df"], width="stretch", hide_index=True)
+
+            st.divider()
+            st.subheader("SLA Impact and Policy What-ifs")
+            st.caption(f"Done tickets with an SLA clock, last {kv['outcome_days']} days ({kv['done_judged']:,} tickets; "
+                       f"{(kv.get('through_validating') or 0):.0%} went through Validating). Views only: nothing changes.")
+            w1, w2 = st.columns(2)
+            with w1:
+                st.markdown("**If the SLA clock paused during Validating**")
+                if kv.get("breach_now") is not None:
+                    st.metric("Completed late", f"{kv['breach_paused']:.1%}",
+                              f"{(kv['breach_paused'] - kv['breach_now']) * 100:+.1f} pts vs today's rule ({kv['breach_now']:.1%})",
+                              delta_color="inverse")
+                    st.caption(f"{kv['late_only_validating']} of {kv['late']} late tickets were late only because of "
+                               "time spent waiting for confirmation.")
+            with w2:
+                st.markdown("**If tickets closed after N business days without a reply**")
+                n = st.radio("Close after", list(val["what_if"]), format_func=lambda d: f"{d} bd", horizontal=True,
+                             key="val_autoclose", index=1)
+                wi = val["what_if"][n]
+                st.metric("Validations affected", f"{wi['episodes']}", f"{wi['share']:.1%} of {val['recent_n']}",
+                          delta_color="off")
+                st.caption(f"Would have saved about {wi['days_saved']:.0f} business days of waiting in total.")
+            if kv.get("closed_by_requester") is not None:
+                st.caption(f"Who closes validations: the requester {kv['closed_by_requester']:.0%} of the time, the "
+                           f"assignee {kv['closed_by_assignee']:.0%} (they overlap when the requester is the assignee).")
 
 
 # ── Blocked & On Hold ────────────────────────────────────────────────────────────
@@ -2030,7 +2157,7 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         sel_stages = st.multiselect("Stage (open work)", options.get("stages", []), key="sla_stages")
     filters = {"assignees": sel_assignees, "leads": sel_leads, "priorities": sel_priorities, "stages": sel_stages}
 
-    t1, t2, t3 = st.columns(3)
+    t1, t2, t3, t4 = st.columns(4)
     with t1:
         include_on_track = st.toggle("SLA Detail: also show on-track and not-assessed open tickets", value=False,
                                      key="sla_include_on_track")
@@ -2042,10 +2169,17 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
                                    key="sla_judge_original",
                                    help="Tickets whose Target dates were moved from the Backlog page keep their original "
                                         "SLA clock here, so re-planning can't hide a breach.")
+    with t4:
+        exclude_after_fact = st.toggle("Leave out tickets whose SLA clock was set after the fact", value=False,
+                                       key="sla_exclude_after_fact",
+                                       help="Completed tickets whose Target start was set or moved on or after the day "
+                                            "they were done. Their SLA result isn't a real measurement.")
 
     sla = build_sla_visuals(df_issues, time_period_days=window, filters=filters,
                             include_on_track=include_on_track, include_completed_late=include_completed,
-                            judge_original_start=judge_original)
+                            judge_original_start=judge_original,
+                            history=st.session_state.get("jira_change_history"),
+                            exclude_after_fact=exclude_after_fact)
     if sla["error_message"]:
         st.error(f"❌ {sla['error_message']}")
         st.stop()
@@ -2077,6 +2211,17 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         st.caption(f"🔁 {kp['replanned']} ticket(s) re-planned from the dashboard are judged on their original Target start.")
     k6.metric("No SLA Clock", f"{kp['no_clock']}", help="Open tickets without a Target start: they can't be judged. "
               "Set a Target start in Jira.")
+    if kp.get("history") and kp.get("after_fact_n"):
+        share = kp["after_fact"] / kp["after_fact_n"]
+        note = ("left out of the breach rates above" if kp["excluding_after_fact"]
+                else "still counted in the breach rates above (toggle to leave them out)")
+        st.warning(f"⚠ **SLA clock set after the fact:** {kp['after_fact']} of {kp['after_fact_n']} tickets completed in the "
+                   f"last {window} days ({share:.0%}) had their Target start set or moved on or after the day they were done; "
+                   f"{kp['after_fact_met']} of them show as met. Their SLA result isn't a real measurement and is {note}. "
+                   "See the list below.")
+    elif not kp.get("history"):
+        st.caption("Change history wasn't loaded with the last fetch, so tickets with an SLA clock set after the fact "
+                   "can't be flagged. Fetch Jira tickets again.")
 
     st.divider()
     g1, g2 = st.columns([3, 2])
@@ -2145,6 +2290,14 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         "Still-open breached tickets first (most overdue first), then tickets completed late in the window.",
         sla["breached_df"], "sla_breached", "sla_breached.csv",
     )
+
+    if not sla["after_fact_df"].empty:
+        _searchable_table(
+            "SLA Clock Set After the Fact",
+            f"Tickets completed in the last {window} days whose Target start (the SLA clock) was set or moved on or after "
+            "the day they moved to Done. Set Target start when work is planned, not when it is finished.",
+            sla["after_fact_df"], "sla_after_fact", "sla_clock_after_fact.csv",
+        )
 
     with st.expander("SLA table and definitions"):
         st.dataframe(sla["sla_table_df"], width="stretch", hide_index=True)

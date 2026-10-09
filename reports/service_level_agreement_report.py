@@ -17,6 +17,11 @@ Re-planning guard: by default, tickets whose Target start was moved from the das
 (reports/jira_dates.py audit log) are judged on their *original* Target start in the breach rates and
 the Breached Tickets table, so moving dates cannot quietly lower the breach rate.
 
+SLA clock set after the fact (needs the change history, data/fetch_change_history.py): a completed ticket
+whose Target start was set or moved on or after the day it moved to Done. Its SLA result was decided after
+the work finished, so it is flagged in the KPIs, the Breached Tickets table and its own list, and can
+optionally be left out of the breach rates.
+
 Open tickets use the same risk as the Executive Summary: In Progress and Backlog from their forecasts,
 other stages Breached past due and At Risk once 80% of the SLA is used.
 """
@@ -28,6 +33,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from reports import change_history as chg
 from reports import executive_summary as es
 from reports import in_progress_report as ipr
 from reports.backlog_report import build_backlog_visuals
@@ -56,7 +62,7 @@ GRID = es.GRID
 def _empty_payload(message: str | None = None) -> dict[str, Any]:
     return {"error_message": message, "kpis": {}, "filter_options": {}, "trend_fig": None, "heatmap_fig": None,
             "stage_fig": None, "due_soon_fig": None, "detail_df": pd.DataFrame(), "breached_df": pd.DataFrame(),
-            "sla_table_df": sla_table()}
+            "after_fact_df": pd.DataFrame(), "sla_table_df": sla_table()}
 
 
 def sla_table() -> pd.DataFrame:
@@ -271,9 +277,11 @@ def _breached_table(j: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray, start
     if rows.empty:
         return pd.DataFrame()
     rows = rows.assign(_s=rows["state"].ne("Open: still breached")).sort_values(["_s", "overdue"], ascending=[True, False])
+    flagged = rows["clock_after_fact"] if "clock_after_fact" in rows.columns else pd.Series(False, index=rows.index)
     table = pd.DataFrame({
         "Ticket": JIRA_BROWSE_BASE_URL + rows["key"].astype(str),
         "State": rows["state"],
+        "SLA Clock": np.where(flagged.fillna(False).astype(bool), "⚠ Set after the fact", ""),
         "Days Overdue (bd)": rows["overdue"].astype("Int64"),
         "SLA Due": rows["sla_due"].dt.date,
         "Completed": rows["closed_day"].dt.date,
@@ -286,6 +294,28 @@ def _breached_table(j: pd.DataFrame, today: pd.Timestamp, hol: np.ndarray, start
         "Summary": rows.get("summary", pd.Series("", index=rows.index)).fillna("").astype(str).str[:120],
     })
     return pd.concat([table, _comment_columns(rows, today, hol)], axis=1).reset_index(drop=True)
+
+
+def _after_fact_table(j: pd.DataFrame, dates: pd.DataFrame, start: pd.Timestamp, hol: np.ndarray) -> pd.DataFrame:
+    rows = j[j["outcome"].eq("Done") & j["clock_after_fact"] & (j["closed_day"] >= start)].copy()
+    if rows.empty:
+        return pd.DataFrame()
+    rows["changed_on"] = rows["key"].map(dates["clock_changed_on"])
+    rows["after_bd"] = ipr._busdays_between(rows["closed_day"], rows["changed_on"], hol)
+    rows = rows.sort_values("closed_day", ascending=False)
+    return pd.DataFrame({
+        "Ticket": JIRA_BROWSE_BASE_URL + rows["key"].astype(str),
+        "Completed": rows["closed_day"].dt.date,
+        "Target Start Set/Moved On": rows["changed_on"].dt.date,
+        "Business Days After Done": rows["after_bd"].astype("Int64"),
+        "Target Start Now": rows["start_day"].dt.date,
+        "SLA Result As Recorded": np.where(rows["breached"].astype(bool), "Late", "Met"),
+        "Priority": rows["priority_bucket"],
+        "Size": rows["size"],
+        "Assignee": rows["assignee_name"],
+        "Business Lead": rows["lead"],
+        "Summary": rows.get("summary", pd.Series("", index=rows.index)).fillna("").astype(str).str[:120],
+    }).reset_index(drop=True)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
@@ -303,7 +333,8 @@ def _original_starts(t: pd.DataFrame, originals: dict, hol: np.ndarray) -> tuple
 
 def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_WINDOW, filters: dict | None = None,
                       include_on_track: bool = False, include_completed_late: bool = True,
-                      judge_original_start: bool = True, original_starts: dict | None = None) -> dict[str, Any]:
+                      judge_original_start: bool = True, original_starts: dict | None = None,
+                      history: pd.DataFrame | None = None, exclude_after_fact: bool = False) -> dict[str, Any]:
     """`filters` keys: assignees, leads, priorities, stages (lists; empty = all)."""
     if df_issues is None or df_issues.empty:
         return _empty_payload("No ticket data available.")
@@ -340,9 +371,15 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_W
                 original_starts = {}
         t, replanned = _original_starts(t, original_starts, hol)
     j = _judged(t, today)
+    has_history = chg.has_history(history)
+    dates = chg.ticket_date_summary(chg.date_changes(history, hol), pe) if has_history else None
+    j["clock_after_fact"] = j["key"].map(dates["clock_after_fact"]).fillna(False).astype(bool) if has_history else False
     start = today - pd.Timedelta(days=int(time_period_days))
     prev_start = start - pd.Timedelta(days=int(time_period_days))
-    now_r, prev_r = _rates(j, start, today), _rates(j, prev_start, start)
+    rated = j[~j["clock_after_fact"]] if exclude_after_fact else j
+    now_r, prev_r = _rates(rated, start, today), _rates(rated, prev_start, start)
+    done_now = j[j["outcome"].eq("Done") & (j["closed_day"] >= start) & (j["closed_day"] < today)]
+    after_now = done_now[done_now["clock_after_fact"]]
 
     def delta(key):
         return None if now_r[key] is None or prev_r[key] is None else now_r[key] - prev_r[key]
@@ -360,6 +397,11 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_W
         "goal": BREACH_GOAL,
         "replanned": replanned,
         "window_days": int(time_period_days),
+        "history": has_history,
+        "after_fact": int(len(after_now)),
+        "after_fact_n": int(len(done_now)),
+        "after_fact_met": int((~after_now["breached"].astype(bool)).sum()),
+        "excluding_after_fact": bool(exclude_after_fact and has_history),
     }
     payload["trend_fig"], payload["trend_df"] = _trend_figure(j, today)
     payload["heatmap_fig"] = _heatmap_figure(j, today)
@@ -368,5 +410,6 @@ def build_sla_visuals(df_issues: pd.DataFrame, time_period_days: int = DEFAULT_W
     payload["detail_df"] = _detail_table(open_t, today, hol, include_on_track)
     payload["breached_df"] = _breached_table(j, today, hol, start, include_completed_late,
                                              (filters or {}).get("stages"))
+    payload["after_fact_df"] = _after_fact_table(j, dates, start, hol) if has_history else pd.DataFrame()
     payload["as_of"] = today.date()
     return payload
