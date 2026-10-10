@@ -17,7 +17,7 @@ import re
 _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubernetes/GitOps": r"clusters/|namespaces/|helmrelease|kustomization|/helm/|\bk8s\b|karpenter|nodepool|nodeclass|kube-system|argocd|/flux|gitrepository|daemonset|statefulset|\bcrds?\b",
     "Terraform/Terragrunt": r"terragrunt\.hcl|\.tf$|\.tftpl|\.tfvars|/tf-|terraform|\.hcl$",
-    "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b|cloudfront",
+    "AWS Core": r"\baws\b|us-east-1|us-west-2|eu-west-1|\bec2\b|\bs3\b|cloudwatch|lambda|\becr\b|\brds\b|dynamodb|\bsqs\b|\bsns\b",
     # Named services as well as the /gcp/ path segment, so a GCP service provisioned from outside
     # the GCP group still resolves. Deliberately NOT a tf-gcp- prefix: those are module repos, and
     # authoring one is module work rather than operating that cloud (see MODULES_DOMAIN below).
@@ -50,6 +50,10 @@ _DOMAIN_PATTERNS: dict[str, str] = {
     "Kubeflow Pipelines": r"kubeflow|\bkfp\b",
     "Route53": r"tf-sharedservices|route\s?53|\br53\b",
     "Fastly": r"fastly",  # 3rd-party CDN (distinct from AWS CloudFront) — specialized, called out on its own
+    # AWS CDN for our websites, pulled out of AWS Core the way EKS came out of Kubernetes/GitOps.
+    "CloudFront": r"cloud-?front",
+    # Upwind: the SecOps runtime-security platform (its agent ships as a HelmRelease).
+    "Upwind": r"upwind",
     # Four called out on their own because all are expected to grow. Low or zero volume today is
     # fine: the matrix hides a domain until somebody has history in it, so an empty row costs
     # nothing, while a missing domain silently files the work as generic GCP for however long it

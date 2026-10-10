@@ -49,12 +49,11 @@ WEIGHT_EXPERTISE, WEIGHT_AVAILABILITY = 0.6, 0.4
 LOAD_PENALTY, LOAD_PENALTY_FROM = 0.15, 1.3      # penalise when current WIP is 1.3x+ the usual
 PLAN_BALANCE_PENALTY = 0.08                      # per ticket already suggested to the same person in this plan
 STRETCH_MAX_SHARE = 0.5                          # stretch = some exposure, but at most half the top expert's
-MATRIX_TOP_DOMAINS = 15
 INK = ipr.INK
 
 
 def _empty_payload(message: str | None = None) -> dict:
-    return {"error_message": message, "kpis": {}, "plan_df": pd.DataFrame(), "options": {}, "matrix_fig": None,
+    return {"error_message": message, "kpis": {}, "plan_df": pd.DataFrame(), "options": {}, "matrix_fig": None, "matrix_df": pd.DataFrame(),
             "concentration_df": pd.DataFrame(), "load_df": pd.DataFrame(), "account_ids": {}, "current_accounts": {}}
 
 
@@ -192,6 +191,7 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     if queue.empty:
         payload["kpis"] = {"to_assign": 0, "with_domain": 0, "fit": 0, "people": 0, "candidates": len(people)}
         payload["matrix_fig"], payload["concentration_df"] = _matrix_outputs(matrix)
+        payload["matrix_df"] = matrix
         payload["load_df"] = load
         return payload
 
@@ -275,16 +275,21 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
         "candidates": len(people), "max_per_person": int(plan_df["Suggested"].value_counts().max()),
     }
     payload["matrix_fig"], payload["concentration_df"] = _matrix_outputs(matrix)
+    payload["matrix_df"] = matrix
     payload["load_df"] = load
     return payload
 
 
-def _matrix_outputs(matrix: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
-    """Who knows what (top domains x people) and the domains that depend on one person."""
-    if matrix.empty:
-        return None, pd.DataFrame()
-    top = matrix.sum(axis=1).sort_values(ascending=False).head(MATRIX_TOP_DOMAINS).index
-    m = matrix.loc[top]
+def matrix_figure(matrix: pd.DataFrame, group: str | None = None) -> go.Figure | None:
+    """Who knows what: every domain with recent work (optionally one group's), busiest first, x people."""
+    if matrix is None or matrix.empty:
+        return None
+    m = matrix[matrix.sum(axis=1) > 0]
+    if group:
+        m = m[[domains.group_of(d) == group for d in m.index]]
+    if m.empty:
+        return None
+    m = m.loc[m.sum(axis=1).sort_values(ascending=False).index]
     m = m.loc[:, m.sum(axis=0) > 0]
     fig = go.Figure(go.Heatmap(
         z=m.values, x=list(m.columns), y=list(m.index), colorscale="Blues", zmin=0, xgap=2, ygap=2,
@@ -294,6 +299,14 @@ def _matrix_outputs(matrix: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFram
     ))
     fig.update_yaxes(autorange="reversed")
     fig.update_layout(height=max(320, 26 * len(m) + 120), margin=dict(l=10, r=10, t=10, b=10))
+    return fig
+
+
+def _matrix_outputs(matrix: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
+    """Who knows what (all domains x people) and the domains that depend on one person."""
+    if matrix.empty:
+        return None, pd.DataFrame()
+    fig = matrix_figure(matrix)
     rows = []
     for domain, col in matrix.iterrows():
         total = float(col.sum())

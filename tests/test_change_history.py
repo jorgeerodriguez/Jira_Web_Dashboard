@@ -207,7 +207,9 @@ def test_validating_waiting_rework_and_sla_impact(mods):
     ])
     out = val.build_validating_visuals(issues, history)
     w = out["waiting_df"].set_index(out["waiting_df"]["Ticket"].str.split("/").str[-1])
-    assert w.loc["WAIT", "Waiting (bd)"] == 4 and w.loc["WAIT", "Round"] == 1
+    today = _today(ipr)
+    waited = np.busday_count(d(4).date(), today.date(), holidays=ipr._calendar_holidays(today))
+    assert w.loc["WAIT", "Waiting (bd)"] == waited and w.loc["WAIT", "Round"] == 1   # 4 on weekdays, 5 at weekends
     k = out["kpis"]
     assert k["rework"] == pytest.approx(1 / 3) and k["rework_n"] == 1
     assert k["late"] == 1 and k["late_only_validating"] == 1

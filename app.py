@@ -25,7 +25,8 @@ from reports.velocity_report import MIN_CELL as VELOCITY_MIN_CELL, PE_TEAM_MEMBE
 from reports.trend_report import CORE_MIN_DELIVERED as TREND_CORE_MIN, build_trend_visuals
 from reports.in_progress_report import RISK_BASES as IN_PROGRESS_RISK_BASES, build_in_progress_visuals
 from reports.validating_report import build_validating_visuals
-from reports.assignment_report import build_assignment_visuals
+from reports.assignment_report import build_assignment_visuals, matrix_figure as assignment_matrix_figure
+from reports.domains import GROUP_ORDER as DOMAIN_GROUP_ORDER
 from reports.welcome import WELCOME, render_welcome
 from reports.backlog_report import (
     START_TYPICAL_MISS_BD as BACKLOG_START_MISS,
@@ -1697,18 +1698,21 @@ elif selected == "🧭  Suggested Assignments":
                 st.caption("Every candidate for this ticket, best first: SLA fit, then score.")
                 st.dataframe(asg["options"][key], width="stretch", hide_index=True)
 
-            c1, c2 = st.columns([3, 2])
-            with c1:
-                st.subheader("Who Knows What")
-                st.caption("Recent tickets per domain and person (recent work counts more). Top domains by volume.")
-                if asg["matrix_fig"] is not None:
-                    st.plotly_chart(asg["matrix_fig"], width="stretch")
-            with c2:
-                st.subheader("Domains Leaning on One Person")
-                st.caption("Share of each domain's recent work done by its top person: candidates for cross-training.")
-                st.dataframe(asg["concentration_df"], width="stretch", hide_index=True, height=360,
-                             column_config={"Top Share %": st.column_config.ProgressColumn(
-                                 "Top Share %", format="%d%%", min_value=0, max_value=100)})
+            st.subheader("Who Knows What")
+            group = st.radio("Domain group", ["All"] + DOMAIN_GROUP_ORDER, horizontal=True, key="asg_matrix_group")
+            st.caption("Recent tickets per domain and person (recent work counts more), busiest domain first. Every "
+                       "domain with recent work is shown.")
+            matrix_fig = assignment_matrix_figure(asg["matrix_df"], None if group == "All" else group)
+            if matrix_fig is not None:
+                st.plotly_chart(matrix_fig, width="stretch")
+            else:
+                st.info(f"No recent work in the {group} group yet.")
+
+            st.subheader("Domains Leaning on One Person")
+            st.caption("Share of each domain's recent work done by its top person: candidates for cross-training.")
+            st.dataframe(asg["concentration_df"], width="stretch", hide_index=True, height=360,
+                         column_config={"Top Share %": st.column_config.ProgressColumn(
+                             "Top Share %", format="%d%%", min_value=0, max_value=100)})
             with st.expander("Team load used for the suggestions"):
                 st.dataframe(asg["load_df"], width="stretch", hide_index=True)
 

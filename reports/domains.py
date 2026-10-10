@@ -109,6 +109,8 @@ DOMAIN_PATTERNS: dict[str, list[str]] = {'VDI/WorkSpaces': ['vdi', 'workspace', 
  'Kubeflow Pipelines': ['kubeflow', '\\bkfp\\b'],
  'Route53': ['route\\s?53', '\\br53\\b', 'tf-sharedservices'],
  'Fastly': ['fastly'],
+ 'CloudFront': ['cloud\\s?front'],
+ 'Upwind': ['upwind'],
  'GCP Agent Platform': ['agent-?platform', 'agent[-_ ]?space'],
  'Firestore': ['firestore'],
  'Firebase': ['firebase'],
@@ -132,6 +134,8 @@ DOMAIN_PRIORITY: list[str] = ['VDI/WorkSpaces',
  'OpenSearch',
  'ECS',
  'MSK',
+ 'CloudFront',
+ 'Upwind',
  'Route53',
  'Fastly',
  'Airflow',
@@ -150,7 +154,7 @@ DOMAIN_PRIORITY: list[str] = ['VDI/WorkSpaces',
  'Kubernetes/GitOps',
  'GitLab']
 
-# Top-level grouping; domains not listed fall under "Other".
+# Top-level grouping; domains not listed fall under "Other". Security = SecOps tools.
 DOMAIN_GROUP: dict[str, str] = {'GCP Core': 'GCP',
  'BigQuery/Data': 'GCP',
  'Composer': 'GCP',
@@ -170,8 +174,13 @@ DOMAIN_GROUP: dict[str, str] = {'GCP Core': 'GCP',
  'Firebase': 'GCP',
  'Firestore': 'GCP',
  'Looker': 'GCP',
- 'Knowledge Catalog': 'GCP'}
+ 'Knowledge Catalog': 'GCP',
+ 'CloudFront': 'AWS',
+ 'Upwind': 'Security'}
 
+
+# Display order of the groups (darkstar's Intake page shows them in this order).
+GROUP_ORDER: list[str] = ["AWS", "GCP", "Security", "Other"]
 
 @lru_cache(maxsize=1)
 def _compiled() -> list[tuple[str, list[re.Pattern]]]:

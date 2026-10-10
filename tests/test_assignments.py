@@ -23,9 +23,14 @@ def test_taxonomy_matches_darkstar_intake_page():
     patterns = json.loads(re.search(r"const DOMAIN_PATTERNS = (\{.*?\});\n", html).group(1))
     priority = json.loads(re.search(r"const DOMAIN_PRIORITY = (\[.*?\]);", html).group(1))
     group = json.loads(re.search(r"const DOMAIN_GROUP = (\{.*?\})", html).group(1))
+    order = json.loads(re.search(r"const GROUP_ORDER = (\[.*?\]);", html).group(1))
     assert domains.DOMAIN_PATTERNS == patterns
     assert domains.DOMAIN_PRIORITY == priority
     assert domains.DOMAIN_GROUP == group
+    assert domains.GROUP_ORDER == order
+    # A group missing from GROUP_ORDER would silently drop its domains from the Intake SME matrix.
+    assert set(group.values()) | {"Other"} <= set(order)
+    assert domains.group_of("Upwind") == "Security" and domains.group_of("CloudFront") == "AWS"
 
 
 def test_tagging_and_primary_domain():

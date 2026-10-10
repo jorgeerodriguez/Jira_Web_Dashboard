@@ -1253,9 +1253,11 @@ another pattern is added.
 ### Domains and overrides
 
 Domains are grouped **AWS / GCP / Other** (alpha-sorted within each, group-collapsible), with
-specialized services (EKS, GKE, ECS, OpenSearch, MSK, Route53, VertexAI, Kubeflow Pipelines,
-Bedrock Agents, AI Plugins) pulled out of the coarse `AWS Core` / `GCP Core` buckets, plus
-3rd-party tools called out on their own (e.g. **Fastly**, a CDN, grouped under Other). Per domain
+specialized services (EKS, GKE, ECS, OpenSearch, MSK, Route53, CloudFront, VertexAI, Kubeflow
+Pipelines, Bedrock Agents, AI Plugins) pulled out of the coarse `AWS Core` / `GCP Core` buckets, plus
+3rd-party tools called out on their own (e.g. **Fastly**, a CDN, under Other). SecOps tools have
+their own **Security** group (today **Upwind**, the runtime-security platform); to add a group, put it
+in both `DOMAIN_GROUP` and `GROUP_ORDER`, or its domains won't show in the matrix. Per domain
 the top scorer is the **SME** and the next are **runners-up**. The lead can override the
 SME/runner-up per domain from the panel above the matrix; overrides persist to a shared JSON on the
 PVC (`overrides.py`) so they are team-wide.

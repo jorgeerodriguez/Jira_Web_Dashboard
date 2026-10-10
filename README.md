@@ -677,10 +677,10 @@ before the next ticket is scored, so the plan spreads work. Each ticket shows a 
 the reason, a **Backup**, and a **Stretch** (someone with some experience in the domain, for
 cross-training). **Compare Options** lists every candidate for a ticket.
 
-Also on the page: **Who Knows What** (recent tickets per domain and person) and **Domains Leaning on
+Also on the page: **Who Knows What** (recent tickets per domain and person, every domain with recent work, filterable by group: AWS, GCP, Security, Other) and **Domains Leaning on
 One Person** (the top person's share of each domain, for cross-training).
 
-**Taxonomy.** `reports/domains.py` is a copy of darkstar's Intake taxonomy (33 domains);
+**Taxonomy.** `reports/domains.py` is a copy of darkstar's Intake taxonomy (35 domains, including CloudFront and Upwind);
 `tests/test_assignments.py` fails if the two drift apart, so edit both together.
 
 **Limits.** A back-test (671 tickets, October 2026) found that today's assignee was the top domain expert
@@ -1086,6 +1086,11 @@ The on-time completion model uses historical Jira tickets to estimate whether a 
 In practical terms, this means the model now uses both binary history and lateness severity instead of relying only on simple averages.
 
 ## Release notes
+
+### 2026-10-10
+- New skill domains **CloudFront** (AWS) and **Upwind** (in a new **Security** group for SecOps tools), added to the shared taxonomy in `reports/domains.py`, darkstar's Intake page and darkstar's GitLab tagging (CloudFront moved out of AWS Core there)
+- Made a Validating test independent of the day of the week
+- **Suggested Assignments**: Who Knows What shows every domain with recent work (it used to stop at the top 15, which hid newer domains such as CloudFront and Upwind), with a group filter
 
 ### 2026-10-09
 - New **Welcome** page, now the landing page (replaces Overview as the default; Overview stays in the menu) (see [Welcome page](#welcome-page))
