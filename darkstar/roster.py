@@ -77,6 +77,7 @@ GITLAB_USERNAMES: dict[str, str] = {
 NON_HUMAN_GROUP_MEMBERS: frozenset[str] = frozenset({
     "DevOps-agent",                                          # AWS-DevOps-agent
     "agentcore-pe",                                          # agentcore-pe
+    "pe-code-review",                                        # pe-code-review (automated MR reviewer)
     "group_115211004_bot_6ce1b4bd899ad9f4f9b50d83b5273302",  # semantic-release
     "group_115211004_bot_bbc6b7e533b3a58af41a516bd3a2d55a",  # PlatformProvisionerBot
 })
