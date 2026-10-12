@@ -56,6 +56,7 @@ Jira_Web_Dashboard/
 │   ├── __init__.py
 │   ├── build_dataframe_new.py
 │   ├── fetch_change_history.py  # status / Target date history (bulk changelog)
+│   ├── dashboard_comments.py    # recognise dashboard-posted comments; forecast tag
 │   ├── fetch_all_tickets_for_devops.py
 │   └── metrics.py
 ├── reports/
@@ -67,6 +68,7 @@ Jira_Web_Dashboard/
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
 │   ├── jira_dates.py            # safe-mode Target date updates (Backlog page)
 │   ├── jira_assign.py           # safe-mode Assign in Jira (Suggested Assignments page)
+│   ├── jira_forecast.py         # post the Backlog forecast as comments + track record
 │   ├── executive_summary.py
 │   ├── capacity_report.py
 │   ├── trend_report.py
@@ -104,6 +106,7 @@ Jira_Web_Dashboard/
 │   ├── test_jira_assign.py
 │   ├── test_change_history.py
 │   ├── test_welcome.py
+│   ├── test_jira_forecast.py
 │   └── ...
 └── backup/
 ```
@@ -494,6 +497,36 @@ The **✏️ Update Target dates** button next to *Backlog Forecast Detail* open
    `JIRA_AUDIT_LOG`).
 7. **Undo last batch** (type `UNDO`) restores the old dates, but only where Jira still holds the dates
    the batch wrote.
+
+### Posting the forecast as comments (no date changes)
+
+The **📝 Post forecast as comments** button under *Update Target dates* adds the Backlog forecast to selected
+tickets as a Jira comment and **changes no fields**. Code: `reports/jira_forecast.py`. Same switch and safeguards
+as the Target date updates (off by default, localhost only, nothing preselected, a preview, typed `COMMENT n`, an
+audit record per ticket), with up to 100 tickets per batch instead of 25: it only adds comments and skips unchanged
+forecasts, so a weekly post covers the whole backlog at once. A ticket whose last posted forecast has the same dates is skipped.
+**Select all tickets with new or changed forecasts**, used weekly, keeps the record unbiased (it then covers the
+whole backlog, not a hand-picked part).
+
+Each comment has a readable summary (likely and safe start, likely and safe finish, SLA due, the Target dates in
+Jira at the time) and ends with one machine-readable line:
+
+```text
+[pe-forecast v1 as_of=2026-10-12 start_p50=2026-10-16 safe_start=2026-11-09 finish_p50=2026-10-20 finish_p85=2026-10-23 sla_due=2026-11-27 target_start=2026-10-15 target_end=2026-10-27 queue=1 confidence=High basis=Low/None_×_Small priority=Low/None size=Small assignee=Bolanle batch=...]
+```
+
+**Forecast Track Record** (Backlog page) reads those lines back from the fetched comments and compares each posted
+forecast with what happened: started by the likely start (aim ~50%), by the safe start (aim ~85%), by the Jira
+Target start at the time (for comparison), finished by the safe finish (aim ~85%), typical misses, and the same by
+start confidence. Actual starts come from the [change history](#change-history) (first move out of To Do /
+Tech Discovery Required / Triage). The tag is versioned (`v1`) and parsed by `data/dashboard_comments.py`.
+
+### Dashboard comments are not human comments
+
+Comments the dashboard posts (Target date updates, assignments, undo, forecasts) use a person's token, so Jira
+reports them as human. The loader recognises them by their exact opening line or the forecast tag
+(`data/dashboard_comments.py`) and keeps them in a separate `dashboard_comments` column, out of comment coverage,
+first reply, friction themes and phrases. As of 2026-10-12 that was 76 comments on 55 tickets.
 
 **Turning it on.** Writes are **off by default**: the **✏️ Update Target dates** button is **disabled** (its
 tooltip says why), and the dialog refuses to show proposals without permission. To enable them on your
@@ -1087,6 +1120,11 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-10-12
+- **Backlog**: **📝 Post forecast as comments** adds the forecast to tickets as Jira comments without changing any dates, with a machine-readable tag; a **Forecast Track Record** compares posted forecasts with actual starts and finishes (see [Posting the forecast as comments](#posting-the-forecast-as-comments-no-date-changes))
+- Comments posted by the dashboard are no longer counted as human comments (comment coverage, first reply, Teams Conversations)
+- Added `tests/test_jira_forecast.py`
+
 ### 2026-10-10
 - New skill domains **CloudFront** (AWS) and **Upwind** (in a new **Security** group for SecOps tools), added to the shared taxonomy in `reports/domains.py`, darkstar's Intake page and darkstar's GitLab tagging (CloudFront moved out of AWS Core there)
 - Made a Validating test independent of the day of the week
@@ -1223,7 +1261,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py -q
 ```
 
 ---

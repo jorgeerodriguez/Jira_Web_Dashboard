@@ -872,6 +872,75 @@ def _assign_dialog(asg_payload: dict) -> None:
                     st.dataframe(jira_assign.undo_batch(jira, batch), hide_index=True, width="stretch")
 
 
+# ── Post forecast as comments (Backlog, safe mode, no field changes) ────────────
+@st.dialog("📝 Post forecast as comments", width="large")
+def _forecast_comment_dialog(backlog_payload: dict) -> None:
+    from reports import jira_dates, jira_forecast
+
+    host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+    allowed, reason = jira_dates.write_permission(host)
+    st.caption(
+        "Adds the Backlog forecast to each selected ticket as a Jira comment. **No dates or fields are changed.** "
+        "Each comment ends with a tag the dashboard reads back to measure the forecast against what actually happens "
+        "(Forecast Track Record on this page). Tickets whose last posted forecast has the same dates are skipped."
+    )
+    if not allowed:
+        st.error(f"Jira updates are not available: {reason}")
+        return
+    st.success(f"🔓 {reason} Each post still needs your selection and typed confirmation.")
+
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    posted = (dict(zip(df_issues["key"], df_issues["dashboard_comments"]))
+              if "dashboard_comments" in df_issues.columns else {})
+    as_of = backlog_payload["today"].date()
+    rows = jira_forecast.build_rows(backlog_payload["planning_df"], as_of, posted)
+    if rows.empty:
+        st.info("No assigned backlog tickets with a forecast.")
+        return
+    select_all = st.toggle("Select all tickets with new or changed forecasts (recommended weekly, so the track record "
+                           "covers the whole backlog, not a hand-picked part)", key="fcc_all")
+    if select_all:
+        rows["Apply"] = ~rows["Same As Last"]
+    edited = st.data_editor(
+        rows, hide_index=True, width="stretch", key=f"fcc_editor_{select_all}",
+        disabled=[c for c in rows.columns if c != "Apply"],
+        column_config={"Apply": st.column_config.CheckboxColumn("Apply", help="Tick to post this ticket's forecast")},
+    )
+    selected = edited[edited["Apply"]]
+    errors, warnings = jira_forecast.validate(selected)
+    if not selected.empty:
+        first = selected.iloc[0]["Ticket"]
+        st.markdown(f"**Preview of the comment for {first}**")
+        st.code(jira_forecast.format_comment(rows.attrs["fields"][first], "BATCH-ID"), language=None)
+    for message in errors:
+        st.error(message)
+    for message in warnings[:5]:
+        st.warning(message)
+
+    phrase = f"COMMENT {len(selected)}"
+    if errors and not selected.empty:
+        st.info("Fix the error above to enable posting (untick some tickets).")
+    typed = st.text_input(f"Type **{phrase}** to confirm", key="fcc_confirm", disabled=selected.empty or bool(errors))
+    ready = not selected.empty and not errors and typed.strip() == phrase
+    if st.button(f"Post {len(selected)} forecast comment(s)", type="primary", disabled=not ready, key="fcc_apply"):
+        jira = st.session_state.get("jira_connector")
+        if jira is None:
+            _, _, jira = validate_jira_connection()
+            st.session_state["jira_connector"] = jira
+        if jira is None:
+            st.error("Could not connect to Jira.")
+            return
+        try:
+            actor = jira.myself().get("displayName", "")
+        except Exception:
+            actor = ""
+        with st.spinner("Posting comments…"):
+            results = jira_forecast.post_forecasts(jira, selected, rows.attrs["fields"], actor)
+        st.dataframe(results, hide_index=True, width="stretch")
+        st.success(f"{int((results['Result'] == 'posted').sum())} comment(s) posted. Fetch Jira tickets again to see them "
+                   "in the track record.")
+
+
 # ── Mock data helpers ───────────────────────────────────────────────────────────
 metrics = load_metrics(report_date=report_date, lookback_days=lookback_days)
 start_date = report_date - timedelta(days=lookback_days - 1)
@@ -1592,6 +1661,10 @@ elif selected == "🗂️  Backlog":
                          help=("Propose new Target start / end dates from this forecast, review them and update Jira "
                                "safely." if updates_allowed else f"Disabled. {updates_reason}")):
                 _target_date_dialog(backlog)
+            if st.button("📝 Post forecast as comments", key="fcc_open", width="stretch", disabled=not updates_allowed,
+                         help=("Add this forecast to tickets as Jira comments without changing any dates, so it can be "
+                               "measured later." if updates_allowed else f"Disabled. {updates_reason}")):
+                _forecast_comment_dialog(backlog)
         st.caption(
             f"Projected Start is the likely start (P50); Safe Start is the date 85% of tickets started by in back-tests. "
             f"Start Confidence by queue position: High (#1, typically within ±{BACKLOG_START_MISS['High']} bd), "
@@ -1609,6 +1682,35 @@ elif selected == "🗂️  Backlog":
                 )
             },
         )
+
+        st.subheader("Forecast Track Record")
+        from reports.jira_forecast import track_record as forecast_track_record
+        tr = forecast_track_record(st.session_state.get("jira_df_issues", pd.DataFrame()),
+                                   st.session_state.get("jira_change_history"))
+        tk = tr["kpis"]
+        if not tk["posted"]:
+            st.caption("No forecasts posted yet. Use **📝 Post forecast as comments** above: each posted forecast is "
+                       "later compared here with when the ticket actually started and finished.")
+        else:
+            st.caption(f"{tk['posted']} forecasts posted on {tk['tickets']} tickets since {tk['first_posted']:%b %d, %Y}, "
+                       "read back from their Jira comments. Each posted forecast counts once; tickets that haven't started "
+                       "or finished yet are waiting.")
+            pct = lambda v: "—" if v is None else f"{v:.0%}"  # noqa: E731
+            r1, r2, r3, r4, r5 = st.columns(5)
+            r1.metric("Started", f"{tk['started']} of {tk['posted']}")
+            r2.metric("Started by Likely Start", pct(tk["start_by_likely"]), help="About half is the aim (a median).")
+            r3.metric("Started by Safe Start", pct(tk["start_by_safe"]), help="Aim: about 85%.")
+            r4.metric("Started by Jira Target Start", pct(tk["start_by_target"]),
+                      help="The Target start that was in Jira when the forecast was posted, for comparison.")
+            r5.metric("Finished by Safe Finish (P85)", pct(tk["finish_by_p85"]),
+                      help=f"{tk['finished']} finished so far. Aim: about 85%.")
+            if not tr["history"]:
+                st.caption("Change history wasn't loaded with the last fetch, so actual start dates are unknown.")
+            if not tr["by_confidence_df"].empty:
+                st.dataframe(tr["by_confidence_df"], width="stretch", hide_index=True)
+            with st.expander("Every posted forecast"):
+                st.dataframe(tr["detail_df"], width="stretch", hide_index=True, column_config={
+                    "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira", display_text=r".*/([^/]+)$")})
 
         st.subheader("All Backlog Tickets")
         st.dataframe(

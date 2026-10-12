@@ -139,7 +139,7 @@ def undo_batch(jira, batch_rows: pd.DataFrame, actor: str = "") -> pd.DataFrame:
                 outcome, detail = "skipped", "Assignee was changed again after the batch; left as it is."
             else:
                 _set_assignee(jira, key, old)
-                jira.add_comment(key, f"Undo of dashboard assignment batch {rec['batch']}: assignee back to "
+                jira.add_comment(key, f"Undo of PE dashboard assignment batch {rec['batch']}: assignee back to "
                                       f"{rec['old_owner'] or 'Unassigned'}.")
                 detail = "Previous assignee restored and a comment added."
         except Exception as exc:

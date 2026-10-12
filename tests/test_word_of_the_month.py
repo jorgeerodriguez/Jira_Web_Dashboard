@@ -57,7 +57,8 @@ def test_loader_keeps_human_comments_and_counts_bots():
         {"author": {"displayName": "Rita", "accountType": "atlassian"}, "body": "Thanks",
          "created": "2026-09-01T12:00:00.000-0600"},
     ]}}
-    comments, total, bots = _human_comments(fields)
+    comments, total, bots, dashboard = _human_comments(fields)
+    assert dashboard == []
     assert [c["author"] for c in comments] == ["Ana", "Rita"]
     assert total == 3 and bots == 1
 

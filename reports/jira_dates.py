@@ -284,7 +284,7 @@ def undo_batch(jira, batch_rows: pd.DataFrame, actor: str = "") -> pd.DataFrame:
             else:
                 jira.issue(key).update(fields={CF_TARGET_START: restore[0].isoformat() if restore[0] else None,
                                                CF_TARGET_END: restore[1].isoformat() if restore[1] else None})
-                jira.add_comment(key, f"Undo of dashboard batch {rec['batch']}: Target start back to "
+                jira.add_comment(key, f"Undo of PE dashboard batch {rec['batch']}: Target start back to "
                                       f"{restore[0] or 'none'}, Target end back to {restore[1] or 'none'}.")
                 detail = "Previous dates restored and a comment added."
         except Exception as exc:

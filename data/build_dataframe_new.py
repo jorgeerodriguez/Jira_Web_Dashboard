@@ -1,5 +1,7 @@
 import pandas as pd
 
+from data.dashboard_comments import is_dashboard_comment
+
 # Custom field definitions
 CF_BUSINESS_LEAD    = "customfield_11751"
 CF_PLANNING_RANK    = "customfield_11445"
@@ -17,22 +19,25 @@ CF_ESTIMATE_SIZE    = "customfield_10968"
 BOT_ACCOUNT_TYPES = {"app"}
 
 
-def _human_comments(fields: dict) -> tuple[list[dict], int, int]:
-    """Human comments on an issue as [{author, created, body}], plus Jira's total comment count and
-    how many were from bots. The search API returns at most 20 comments per issue."""
+def _human_comments(fields: dict) -> tuple[list[dict], int, int, list[dict]]:
+    """Human comments on an issue as [{author, created, body}], Jira's total comment count, how many were
+    from bots, and the comments the dashboard itself posted (data/dashboard_comments.py), which are kept
+    apart: they are written with a person's token but are not conversation. The search API returns at most
+    20 comments per issue."""
     block = fields.get("comment") or {}
-    comments, bots = [], 0
+    comments, dashboard, bots = [], [], 0
     for comment in block.get("comments", []):
         author = comment.get("author") or {}
         if author.get("accountType") in BOT_ACCOUNT_TYPES:
             bots += 1
             continue
-        comments.append({
+        record = {
             "author": author.get("displayName", "Unknown"),
             "created": pd.to_datetime(comment.get("created"), utc=True, errors="coerce"),
             "body": comment.get("body") or "",
-        })
-    return comments, int(block.get("total", len(block.get("comments", [])))), bots
+        }
+        (dashboard if is_dashboard_comment(record["body"]) else comments).append(record)
+    return comments, int(block.get("total", len(block.get("comments", [])))), bots, dashboard
 
 
 def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
@@ -188,7 +193,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             updated_local = resolved_local
 
 
-        human_comments, comment_total, bot_comments = _human_comments(fields)
+        human_comments, comment_total, bot_comments, dashboard_comments = _human_comments(fields)
 
         issue_data = {
             "key": issue.key,
@@ -238,6 +243,9 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "comments": human_comments,
             "comment_total": comment_total,
             "bot_comment_count": bot_comments,
+            # Posted by the dashboard (Target date updates, assignments, forecasts): not human conversation.
+            "dashboard_comments": dashboard_comments,
+            "dashboard_comment_count": len(dashboard_comments),
             'estimated_size_name' : estimate_size_name,
             'estimated_size_number' : estimate_size_number,
         }
