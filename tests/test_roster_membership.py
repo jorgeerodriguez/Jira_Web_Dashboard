@@ -30,6 +30,7 @@ import pytest
 
 from darkstar.roster import (
     ALUMNI,
+    AWAITING_GROUP_ACCESS,
     GITLAB_USERNAMES,
     NON_HUMAN_GROUP_MEMBERS,
     PE_EVER,
@@ -78,11 +79,29 @@ def test_anyone_who_has_left_the_group_is_declared_alumni(members):
 
     This only fires once access is revoked, so it is a backstop, not the notification.
     """
-    gone = {username for username in GITLAB_USERNAMES if username not in members}
+    gone = {username for username in GITLAB_USERNAMES if username not in members} - AWAITING_GROUP_ACCESS
     still_current = {u for u in gone if GITLAB_USERNAMES[u] in ROSTER}
     assert not still_current, (
         "these roster entries are no longer direct members of audacy-inc/devops; move them from "
         f"roster.ROSTER to roster.ALUMNI: {sorted(still_current)}")
+
+
+def test_awaiting_members_are_still_awaiting_access(members):
+    """A new member exempt from the has-left check must lose the exemption once they join the group.
+
+    Otherwise the exemption outlives its reason and would hide a real departure later.
+    """
+    joined = {u for u in AWAITING_GROUP_ACCESS if u in members}
+    assert not joined, (
+        f"these users now have audacy-inc/devops access; remove them from roster.AWAITING_GROUP_ACCESS: {sorted(joined)}")
+
+
+def test_awaiting_members_are_current_pe_with_a_gitlab_mapping():
+    """Offline: only a current, mapped PE member can be waiting for group access."""
+    unmapped = AWAITING_GROUP_ACCESS - set(GITLAB_USERNAMES)
+    assert not unmapped, f"AWAITING_GROUP_ACCESS users missing from GITLAB_USERNAMES: {sorted(unmapped)}"
+    not_current = {u for u in AWAITING_GROUP_ACCESS if GITLAB_USERNAMES[u] not in ROSTER}
+    assert not not_current, f"AWAITING_GROUP_ACCESS users who are not in ROSTER: {sorted(not_current)}"
 
 
 def test_the_exclusion_list_still_describes_real_members(members):

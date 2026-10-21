@@ -84,5 +84,13 @@ NON_HUMAN_GROUP_MEMBERS: frozenset[str] = frozenset({
     "group_115211004_bot_bbc6b7e533b3a58af41a516bd3a2d55a",  # PlatformProvisionerBot
 })
 
+# New PE members whose access to the audacy-inc/devops group has not been granted yet (GitLab usernames).
+# Without this, tests/test_roster_membership.py reads "listed but not in the group" as "has left" and asks
+# for a move to ALUMNI. Remove the entry once access is granted -- the live test fails until you do, so
+# nobody stays exempt by accident.
+AWAITING_GROUP_ACCESS: frozenset[str] = frozenset({
+    "anastasiia.yerchenko",   # joined PE 2026-10
+})
+
 # The GitLab group ROSTER is expected to mirror: audacy-inc/devops.
 PE_GROUP_ID: int = 115211004
