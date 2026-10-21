@@ -31,7 +31,7 @@ It supports:
 - **Velocity**: what lead time we can promise a requester (50/85/95%), waiting vs in-progress time by priority, whether sizes predict effort, an SLA reality check per Priority × Size, and what was delivered — see [How Velocity works](#how-velocity-works)
 - **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, Target date changes (moves, re-planning after the date passed, SLA clocks set after the fact), plus team contribution over time — see [How Trend works](#how-trend-works)
 - **Validating**: work waiting for the requester to confirm — time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs — see [How Validating works](#how-validating-works)
-- **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) and a skills map (who holds which domains, single-person domains, skills that go together) — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
+- **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) a skills map (who holds which domains, single-person domains, skills that go together) and dependencies (what waits on what, from Jira issue links) — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
 - **Change history**: status and Target date history loaded with every fetch (Jira bulk changelog) — see [Change history](#change-history)
 
 ---
@@ -65,6 +65,7 @@ Jira_Web_Dashboard/
 │   ├── assignment_report.py     # Suggested Assignments
 │   ├── welcome.py               # Welcome page content and layout
 │   ├── knowledge_graph.py       # Knowledge Graph (NetworkX analysis, Plotly drawing)
+│   ├── dependency_graph.py      # Knowledge Graph · Dependencies (issue links)
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
 │   ├── change_history.py        # date changes, SLA clock set after the fact, status episodes
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
@@ -110,6 +111,7 @@ Jira_Web_Dashboard/
 │   ├── test_welcome.py
 │   ├── test_jira_forecast.py
 │   ├── test_knowledge_graph.py
+│   ├── test_dependency_graph.py
 │   └── ...
 └── backup/
 ```
@@ -287,8 +289,26 @@ name) and mentions add 19 people and 213 pairs to the conversation graph (108 pe
 somewhat siloed): the team looks well mixed largely because one person links everyone; ECS and Looker rest on one
 person (ECS's main person has left PE); Airflow + Composer co-occur 27× more than chance.
 
-**Next (Phase 2):** a dependency graph from Jira issue links (blocks / is blocked by), which needs `issuelinks` in
-the fetch.
+### Dependencies tab
+
+`reports/dependency_graph.py` builds a directed graph, blocker → blocked, from Jira issue links of type **Blocks**
+("blocks" / "is blocked by") and **Dependent** ("depends on"); *relates to*, *clones* and other types are ignored, and
+Features/Initiatives are left out. The fetch loads `issuelinks` into a `links` column (type, wording, direction and the
+other ticket's key, status and status category), so blockers in other projects are included. It shows the current
+state of open work, not the selected window.
+
+- **KPIs:** Waiting on Open Work (open PE tickets with an open blocker), **Can Likely Move** (all blockers done: the
+  link may be stale), Waiting on Others (open blocker outside DevOps), Others Waiting on PE, **Longest Chain** (the
+  critical path, `dag_longest_path`) and Circular Links (cycles, always a data error).
+- **Graph:** blockers on the left, what they hold up on the right, one band per dependency group (topological
+  layers). Blue = open PE, orange square = open in another team's project, hollow grey = done, red outline = Jira
+  status Blocked/On Hold. Focus on one ticket to see its whole chain; hide done blockers with a toggle.
+- **Lists:** Can Likely Move, **Top Blockers** (open tickets holding up the most open work, directly and down the
+  chain), Waiting on Other Teams, Other Teams Waiting on PE.
+
+As of 2026-10-20: 2,010 of 4,368 PE tickets have links (most are *relates to* / *clones*); 15 open PE tickets wait on
+open work, 9 are blocked only by finished work, the longest chain is 4 tickets, the top blocker holds up 6 PE
+tickets, no cycles.
 
 ---
 
@@ -1149,6 +1169,7 @@ In practical terms, this means the model now uses both binary history and latene
 ## Release notes
 
 ### 2026-10-20
+- **Knowledge Graph · Dependencies** tab: what waits on what from Jira issue links (Blocks, Dependent), with Can Likely Move, Top Blockers, waiting on / by other teams, longest chain and cycles; the fetch now loads `issuelinks`
 - **Knowledge Graph · Who Talks to Whom**: **Leave out people** (up to 10) to see how everyone else connects; groups, bridges and strongest pairs are recalculated without them
 - **Knowledge Graph · Who Talks to Whom**: @mentions as a second signal (Replies / Mentions / both), a **Strongest** top N (1–10) view overall or per person, a Strongest Relationships table and a "How this graph is built" note; the loader keeps comment authors' and reporters' account ids to resolve mentions
 - New **🕸️ Knowledge Graph** page (NetworkX): who asks whom, who talks to whom, skills map, each with filters, a metric and a list (see [How the Knowledge Graph works](#how-the-knowledge-graph-works)); `networkx` added to `requirements.txt`
@@ -1295,7 +1316,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py tests/test_knowledge_graph.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py tests/test_knowledge_graph.py tests/test_dependency_graph.py -q
 ```
 
 ---

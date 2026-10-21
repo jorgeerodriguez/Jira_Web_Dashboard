@@ -42,6 +42,33 @@ def _human_comments(fields: dict) -> tuple[list[dict], int, int, list[dict]]:
     return comments, int(block.get("total", len(block.get("comments", [])))), bots, dashboard
 
 
+def _issue_links(fields: dict) -> list[dict]:
+    """Jira issue links as [{type, relation, direction, key, status, status_category, summary}].
+
+    `relation` is the phrase from this issue's side ("blocks", "is blocked by", "relates to"); `direction` is
+    "outward" when this issue is the subject of `type`'s outward phrase (e.g. it blocks `key`).
+    """
+    links = []
+    for link in fields.get("issuelinks") or []:
+        kind = link.get("type") or {}
+        other = link.get("outwardIssue") or link.get("inwardIssue")
+        if not other:
+            continue
+        outward = "outwardIssue" in link
+        other_fields = other.get("fields") or {}
+        status = other_fields.get("status") or {}
+        links.append({
+            "type": kind.get("name"),
+            "relation": kind.get("outward") if outward else kind.get("inward"),
+            "direction": "outward" if outward else "inward",
+            "key": other.get("key"),
+            "status": status.get("name"),
+            "status_category": (status.get("statusCategory") or {}).get("key"),
+            "summary": other_fields.get("summary"),
+        })
+    return links
+
+
 def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
     """Build a pandas DataFrame of issues from Jira.
 
@@ -57,7 +84,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
         "assignee, summary, key, status, created, updated, issuetype, creator, project, "
         "duedate, priority, customfield_10947, customfield_11751, customfield_11445, "
         "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968, "
-        "statuscategorychangedate, comment, reporter"
+        "statuscategorychangedate, comment, reporter, issuelinks"
     )
 
     # Build JQL query — 24-month lookback
@@ -244,6 +271,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "reporter_name": (fields.get("reporter") or {}).get("displayName", "Unknown"),
             "reporter_account_id": (fields.get("reporter") or {}).get("accountId"),
             "comments": human_comments,
+            # Issue links (blocks / is blocked by / relates to ...), for the dependency graph.
+            "links": _issue_links(fields),
             "comment_total": comment_total,
             "bot_comment_count": bot_comments,
             # Posted by the dashboard (Target date updates, assignments, forecasts): not human conversation.

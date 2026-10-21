@@ -2864,7 +2864,8 @@ elif selected == "🕸️  Knowledge Graph":
         st.info(g["error_message"])
         st.stop()
 
-    t_ask, t_talk, t_skill = st.tabs(["🙋 Who Asks Whom", "💬 Who Talks to Whom", "🧠 Skills Map"])
+    t_ask, t_talk, t_skill, t_dep = st.tabs(["🙋 Who Asks Whom", "💬 Who Talks to Whom", "🧠 Skills Map",
+                                             "⛓️ Dependencies"])
 
     with t_ask:
         a = g["ask_stats"]
@@ -3015,3 +3016,83 @@ elif selected == "🕸️  Knowledge Graph":
             st.caption(f"Domain pairs on the same tickets more often than chance (lift; {kg.PAIR_MIN_TICKETS}+ shared tickets). "
                        "Good pairings for cross-training and for staffing work that spans both.")
             st.dataframe(g["pairs_df"], width="stretch", hide_index=True)
+
+    with t_dep:
+        from reports import dependency_graph as dg
+
+        st.caption("Which tickets wait on which, from Jira issue links. Current state of open work (not limited to the "
+                   "window above).")
+        with st.expander("How this graph is built", expanded=False):
+            st.markdown(
+                "- **Data:** Jira issue links of type **Blocks** (\"blocks\" / \"is blocked by\") and **Dependent** "
+                "(\"depends on\"). *Relates to*, *clones* and other link types aren't dependencies and are ignored.\n"
+                "- **Arrows** point from the blocker to the ticket it holds up. Blockers can be in any project, so work "
+                "waiting on other teams (or other teams waiting on PE) shows up.\n"
+                "- **Shown:** open PE tickets that wait on something or hold something up, with their blockers. A ticket "
+                "is done when Jira puts its status in the Done category.\n"
+                "- **Limits:** only links someone added in Jira; a link can stay after the dependency is resolved (see "
+                "*Can Likely Move*)."
+            )
+        G_dep = dg.build_graph(df_issues)
+        if G_dep.number_of_edges() == 0:
+            st.info("No dependency links loaded. Fetch Jira tickets again (issue links were added to the fetch).")
+        else:
+            dep = dg.analyse(G_dep)
+            dk = dep["kpis"]
+            d1, d2, d3, d4, d5, d6 = st.columns(6)
+            d1.metric("Waiting on Open Work", dk["waiting"], help="Open PE tickets with at least one open blocker.")
+            d2.metric("Can Likely Move", dk["can_move"],
+                      help="Open PE tickets whose blockers are all done: check whether the link is stale and unblock.")
+            d3.metric("Waiting on Others", dk["other_teams"],
+                      help="Open PE tickets blocked by an open ticket outside the DevOps project.")
+            d4.metric("Others Waiting on PE", dk["others_waiting_on_pe"],
+                      help="Open tickets in other projects blocked by an open PE ticket.")
+            d5.metric("Longest Chain", dk["longest_chain"],
+                      help="The longest line of open tickets waiting on each other (the critical path).")
+            d6.metric("Circular Links", dk["cycles"], help="Tickets that end up waiting on themselves: a data error.")
+            f1, f2 = st.columns([3, 2])
+            with f1:
+                chain_keys = sorted(n for n in G_dep if G_dep.nodes[n]["open"] and G_dep.degree(n))
+                focus = st.selectbox("Focus on one ticket's chain", ["All open work"] + chain_keys, key="kg_dep_focus",
+                                     help="Everything the ticket waits on and everything it holds up, at any depth.")
+            with f2:
+                st.write("")
+                show_done = st.toggle("Show blockers that are already done", value=True, key="kg_dep_done")
+            fig = dg.figure(G_dep, None if focus == "All open work" else focus, show_done)
+            st.caption("Blue = open PE ticket, orange square = open ticket in another team's project, hollow grey = done. "
+                       "Red outline = Jira status Blocked or On Hold. Blockers on the left, what they hold up on the right.")
+            if fig is not None:
+                st.plotly_chart(fig, width="stretch")
+            if dep["longest_chain"] and dk["longest_chain"] > 2:
+                st.caption("Longest chain: " + " → ".join(dep["longest_chain"]))
+            if dep["cycles"]:
+                st.warning("Circular dependencies (fix the links in Jira): " +
+                           "; ".join(" → ".join(c + [c[0]]) for c in dep["cycles"]))
+            link = {c: st.column_config.LinkColumn(c, help="Open in Jira", display_text=r".*/([^/]+)$")
+                    for c in ("Ticket", "Blocker")}
+            a1, a2 = st.columns(2)
+            with a1:
+                st.subheader("Can Likely Move")
+                st.caption("Open PE tickets whose blockers are all done. Check the link and unblock them.")
+                if dep["can_move_df"].empty:
+                    st.success("No open ticket is waiting on finished work.")
+                else:
+                    st.dataframe(dep["can_move_df"], width="stretch", hide_index=True, column_config=link)
+            with a2:
+                st.subheader("Top Blockers")
+                st.caption("Open tickets holding up the most open work, directly and down the chain. Finishing these "
+                           "frees the most.")
+                st.dataframe(dep["top_blockers_df"].head(10), width="stretch", hide_index=True, column_config=link)
+            b1, b2 = st.columns(2)
+            with b1:
+                st.subheader("Waiting on Other Teams")
+                if dep["other_teams_df"].empty:
+                    st.success("No open PE ticket is waiting on another team's open ticket.")
+                else:
+                    st.dataframe(dep["other_teams_df"], width="stretch", hide_index=True, column_config=link)
+            with b2:
+                st.subheader("Other Teams Waiting on PE")
+                if dep["others_waiting_df"].empty:
+                    st.success("No other team's open ticket is waiting on open PE work.")
+                else:
+                    st.dataframe(dep["others_waiting_df"], width="stretch", hide_index=True, column_config=link)
