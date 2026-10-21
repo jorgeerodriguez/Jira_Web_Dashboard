@@ -15,13 +15,13 @@ ROSTER: dict[str, str] = {
     "712020:ff85e042-9fc6-4019-9fda-590317ad40a1": "Vlad",
     "712020:7b17ea63-c2c5-430a-9077-01bc69e77d9e": "Oleh",
     "712020:ad62d468-1992-4732-ba89-6b97f6c30f04": "Taras",
-    "712020:e4bf6796-fa1d-4b46-ab99-44efb469258d": "Andriy",
     "712020:848d5ad1-9ec9-47d2-9aa5-7b6da106ff14": "Pavlo",
     "712020:f7cf29d4-2183-4d11-a4d1-34da30c0cd69": "Trevor",
     "6228f44c932f0f00716aca72": "Bolanle",
     "62682169fff19d006926eb24": "Simon",
     "712020:f53bb9ec-b2b5-4a5a-8811-e3c0a197732b": "Denys",
     "712020:1afb2e28-5f9e-4e68-acf6-68f7e68f7e54": "Zack",
+    "712020:87f94be4-32ae-4f27-8b02-4e06bef168e7": "Anastasiia",
 }
 
 # Departed PE members. A departure is a move to this map, never a deletion, because the two things
@@ -36,6 +36,7 @@ ROSTER: dict[str, str] = {
 # self-service merge requests alone take it from 21% to 37%.
 ALUMNI: dict[str, str] = {
     "5aa3365d29118e2c1375d5ea": "Randall",
+    "712020:e4bf6796-fa1d-4b46-ab99-44efb469258d": "Andriy",
 }
 
 # Everyone who has ever been PE. Use this to attribute work that already happened (who authored it,
@@ -61,6 +62,7 @@ GITLAB_USERNAMES: dict[str, str] = {
     "audacy-zack.amadi":       "712020:1afb2e28-5f9e-4e68-acf6-68f7e68f7e54",
     "audacy-simon.davison":    "62682169fff19d006926eb24",
     "audacy-denys.naumenko":   "712020:f53bb9ec-b2b5-4a5a-8811-e3c0a197732b",
+    "anastasiia.yerchenko":    "712020:87f94be4-32ae-4f27-8b02-4e06bef168e7",
 }
 
 # Direct members of the audacy-inc/devops GitLab group that are NOT people. Maintained by hand and

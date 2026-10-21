@@ -116,3 +116,18 @@ def test_plan_spreads_work_across_the_team(asg):
     assert plan["Suggested"].nunique() >= 2
     assert plan["Suggested"].value_counts().max() <= 4
     assert out["kpis"]["to_assign"] == 6
+
+
+def test_new_members_are_candidates_before_they_have_a_track_record(asg, monkeypatch):
+    monkeypatch.setattr(asg, "NEW_MEMBERS", {"Nia"})
+    rows = _team([_issue(f"N-{i}", "Unassigned", "Update the onboarding wiki", status="To Do", start_in_days=1)
+                  for i in range(4)])
+    rows.append(_issue("NIA-1", "Nia", "Update the onboarding wiki", status="To Do", start_in_days=1))
+    out, plan = _plan(asg, rows)
+    assert out["kpis"]["candidates"] == 4                                            # Ana, Ben, Cara + Nia
+    assert "Nia" in set(out["load_df"]["Person"])
+    picked = plan[plan["Suggested"] == "Nia"]
+    assert picked.empty or picked["Why"].str.contains("new team member").all()
+    monkeypatch.setattr(asg, "DEPARTED_MEMBERS", {"nia"})
+    out, _ = _plan(asg, rows)
+    assert "Nia" not in set(out["load_df"]["Person"])

@@ -21,7 +21,7 @@ import plotly.graph_objects as go
 
 
 PE_TEAM_MEMBERS = [
-    "Adam Shero", "Bolanle", "Denys Loboda", "Denys Naumenko", "Jeff Stuewe", "Oleh Kuzo",
+    "Adam Shero", "Anastasiia Yerchenko", "Bolanle", "Denys Loboda", "Denys Naumenko", "Jeff Stuewe", "Oleh Kuzo",
     "Omar Saunders", "Owen Tregoning", "Pavlo Myshok", "Randall Puterbaugh", "simon.davison",
     "Taras Protsiv", "Tom Terry", "Trevor Atchley", "vladyslav.zhyhulin", "Zack.Amadi", "Unassigned",
 ]

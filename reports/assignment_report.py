@@ -6,7 +6,8 @@ Release Management CAR tickets).
 
 Tickets: open PE tickets that are unassigned, or in Triage / Reviewing.
 Candidates: the core team -- people who completed at least MIN_DELIVERED PE tickets in the last
-CANDIDATE_DAYS days, minus DEPARTED_MEMBERS (excluded assignees are already left out by prepare_tickets).
+CANDIDATE_DAYS days, plus NEW_MEMBERS (new hires, before they have that track record), minus DEPARTED_MEMBERS
+(excluded assignees are already left out by prepare_tickets).
 
 Each candidate is scored on what the other pages already measure:
 - Expertise: recency-weighted completed (1.0) and active (0.5) tickets in the ticket's primary domain,
@@ -41,6 +42,10 @@ TRIAGE_STATUSES = {"triage", "reviewing"}
 # People who have left PE: never suggested for new work. Their past tickets still count everywhere else
 # (keep this separate from EXCLUDED_ASSIGNEES, which removes people from all history). Lower-case names.
 DEPARTED_MEMBERS = {"randall puterbaugh", "andriy petryshyn"}
+# New PE members: candidates straight away, ranked on availability and SLA fit until they build domain experience
+# (a steady flow of work while they ramp up). Exact Jira display names. Once someone has MIN_DELIVERED recent
+# completions they qualify anyway, so an entry can stay here harmlessly.
+NEW_MEMBERS = {"Anastasiia Yerchenko"}
 CANDIDATE_DAYS = 90
 MIN_DELIVERED = 5
 EXPERTISE_HALF_LIFE_DAYS = 120
@@ -162,8 +167,8 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     recent_done = t[t["outcome"].eq("Done") & (t["closed_day"] > today - pd.Timedelta(days=CANDIDATE_DAYS))
                     & t["assignee_name"].ne("Unassigned")]
     delivered = recent_done["assignee_name"].value_counts()
-    people = sorted(p for p in delivered[delivered >= MIN_DELIVERED].index
-                    if str(p).strip().casefold() not in DEPARTED_MEMBERS)
+    people = sorted({p for p in delivered[delivered >= MIN_DELIVERED].index} | set(NEW_MEMBERS))
+    people = [p for p in people if str(p).strip().casefold() not in DEPARTED_MEMBERS]
     if not people:
         return _empty_payload("No core team members found (nobody completed enough tickets recently).")
 
@@ -241,6 +246,8 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
             why.append("no one fits the SLA: earliest finish shown")
         if best["person"] in overloaded:
             why.append("already above usual load")
+        if best["person"] in NEW_MEMBERS and delivered.get(best["person"], 0) < MIN_DELIVERED:
+            why.append("new team member")
         plan.append({
             "Ticket": JIRA_BROWSE_BASE_URL + ticket["key"], "Priority": ticket["priority_bucket"], "Size": ticket["size"],
             "Domain": domain or "—", "Jira Status": ticket["status"],

@@ -741,8 +741,10 @@ The **🧭 Suggested Assignments** page proposes an owner for each open PE ticke
 Triage / Reviewing. It uses Jira data only (no darkstar data), and nothing is written to Jira unless you
 use **✏️ Assign in Jira** (below). Code: `reports/assignment_report.py`.
 
-**Candidates** are people who completed at least 5 PE tickets in the last 90 days, minus
-`DEPARTED_MEMBERS` (people who have left PE; their history still counts everywhere else).
+**Candidates** are people who completed at least 5 PE tickets in the last 90 days, plus `NEW_MEMBERS` (new hires,
+ranked on availability and SLA fit until they build domain experience; their suggestions say "new team member"),
+minus `DEPARTED_MEMBERS` (people who have left PE; their history still counts everywhere else). Both lists are at the
+top of `reports/assignment_report.py`.
 
 Each candidate is scored for each ticket:
 
@@ -1167,6 +1169,10 @@ The on-time completion model uses historical Jira tickets to estimate whether a 
 In practical terms, this means the model now uses both binary history and lateness severity instead of relying only on simple averages.
 
 ## Release notes
+
+### 2026-10-21
+- **Anastasiia Yerchenko** joins PE: added to `PE_TEAM_MEMBERS`, darkstar's `ROSTER` and `GITLAB_USERNAMES` (`anastasiia.yerchenko`), and to the new `NEW_MEMBERS` list so Suggested Assignments considers her before she has 5 completed tickets
+- darkstar: **Andriy Petryshyn** moved from `ROSTER` to `ALUMNI` (out of capacity and SME suggestions; his past work still counts as PE)
 
 ### 2026-10-20
 - **Knowledge Graph · Dependencies** tab: what waits on what from Jira issue links (Blocks, Dependent), with Can Likely Move, Top Blockers, waiting on / by other teams, longest chain and cycles; the fetch now loads `issuelinks`
