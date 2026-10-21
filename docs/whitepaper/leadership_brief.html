@@ -6,10 +6,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root { --ink: #1f2937; --muted: #64748b; --rule: #e2e8f0; --accent: #2a78d6; --accent2: #eb6834; --soft: #f5f8fc;
-  --good: #0c8a0c; }
+  --good: #0c8a0c; --warnbg: #fdf6f2; }
 @page { size: Letter; margin: 0.55in 0.65in 0.6in;
-  @bottom-left { content: "PE Delivery Analytics · Leadership Brief · October 2026"; font: 7.5pt Inter, sans-serif; color: #94a3b8; }
-  @bottom-right { content: counter(page) " / 2"; font: 7.5pt Inter, sans-serif; color: #94a3b8; } }
+  @bottom-left { content: "PE Delivery Analytics · Leadership Brief · v1.1 · October 2026"; font: 7.5pt Inter, sans-serif; color: #94a3b8; }
+  @bottom-right { content: counter(page) " / 3"; font: 7.5pt Inter, sans-serif; color: #94a3b8; } }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body { background: #fff; color: var(--ink); font-family: Inter, system-ui, sans-serif; font-size: 9pt; line-height: 1.38; margin: 0; }
 .page { break-after: page; }
@@ -21,11 +21,13 @@ h1 { font-size: 18pt; line-height: 1.15; margin: 0 0 3pt; letter-spacing: -.01em
 .by b { color: var(--ink); font-weight: 600; }
 h2 { font-size: 10.5pt; margin: 10pt 0 4pt; padding-bottom: 3pt; border-bottom: 1.2pt solid var(--accent); }
 p { margin: 0 0 6pt; }
-ul { margin: 0 0 6pt; padding-left: 14pt; }
+ul, ol { margin: 0 0 6pt; padding-left: 14pt; }
 li { margin-bottom: 2.5pt; }
 .bottomline { background: var(--soft); border-left: 3pt solid var(--accent); padding: 8pt 11pt; margin: 2pt 0 4pt; }
-.bottomline .t { font-weight: 700; font-size: 7.8pt; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.bottomline .t, .caution .t { font-weight: 700; font-size: 7.8pt; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
 .bottomline ul { margin: 4pt 0 0; }
+.caution { background: var(--warnbg); border-left: 3pt solid var(--accent2); padding: 8pt 11pt; margin: 6pt 0 4pt; break-inside: avoid; }
+.caution .t { color: var(--accent2); }
 table { border-collapse: collapse; width: 100%; font-size: 8.1pt; margin: 2pt 0 4pt; }
 th { text-align: left; font-weight: 600; border-bottom: 1.1pt solid var(--ink); padding: 3pt 5pt; }
 td { border-bottom: .5pt solid var(--rule); padding: 2.4pt 5pt; vertical-align: top; }
@@ -38,10 +40,15 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .q span { color: #334155; font-size: 8.4pt; }
 .q .where { display: block; color: var(--muted); font-size: 7.6pt; margin-top: 3pt; }
 .qs { display: grid; grid-template-columns: 1fr 1fr; gap: 6pt; }
+.qs .wide { grid-column: span 2; }
 figure { margin: 2pt 0 0; break-inside: avoid; }
-figure img { width: 100%; max-height: 1.5in; object-fit: contain; }
+figure img { width: 100%; object-fit: contain; }
 .cap { color: var(--muted); font-size: 7.6pt; margin-top: 1pt; }
-.asks li { margin-bottom: 2.5pt; }
+.insight { border: .8pt solid var(--rule); border-radius: 4pt; padding: 6pt 8pt; }
+.insight .n { font-size: 15pt; font-weight: 700; color: var(--accent); display: block; line-height: 1.1; }
+.insight .l { font-size: 8.2pt; color: #334155; }
+.insights { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6pt; margin: 4pt 0 6pt; }
+.asks li { margin-bottom: 3pt; }
 .note { color: var(--muted); font-size: 7.6pt; margin-top: 8pt; }
 </style>
 </head>
@@ -50,61 +57,59 @@ figure img { width: 100%; max-height: 1.5in; object-fit: contain; }
 <!-- ═════════════ PAGE 1 ═════════════ -->
 <div class="page">
   <div class="bar"></div>
-  <p class="kicker">Leadership Brief</p>
+  <p class="kicker">Leadership Brief · v1.1</p>
   <h1>PE Delivery Analytics: what it tells us, how far to trust it, and how it stays safe</h1>
-  <p class="by">By <b>Jorge E. Rodriguez, M.Sc.</b> · Platform Engineering · October 2026 · Companion to the technical white paper</p>
+  <p class="by">By <b>Jorge E. Rodriguez, M.Sc.</b> · Platform Engineering · October 2026 (updated Oct 21; first edition Oct 8) ·
+  Companion to the technical white paper</p>
 
   <div class="bottomline">
     <span class="t">Bottom line</span>
     <ul>
-      <li>One dashboard, built only on our Jira data, now answers four leadership questions: <b>are we meeting our SLAs,
-      when will work finish, how much can we take on, and who should do what.</b></li>
-      <li>Every forecast was <b>tested against what actually happened</b> in past months. The dates we tell people to commit to
-      are met about as often as promised (93% vs a target of 85%), and the team's 4-week delivery forecast landed inside
-      its range 82% of the time.</li>
-      <li>The dashboard only <b>recommends</b>. It changes Jira only when an engineer turns writing on, on their own computer,
-      reviews the changes and confirms them. Every change is logged, commented in Jira and can be undone.</li>
+      <li>One dashboard, built only on our Jira data, answers five leadership questions: <b>are we meeting our SLAs, when
+      will work finish, how much can we take on, who should do what, and how is the work connected.</b></li>
+      <li>Forecasts were <b>tested against what actually happened</b>: the dates we tell people to commit to are met about
+      as often as promised (93% vs a target of 85%), and the 4-week delivery forecast landed inside its range 80% of the time.</li>
+      <li><b>New: a caution on SLA compliance.</b> For 35% of recently completed tickets, the SLA start date was entered
+      only after the work was finished, and every one of them counts as "met". Compliance looks better than it is (page 2).</li>
+      <li><b>New: relationship graphs</b> show hidden dependencies on single people and stalled work we can unblock today (page 3).</li>
+      <li>The dashboard only <b>recommends</b>. It changes Jira only when an engineer turns writing on, on their own
+      computer, reviews and confirms. Every change is logged, commented in Jira and can be undone.</li>
     </ul>
   </div>
 
   <h2>The questions it answers</h2>
   <div class="qs">
     <div class="q"><b>1. Are we meeting our commitments?</b>
-      <span>SLA compliance and two breach rates against our goal of under 10% breached, the trend, and the specific
-      tickets that are late or about to be.</span><span class="where">SLA · Executive Summary pages</span></div>
+      <span>SLA compliance and two breach rates against our goal of under 10% breached, the trend, and the tickets that
+      are late or about to be.</span><span class="where">SLA · Executive Summary</span></div>
     <div class="q"><b>2. When will work finish, and start?</b>
-      <span>For every ticket in progress or in the backlog: a likely date and a safe date to commit to, and whether
-      it will make its SLA.</span><span class="where">In Progress · Backlog pages</span></div>
+      <span>A likely date and a safe date to commit to for every ticket in progress or in the backlog.</span>
+      <span class="where">In Progress · Backlog</span></div>
     <div class="q"><b>3. How much can we take on?</b>
-      <span>Tickets the team will likely deliver in the next 4, 8 and 12 weeks with an honest range, and a
-      “can we commit to this project?” calculator.</span><span class="where">Delivery Forecast · Capacity pages</span></div>
+      <span>Tickets the team will likely deliver in 4, 8 and 12 weeks with an honest range, and a "can we commit to this
+      project?" calculator.</span><span class="where">Delivery Forecast · Capacity</span></div>
     <div class="q"><b>4. Who should do what, and what slows us down?</b>
-      <span>A suggested owner for each new ticket, with backup and reason; and the friction (waiting, access,
-      approvals) that comments show costs us the most time.</span><span class="where">Suggested Assignments · Teams Conversations pages</span></div>
+      <span>A suggested owner for each new ticket with backup and reason; the friction in comments that costs the most time.</span>
+      <span class="where">Suggested Assignments · Teams Conversations</span></div>
+    <div class="q wide"><b>5. How is the work connected? (new)</b>
+      <span>Who asks whom, who talks to whom, who holds which skills, and which tickets wait on others, including across teams.</span>
+      <span class="where">Knowledge Graph · plus a new Welcome page that guides first-time users to the right page</span></div>
   </div>
 
   <h2>How it works, in plain terms</h2>
   <div class="grid2">
     <ul>
-      <li><b>One source, one set of definitions.</b> Every page counts tickets, completions and SLA dates the same way,
-      so the numbers agree from page to page.</li>
+      <li><b>One source, one set of definitions.</b> Every page counts tickets, completions and SLA dates the same way.</li>
       <li><b>Business days, like our SLAs.</b> Weekends and company holidays are skipped everywhere.</li>
-      <li><b>Learns from our own history.</b> Forecasts come from how similar tickets actually went for this team,
-      with recent work counting more.</li>
+      <li><b>Learns from our own history.</b> Forecasts come from how similar tickets actually went for this team.</li>
     </ul>
     <ul>
-      <li><b>Ranges, not single dates.</b> “Likely” is a coin flip; “safe” is what to commit to.</li>
-      <li><b>Explainable.</b> Every number traces back to tickets, and every recommendation says why. No AI writes the text;
-      it comes from fixed, tested rules.</li>
-      <li><b>Kept honest.</b> Models that didn't beat simpler methods in testing were removed.</li>
+      <li><b>Ranges, not single dates.</b> "Likely" is a coin flip; "safe" is what to commit to.</li>
+      <li><b>Explainable.</b> Every number traces back to tickets. No AI writes the text; fixed, tested rules do.</li>
+      <li><b>Checks its own inputs.</b> Jira's change history is used to catch data that would flatter the numbers.</li>
     </ul>
   </div>
 
-  <figure>
-    <img src="figures/f_forecast.svg" alt="Weekly delivery forecast">
-    <div class="cap">Weekly PE delivery (blue) and the 12-week forecast (orange) with its range. Likely next 4 weeks: about
-    324 tickets (range 257–512).</div>
-  </figure>
 </div>
 
 <!-- ═════════════ PAGE 2 ═════════════ -->
@@ -113,51 +118,100 @@ figure img { width: 100%; max-height: 1.5in; object-fit: contain; }
   <p>Each forecast was re-run at past dates, using only what was known at the time, and compared with what happened.</p>
   <table>
     <tr><th style="width:30%">Forecast</th><th style="width:38%">What we checked</th><th class="num">Result</th><th style="width:16%">Verdict</th></tr>
-    <tr><td>Safe finish date, work in progress</td><td>Share of tickets finished by their safe date (target 85%)</td><td class="num">93%</td><td class="ok">Reliable, slightly cautious</td></tr>
+    <tr><td>Safe finish date, work in progress</td><td>Share finished by their safe date (target 85%)</td><td class="num">93%</td><td class="ok">Reliable, slightly cautious</td></tr>
     <tr><td>Likely finish date, work in progress</td><td>Typical miss</td><td class="num">1 business day</td><td class="ok">Reliable</td></tr>
-    <tr><td>Team delivery, next 4 weeks</td><td>Actual result inside the forecast range (target ~80%)</td><td class="num">82%</td><td class="ok">Reliable</td></tr>
-    <tr><td>Team delivery, next 8 / 12 weeks</td><td>Actual result inside the range</td><td class="num">68% / 60%</td><td class="watch">Use as a guide</td></tr>
-    <tr><td>Team delivery, central estimate</td><td>Typical error</td><td class="num">±22–24%</td><td class="ok">Good for planning</td></tr>
+    <tr><td>Team delivery, next 4 weeks</td><td>Actual result inside the range (target ~80%)</td><td class="num">80%</td><td class="ok">Reliable</td></tr>
+    <tr><td>Team delivery, next 8 / 12 weeks</td><td>Actual result inside the range</td><td class="num">68% / 62%</td><td class="watch">Use as a guide</td></tr>
+    <tr><td>Team delivery, central estimate</td><td>Typical error</td><td class="num">±22–27%</td><td class="ok">Good for planning</td></tr>
     <tr><td>When backlog work will start</td><td>Typical miss; bias</td><td class="num">±8 bd; none</td><td class="watch">Useful, ±3 weeks</td></tr>
-    <tr><td>“Safe Start” date</td><td>Share started by it (target 85%)</td><td class="num">84%</td><td class="ok">Reliable</td></tr>
+    <tr><td>"Safe Start" date</td><td>Share started by it (target 85%)</td><td class="num">84%</td><td class="ok">Reliable</td></tr>
     <tr><td>Target start dates in Jira today</td><td>Share of tickets that started by them</td><td class="num">12%</td><td class="watch">Usually ~11 bd too early</td></tr>
   </table>
-  <p style="margin-top:4pt"><b>What this means:</b> use the dashboard's <i>safe</i> dates when committing to requesters; treat
-  forecasts beyond about two months as directional; and prefer the forecast start dates over the Target start dates
-  currently entered in Jira.</p>
+  <p><b>New: measured going forward.</b> Backlog forecasts can now be posted to the tickets as Jira comments (no dates
+  changed). The dashboard reads them back and keeps a running <b>Forecast Track Record</b>, so accuracy is measured
+  on live work, not only reconstructed.</p>
+
+  <div class="caution">
+    <span class="t">A caution on SLA compliance</span>
+    <p style="margin:3pt 0 4pt">The SLA clock starts at a ticket's Target start. Jira's history shows that <b>102 of the 293
+    tickets completed in the last 30 days (35%) had their Target start entered on or after the day the work was done</b>,
+    usually at closing. All 102 count as "met", because a clock started at the finish cannot run out. The share has grown
+    from 5–6% last winter to 30–32% since July.</p>
+    <div class="grid2" style="gap:10pt; align-items:center">
+      <figure><img src="figures/f_sla_clock.svg" alt="Breach rates with and without" style="max-height:1.55in"></figure>
+      <div style="font-size:8.4pt">
+        <b>Why it matters:</b> leaving those tickets out raises today's breach rates from 4.2% to 6.4% and from 4.4% to 6.8%,
+        still under the 10% goal. Two weeks ago the same check moved one rate from 7.5% to <b>12.1%, above the goal</b>.
+        <br><b>Fix:</b> require a Target start before a ticket can move to In Progress. The SLA page now flags these tickets
+        and can leave them out.
+      </div>
+    </div>
+  </div>
 
   <h2>Safeguards</h2>
   <table>
-    <tr><th style="width:34%">Risk</th><th>Protection</th></tr>
-    <tr><td>Unintended changes to Jira</td><td>Writing is <b>off by default</b> and only works on the engineer's own computer. Nothing is pre-selected; changes are shown before sending and need a typed confirmation. At most 25 tickets at a time.</td></tr>
-    <tr><td>Overwriting a colleague's edit</td><td>Each ticket is re-checked just before the change; if someone changed it in the meantime, it is skipped.</td></tr>
-    <tr><td>Changes nobody can trace</td><td>Every change adds a Jira comment (what, why, batch) and is recorded in an audit log.</td></tr>
-    <tr><td>A batch that turns out wrong</td><td>One-step undo restores the previous values, but never overrides someone's later edits.</td></tr>
-    <tr><td>Improving the SLA by moving dates</td><td>Tickets whose dates were moved are still judged against their <b>original</b> start date.</td></tr>
-    <tr><td>Assigning the wrong person</td><td>People are assigned by their Jira account, never by name lookup; departed team members are never suggested.</td></tr>
-    <tr><td>Misusing per-person views</td><td>They exist to balance workload, not to rate people; individual speed is pulled toward the team average so a few tickets can't label anyone.</td></tr>
+    <tr><th style="width:32%">Risk</th><th>Protection</th></tr>
+    <tr><td>Unintended changes to Jira</td><td>Writing is <b>off by default</b> and only works on the engineer's own computer. Nothing is pre-selected; changes are previewed and need a typed confirmation.</td></tr>
+    <tr><td>Overwriting a colleague's edit</td><td>Each ticket is re-checked just before the change; if someone changed it meanwhile, it is skipped.</td></tr>
+    <tr><td>Changes nobody can trace</td><td>Every change adds a Jira comment and an audit-log entry.</td></tr>
+    <tr><td>A batch that turns out wrong</td><td>One-step undo, which never overrides someone's later edits.</td></tr>
+    <tr><td>Flattering the SLA</td><td>Moved dates are judged on the original start; clocks set after the fact are flagged.</td></tr>
+    <tr><td>Our own comments skewing metrics</td><td>Comments the dashboard posts are excluded from comment coverage and response times.</td></tr>
+    <tr><td>Assigning the wrong person</td><td>Assignment by Jira account, never by name; departed members are never suggested; new members are.</td></tr>
+    <tr><td>Misusing people views and graphs</td><td>For balancing work and cross-training, not rating people; graphs in our documents are anonymised.</td></tr>
   </table>
+</div>
+
+<!-- ═════════════ PAGE 3 ═════════════ -->
+<div class="page">
+  <h2 style="margin-top:0">What the relationship graphs show (new)</h2>
+  <p>The Knowledge Graph page analyses how work is connected, using network analysis on the last 12 months of Jira data.</p>
+  <div class="insights">
+    <div class="insight"><span class="n">6</span><span class="l">frequent requesters send 60–92% of their work to <b>one engineer</b>: hidden key-person dependencies.</span></div>
+    <div class="insight"><span class="n">2</span><span class="l">skills rest on <b>one person</b> (ECS, Looker), and ECS's main person has left the team.</span></div>
+    <div class="insight"><span class="n">3 → 5</span><span class="l">conversation groups once the <b>single busiest connector</b> is left out: the team looks well connected largely through one person.</span></div>
+    <div class="insight"><span class="n">8</span><span class="l">open tickets are blocked only by work that is <b>already finished</b>: quick wins to unblock today.</span></div>
+  </div>
+  <div class="grid2" style="gap:8pt">
+    <figure><img src="figures/f_kg_talk_all.svg" alt="Conversation groups" style="max-height:2.05in">
+      <div class="cap">Conversation groups (anonymised): everyone.</div></figure>
+    <figure><img src="figures/f_kg_talk_nohub.svg" alt="Without the busiest connector" style="max-height:2.05in">
+      <div class="cap">The same without the busiest connector: the groups separate.</div></figure>
+  </div>
+  <p style="margin-top:4pt">Also shown: <b>38%</b> of tickets are raised by the engineer who works them (self-generated work),
+  skills that naturally go together (e.g. Airflow + Composer) for cross-training, and the longest chain of tickets
+  waiting on each other (4).</p>
 
   <div class="grid2">
     <div>
       <h2>Limits to keep in mind</h2>
       <ul>
-        <li><b>It is only as good as Jira.</b> Missing sizes and Target start dates leave tickets unassessed or judged as Medium.</li>
-        <li><b>Comment themes show association, not proof.</b> Long tickets naturally collect more comments.</li>
-        <li><b>The assignment suggestions are new.</b> Whether following them improves SLA results still has to be measured.</li>
+        <li><b>It is only as good as Jira.</b> Missing sizes and late-entered start dates distort SLA results (see page 2).</li>
+        <li><b>Graphs and comment themes show association, not proof.</b> Conversations outside Jira aren't seen.</li>
+        <li><b>The assignment suggestions are new.</b> Their effect on SLA results still has to be measured.</li>
       </ul>
     </div>
     <div>
       <h2>What we recommend</h2>
-      <ul class="asks">
-        <li><b>Make Size and Target start required at intake</b>, so every ticket has an SLA clock.</li>
-        <li><b>Commit to requesters using “safe” dates</b>, not likely ones.</li>
-        <li><b>Pilot Suggested Assignments for 4–6 weeks</b> and compare SLA results for followed vs not-followed suggestions.</li>
-        <li><b>Peer-review the technical white paper</b> before wider circulation.</li>
-      </ul>
+      <ol class="asks">
+        <li><b>Require Target start before In Progress</b>, so every SLA clock starts when work is planned.</li>
+        <li><b>Commit to requesters using "safe" dates</b>, not likely ones.</li>
+        <li><b>Post forecasts weekly</b> (all backlog) to build an unbiased track record.</li>
+        <li><b>Cross-train ECS and Looker</b>; name a backup for the 6 single-engineer requesters.</li>
+        <li><b>Build direct links between groups</b> to reduce reliance on one connector.</li>
+        <li><b>Clear the 8 "can likely move" tickets.</b></li>
+        <li><b>Pilot Suggested Assignments</b> and compare SLA results for followed vs not-followed suggestions.</li>
+      </ol>
     </div>
   </div>
-  <p class="note">Generated reports are kept out of the code repository, and every code change runs 400+ automated tests. Figures as of October 8, 2026 (6,096 Jira issues over 24 months). Methods, formulas and full test results are in the technical white paper, <i>From Jira Records to Forecasts, Risk and Assignments</i>.</p>
+  <figure style="margin-top:4pt">
+    <img src="figures/f_forecast.svg" alt="Weekly delivery forecast" style="max-height:1.3in">
+    <div class="cap">Weekly PE delivery (blue) and the 12-week forecast (orange) with its range. Likely next 4 weeks:
+    about 315 tickets (range 250–497).</div>
+  </figure>
+  <p class="note">Figures as of October 21, 2026 (6,244 Jira issues over 24 months; 12-month window for the graphs).
+  Methods, formulas and full test results are in the technical white paper <i>From Jira Records to Forecasts, Risk and
+  Assignments</i>, v1.1. Generated reports are kept out of the code repository; every code change runs 450+ automated tests.</p>
 </div>
 </body>
 </html>

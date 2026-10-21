@@ -1,30 +1,30 @@
 {
-  "as_of": "2026-10-08",
-  "rows_fetched": 6096,
-  "pe_tickets": 3764,
-  "open_pe": 100,
-  "human_comments": 11687,
-  "bot_comments": 4912,
+  "as_of": "2026-10-21",
+  "rows_fetched": 6244,
+  "pe_tickets": 3879,
+  "open_pe": 142,
+  "human_comments": 12078,
+  "bot_comments": 4987,
   "forecast": {
     "4": {
-      "likely": 324,
-      "low": 257,
-      "high": 512
+      "likely": 315,
+      "low": 250,
+      "high": 497
     },
     "8": {
-      "likely": 661,
-      "low": 555,
-      "high": 1183
+      "likely": 637,
+      "low": 516,
+      "high": 1140
     },
     "12": {
-      "likely": 1004,
-      "low": 826,
-      "high": 1942
+      "likely": 962,
+      "low": 871,
+      "high": 1861
     }
   },
   "backtest": {
     "4": {
-      "coverage": 0.82,
+      "coverage": 0.8,
       "median_ape": 0.22
     },
     "8": {
@@ -32,30 +32,23 @@
       "median_ape": 0.23
     },
     "12": {
-      "coverage": 0.6,
-      "median_ape": 0.24
+      "coverage": 0.62,
+      "median_ape": 0.27
     }
   },
   "backtest_rows": 942,
-  "history_rows": 1631,
-  "start_bt": {
-    "n": 239,
-    "median_err": 0.0,
-    "mae": 7.0,
-    "target_median_err": 9.0,
-    "n_target": 131
-  },
+  "history_rows": 1730,
   "guide": {
     "Small": [
       0,
-      2
+      1
     ],
     "Medium": [
-      3,
-      4
+      2,
+      3
     ],
     "Large": [
-      5,
+      4,
       12
     ],
     "XL": [
@@ -63,17 +56,196 @@
       null
     ]
   },
-  "size_accuracy": 0.55,
+  "size_accuracy": 0.49,
   "themes_period": "2026-08 to 2026-10",
-  "coverage": 0.6947218259629101,
-  "first_reply_hours": 15.082664999999999,
+  "coverage": 0.7203389830508474,
+  "first_reply_hours": 14.619144583333334,
   "lead": {
-    "n": 871,
+    "n": 897,
     "p50": 2.0,
-    "p85": 14.0,
-    "p95": 33.0
+    "p85": 13.0,
+    "p95": 31.0
   },
   "domain_tagged": 0.8,
-  "domain_tagged_title": 0.67,
-  "domains": 33
+  "domain_tagged_title": 0.68,
+  "domains": 35,
+  "dates": {
+    "delivered": 1390,
+    "moves_per_ticket": 0.97,
+    "stable": 0.631,
+    "later": 0.896,
+    "after_passed": 0.649,
+    "clock_after_fact": 0.277,
+    "median_shift_bd": 3.0
+  },
+  "dates_outcome": [
+    {
+      "Date Moves": "0",
+      "Delivered Tickets": 741,
+      "SLA Met %": 97.0,
+      "Target End Met %": 67.0
+    },
+    {
+      "Date Moves": "1",
+      "Delivered Tickets": 202,
+      "SLA Met %": 91.0,
+      "Target End Met %": 59.0
+    },
+    {
+      "Date Moves": "2\u20133",
+      "Delivered Tickets": 201,
+      "SLA Met %": 92.0,
+      "Target End Met %": 59.0
+    },
+    {
+      "Date Moves": "4+",
+      "Delivered Tickets": 108,
+      "SLA Met %": 64.0,
+      "Target End Met %": 58.0
+    }
+  ],
+  "clock_after_fact_trend": {
+    "2025-10": 0.23,
+    "2025-11": 0.06,
+    "2025-12": 0.05,
+    "2026-01": 0.17,
+    "2026-02": 0.24,
+    "2026-03": 0.19,
+    "2026-04": 0.13,
+    "2026-05": 0.14,
+    "2026-06": 0.19,
+    "2026-07": 0.3,
+    "2026-08": 0.33,
+    "2026-09": 0.32
+  },
+  "sla_clock": {
+    "All completed tickets": {
+      "due_rate": 0.042,
+      "done_rate": 0.044,
+      "after_fact": 102,
+      "after_fact_n": 293,
+      "after_fact_met": 102
+    },
+    "Excluding clocks set after the fact": {
+      "due_rate": 0.064,
+      "done_rate": 0.068,
+      "after_fact": 102,
+      "after_fact_n": 293,
+      "after_fact_met": 102
+    }
+  },
+  "validating": {
+    "in_validating": 18,
+    "waiting_median": 1.0,
+    "nudge": 3,
+    "past_sla": 1,
+    "nudge_bd": 5,
+    "window_days": 90,
+    "outcome_days": 180,
+    "validations": 303,
+    "p50": 1.0,
+    "p50_prev": 1.0,
+    "p85": 3.0,
+    "p85_prev": 3.0,
+    "rework": 0.083,
+    "rework_prev": 0.087,
+    "rework_n": 25,
+    "same_day": 0.472,
+    "closed_by_requester": 0.449,
+    "closed_by_assignee": 0.694,
+    "done_judged": 1252,
+    "through_validating": 0.264,
+    "late": 94,
+    "late_only_validating": 14,
+    "breach_now": 0.075,
+    "breach_paused": 0.064
+  },
+  "kg": {
+    "ask": {
+      "tickets": 2205,
+      "self_created": 845,
+      "self_share": 0.3832199546485261,
+      "requesters": 96,
+      "engineers": 30,
+      "pairs": 352
+    },
+    "tickets": 2311,
+    "dependency_flagged": 6,
+    "single_person_domains": [
+      {
+        "Domain": "ECS",
+        "Main Person Left PE": "yes"
+      },
+      {
+        "Domain": "Looker",
+        "Main Person Left PE": ""
+      }
+    ],
+    "top_pairs": [
+      {
+        "Domain A": "Airflow",
+        "Domain B": "Composer",
+        "Shared Tickets": 22,
+        "Lift": 27.6
+      },
+      {
+        "Domain A": "ECS",
+        "Domain B": "EKS",
+        "Shared Tickets": 7,
+        "Lift": 12.4
+      },
+      {
+        "Domain A": "MSK",
+        "Domain B": "OpenSearch",
+        "Shared Tickets": 9,
+        "Lift": 10.4
+      },
+      {
+        "Domain A": "Databases",
+        "Domain B": "Firestore",
+        "Shared Tickets": 12,
+        "Lift": 9.6
+      },
+      {
+        "Domain A": "AWS Bedrock Agents",
+        "Domain B": "GCP Agent Platform",
+        "Shared Tickets": 11,
+        "Lift": 8.0
+      }
+    ]
+  },
+  "talk": {
+    "all": {
+      "people": 109,
+      "pairs": 615,
+      "communities": 3,
+      "modularity": 0.164,
+      "top_pair_strength": [
+        357,
+        295,
+        177
+      ]
+    },
+    "nohub": {
+      "people": 104,
+      "pairs": 522,
+      "communities": 5,
+      "modularity": 0.324,
+      "top_pair_strength": [
+        77,
+        71,
+        70
+      ]
+    }
+  },
+  "deps": {
+    "waiting": 13,
+    "can_move": 8,
+    "other_teams": 0,
+    "longest_chain": 4,
+    "cycles": 0,
+    "links": 625,
+    "others_waiting_on_pe": 1,
+    "open_pe": 25
+  }
 }

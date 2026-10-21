@@ -91,17 +91,18 @@ figure .mermaid svg { max-width: 100%; max-height: 5.2in; height: auto; }
     <p class="kicker" style="margin-top:18pt">Technical White Paper</p>
     <h1>From Jira Records to Forecasts, Risk and Assignments</h1>
     <p class="sub">How the Platform Engineering delivery dashboard turns ticket data into business-day SLA tracking,
-      calibrated probabilistic forecasts, queue simulation, workload-aware assignment recommendations and
-      rule-based text insights — the data, formulas, algorithms and validation behind each view.</p>
+      calibrated probabilistic forecasts, queue simulation, workload-aware assignment recommendations,
+      relationship graphs and rule-based text insights — the data, formulas, algorithms and validation behind each
+      view.</p>
     <p class="byline">By Jorge E. Rodriguez, M.Sc.</p>
   </div>
   <div class="meta">
     <div><b>Audience</b><br>Computer science and data science engineers</div>
-    <div><b>Version</b><br>1.0 · October 2026</div>
+    <div><b>Version</b><br>1.1 · October 2026 (first edition 1.0, Oct 8)</div>
     <div><b>System</b><br>PE Jira Web Dashboard (Python · Streamlit)</div>
-    <div><b>Data as of</b><br>2026-10-08 · 6,096 Jira issues (24-month window)</div>
+    <div><b>Data as of</b><br>2026-10-21 · 6,244 Jira issues (24-month window)</div>
     <div><b>Author</b><br>Jorge E. Rodriguez, M.Sc.<br>Platform Engineering, Audacy</div>
-    <div><b>Status</b><br>Internal · describes code at commit <span class="mono">3459317</span></div>
+    <div><b>Status</b><br>Internal · describes code at commit <span class="mono">632df17</span></div>
   </div>
 </section>
 
@@ -120,23 +121,40 @@ already spent; (iii) <b>Apparent Tardiness Cost</b> sequencing; (iv) a <b>Monte 
 simulation</b> that forecasts when backlog work will start and finish; (v) a <b>damped-trend throughput forecast</b>
 with <b>split-conformal-style intervals</b> calibrated by rolling-origin back-testing; (vi) a <b>greedy,
 explainable assignment recommender</b> that trades off domain expertise, simulated availability, SLA feasibility
-and load balance; and (vii) <b>transparent text analytics</b> over comments (regular-expression themes with a
+and load balance; (vii) <b>graph analytics</b> with NetworkX — requester–engineer, conversation, skill and
+dependency networks with community detection, betweenness centrality and critical paths; and (viii)
+<b>transparent text analytics</b> over comments (regular-expression themes with a
 matched-median cost estimate, business-hour response times, and lift-ranked bigrams), whose findings are turned into
 plain-English recommendations by deterministic templates. Writes back to Jira are guarded by a safe-mode protocol
 with optimistic concurrency checks, an audit log and compensating undo.</p>
+<p>Version 1.1 adds the Jira <b>change history</b>, which turns the dashboard on its own inputs: 35% of the tickets
+completed in the last 30 days had their SLA clock (Target start) set on or after the day the work was done, every
+one of them recorded as met. Backlog forecasts are now posted to Jira in a machine-readable form, so their accuracy
+is measured going forward rather than reconstructed afterwards.</p>
 <p>Every model was chosen and tuned by back-testing on the team's own history. At the time of writing the 4-week
-delivery forecast's range covered 82% of out-of-sample outcomes (nominal 80%), the in-progress P85 finish date was
+delivery forecast's range covered 80% of out-of-sample outcomes (nominal 80%), the in-progress P85 finish date was
 met by 93% of back-tested tickets (nominal 85%), and the backlog start forecast was unbiased (median error 0
 business days), against a +9-day bias for the start dates recorded in Jira.</p>
 
 <div class="keyfacts">
-  <div><span class="n">7</span><span class="l">model families: SLA, execution time, ATC, queue Monte Carlo, delivery forecast, assignment, text</span></div>
-  <div><span class="n">82% / 80%</span><span class="l">4-week forecast coverage, observed vs nominal (rolling-origin, out of sample)</span></div>
+  <div><span class="n">8</span><span class="l">analytic families: SLA, execution time, ATC, queue Monte Carlo, delivery forecast, assignment, graphs, text</span></div>
+  <div><span class="n">80% / 80%</span><span class="l">4-week forecast coverage, observed vs nominal (rolling-origin, out of sample)</span></div>
   <div><span class="n">93% / 85%</span><span class="l">In-progress tickets finished by P85, back-test of 243 tickets</span></div>
-  <div><span class="n">0 bd</span><span class="l">median bias of Projected Start (Jira Target start: +9 bd)</span></div>
-  <div><span class="n">80%</span><span class="l">PE tickets tagged with a skill domain from title + comments (67% from titles alone)</span></div>
-  <div><span class="n">400+</span><span class="l">automated tests incl. synthetic fixtures, fake Jira and Streamlit AppTest</span></div>
+  <div><span class="n">35%</span><span class="l">tickets completed in 30 days whose SLA clock was set after the work was done (all recorded as met)</span></div>
+  <div><span class="n">3 → 5</span><span class="l">conversation groups once the single busiest connector is left out (modularity 0.16 → 0.32)</span></div>
+  <div><span class="n">450+</span><span class="l">automated tests incl. synthetic fixtures, fake Jira and Streamlit AppTest</span></div>
 </div>
+
+<h3 class="sans" style="margin-top:14pt">Revision history</h3>
+<table class="small">
+<tr><th style="width:9%">Version</th><th style="width:13%">Date</th><th>Changes</th></tr>
+<tr><td>1.1</td><td>2026-10-21</td><td>New: change history and data integrity (§3.4, §5.5–5.6), issue links (§3.5), dashboard-posted
+comments kept out of human metrics (§3.6), posted forecasts and their track record (§8.3), the Validating stage (§13.1)
+and <b>graph analytics</b> (§14: who asks whom, who talks to whom, skills map, dependencies). Updated: Suggested
+Assignments (35 domains, Security group, new-member candidates), safe writes (forecast comments), testing, limitations
+and future work. All figures and numbers refreshed to 2026-10-21.</td></tr>
+<tr><td>1.0</td><td>2026-10-08</td><td>First edition.</td></tr>
+</table>
 
 <h3 class="sans" style="margin-top:14pt">Contents</h3>
 <div class="toc">
@@ -145,7 +163,7 @@ business days), against a +9-day bias for the start dates recorded in Jira.</p>
   <li>System architecture</li>
   <li>Data acquisition and the canonical dataset</li>
   <li>Scope rules, time and the business calendar</li>
-  <li>The SLA model and breach metrics</li>
+  <li>The SLA model, breach metrics and data integrity</li>
   <li>Execution-time model (In Progress forecast)</li>
   <li>Sequencing with Apparent Tardiness Cost</li>
   <li>Backlog forecast: Monte Carlo queue simulation</li>
@@ -153,7 +171,8 @@ business days), against a +9-day bias for the start dates recorded in Jira.</p>
   <li>Suggested Assignments</li>
   <li>Text analytics on human comments</li>
   <li>Generated recommendations and narrative</li>
-  <li>Descriptive flow metrics</li>
+  <li>Descriptive flow metrics and the Validating stage</li>
+  <li>Graph analytics (Knowledge Graph)</li>
   <li>On-time probability classifier (legacy)</li>
   <li>Writing back to Jira safely</li>
   <li>Verification and testing</li>
@@ -176,6 +195,8 @@ numbers people can act on, with known accuracy. Four questions drive it:</p>
   <li><b>When will work finish, and when will it start?</b> Per-ticket P50/P85 dates for in-progress and backlog work.</li>
   <li><b>How much can we deliver?</b> Team throughput over the next 4–12 weeks with an honest range.</li>
   <li><b>Who should do what, and what slows us down?</b> Assignment recommendations and friction found in comments.</li>
+  <li><b>How is the work connected?</b> Who asks whom, who talks to whom, who holds which skills, and what waits on
+  what (v1.1).</li>
 </ol>
 
 <h3>1.1 Design principles</h3>
@@ -186,7 +207,8 @@ numbers people can act on, with known accuracy. Four questions drive it:</p>
 <tr><td>Validated by back-testing</td><td>Each forecast is re-run at past dates with only the data known then and scored against what happened. Parameters (damping, margins, fallbacks) were chosen this way, and models that did not earn their keep were removed (e.g. XGBoost, §9.5).</td></tr>
 <tr><td>Ranges, not points</td><td>Forecasts report P50 (likely) and P85 (safe-to-commit) or a calibrated interval; the calibration itself is measured.</td></tr>
 <tr><td>Business time</td><td>All durations are business days (or business hours) on the company calendar, matching how SLAs are written.</td></tr>
-<tr><td>Advisory first, safe writes</td><td>Recommendations never change Jira by themselves. Writes are opt-in, localhost-only, reviewed, confirmed, concurrency-checked, audited and undoable (§15).</td></tr>
+<tr><td>Advisory first, safe writes</td><td>Recommendations never change Jira by themselves. Writes are opt-in, localhost-only, reviewed, confirmed, concurrency-checked, audited and undoable (§16).</td></tr>
+<tr><td>Measure the inputs, too</td><td>Jira's change history is used to audit the data the models rely on, e.g. SLA clocks set after the work was done (§5.5), so a good-looking metric is checked before it is trusted.</td></tr>
 <tr><td>Deterministic and reproducible</td><td>Fixed random seeds, so the same data always renders the same dates; no generative model in the loop.</td></tr>
 </table>
 </section>
@@ -205,19 +227,19 @@ them unit-testable.</p>
 <pre class="mermaid">
 flowchart TB
   subgraph JC[Jira Cloud]
-    API[REST API v3<br/>enhanced JQL search]
+    API[REST API v3<br/>JQL search · bulk changelog]
   end
   subgraph APP[Streamlit app · app.py]
     CFG[config/<br/>credentials precedence]
-    LOAD[data/build_dataframe_new.py<br/>fetch + flatten]
-    SS[(session_state<br/>issues DataFrame)]
+    LOAD[data/ · issues, links,<br/>comments, change history]
+    SS[(session_state<br/>issues + history)]
     UI[Pages: KPIs, tables,<br/>Plotly charts, dialogs]
   end
   subgraph REP[reports/ · pure functions]
     CORE[in_progress_report<br/>scope, SLA, calendar,<br/>execution-time model]
     FACTS[executive_summary._facts<br/>canonical ticket facts]
-    MODELS[backlog · forecast · assignment<br/>conversations · SLA · size ...]
-    W[jira_dates / jira_assign<br/>safe-mode writers]
+    MODELS[backlog · forecast · assignment<br/>conversations · SLA · graphs ...]
+    W[jira_dates · jira_assign ·<br/>jira_forecast: safe-mode writers]
   end
   CAL[darkstar.metrics<br/>holiday calendar,<br/>business hours]
   AUD[(.dashboard_audit<br/>JSONL audit log)]
@@ -239,7 +261,8 @@ flowchart TB
 <tr><td>UI and serving</td><td>Streamlit 1.57</td><td>Pages, session state, data editor, dialogs, AppTest</td></tr>
 <tr><td>Data</td><td>pandas 3.0, NumPy 2.4</td><td>Tabular transforms; vectorised business-day arithmetic (<span class="mono">np.busday_count</span>, <span class="mono">np.busday_offset</span>); Monte Carlo sampling (<span class="mono">numpy.random.Generator</span>)</td></tr>
 <tr><td>Visualisation</td><td>Plotly 6.7</td><td>Interactive charts</td></tr>
-<tr><td>Machine learning</td><td>scikit-learn 1.8</td><td>Random forest / extra trees and Platt calibration (legacy probability page, §14)</td></tr>
+<tr><td>Machine learning</td><td>scikit-learn 1.8</td><td>Random forest / extra trees and Platt calibration (legacy probability page, §15)</td></tr>
+<tr><td>Graphs</td><td>NetworkX 3.7</td><td>Community detection, centrality, layouts, topological layering, longest paths, cycles (§14)</td></tr>
 <tr><td>Calendar</td><td>holidays 0.103</td><td>US federal holiday rules filtered to the company's observed holidays</td></tr>
 <tr><td>Jira client</td><td>jira 3.10</td><td>Enhanced search with <span class="mono">nextPageToken</span> pagination; field updates; comments</td></tr>
 <tr><td>Standard library</td><td><span class="mono">re</span>, <span class="mono">heapq</span>, <span class="mono">collections.Counter</span>, <span class="mono">json</span></td><td>Text rules, priority queue for the simulation, n-gram counts, audit log</td></tr>
@@ -263,6 +286,10 @@ flowchart TB
   SZ[estimated_size_distribution_report]
   JD[jira_dates]
   JA[jira_assign]
+  JF[jira_forecast]
+  CH[change_history<br/>date changes · episodes]
+  VAL[validating_report]
+  KG[knowledge_graph<br/>dependency_graph]
   IPR --> ES & BR & FR & SLA & WOM & SZ
   ATC --> BR & ASG
   ES --> FR & SLA & SZ & ASG
@@ -270,8 +297,10 @@ flowchart TB
   DOM --> ASG
   FR --> CAP
   WOM --> ES
-  JD --> JA & SLA
+  JD --> JA & SLA & JF
   JA --> ASG
+  CH --> SLA & VAL & JF
+  DOM & ASG --> KG
 </pre>
 </figure>
 <p class="caption"><b>Figure 2.</b> Report-module dependency graph (arrows point from a module to the modules that import it). <span class="mono">in_progress_report</span> is the shared core.</p>
@@ -286,8 +315,8 @@ and pages through Jira Cloud's enhanced search endpoint using the opaque <span c
 cursor:</p>
 <pre><code>(project = "DEVOPS" OR project = "CAR") AND created >= -730d ORDER BY assignee ASC, updated DESC</code></pre>
 <p>Only the fields the reports need are requested (system fields plus six custom fields), including
-<span class="mono">comment</span> and <span class="mono">statuscategorychangedate</span>. A full fetch returns about
-6,100 issues in roughly a minute. The search response embeds at most 20 comments per issue; about 1% of issues have
+<span class="mono">comment</span>, <span class="mono">issuelinks</span> and <span class="mono">statuscategorychangedate</span>.
+A full fetch returns about 6,200 issues in roughly a minute, then the change history adds 25–40 seconds (§3.4). The search response embeds at most 20 comments per issue; about 1% of issues have
 more, a known truncation.</p>
 
 <figure>
@@ -321,9 +350,12 @@ flowchart TB
 <tr><td>reporter_name</td><td>reporter</td><td>First-reply time and “requester chasing” (who is the requester)</td></tr>
 <tr><td>comments</td><td>comment (human only)</td><td>Coverage, themes, phrases, domains, silence; list of {author, created, body}</td></tr>
 <tr><td>comment_total, bot_comment_count</td><td>comment</td><td>Data-quality counters (bots ≈ 30% of all comments)</td></tr>
+<tr><td>dashboard_comments</td><td>comment (posted by the dashboard)</td><td>Kept apart from human comments (§3.6); read back for the forecast track record (§8.3)</td></tr>
+<tr><td>links</td><td>issuelinks</td><td>Dependency graph (§14.5): link type, wording, direction, the other ticket's key and status</td></tr>
+<tr><td>author_id, reporter_account_id</td><td>comment author, reporter</td><td>Resolve @mentions to people (§14.3)</td></tr>
 </table>
-<p>At the time of writing the dataset held 6,096 issues, of which 3,764 are PE tickets in SLA scope (100 open),
-with 11,687 human comments retained and 4,912 automation comments dropped. The full data dictionary is in
+<p>At the time of writing the dataset held 6,244 issues, of which 3,879 are PE tickets in SLA scope (142 open),
+with 12,078 human comments retained and 4,987 automation comments dropped. The full data dictionary is in
 Appendix B.</p>
 
 <h3>3.3 The facts table</h3>
@@ -334,6 +366,37 @@ On Hold, Release), <span class="mono">created_day</span>, <span class="mono">clo
 <span class="mono">start_day</span>, <span class="mono">target_end_day</span>, <span class="mono">sla_bd</span>,
 <span class="mono">sla_due</span>, <span class="mono">age_days</span> and <span class="mono">lead</span>. Computing
 these once is what keeps the Executive Summary, SLA, Trend and Assignment pages consistent with each other.</p>
+
+<h3>3.4 Change history</h3>
+<p>The issue record only holds each field's <i>current</i> value. Every fetch therefore also loads the history of three
+fields — status, Target start and Target end — for DevOps tickets updated in the last 400 days, through Jira Cloud's
+bulk changelog endpoint (<span class="mono">POST /rest/api/3/changelog/bulkfetch</span>, up to 1,000 issues per request,
+filtered to the requested field ids) [25]. On the current data that is 17,128 changes in about 25 seconds. Target dates
+are read from the raw ISO values (<span class="mono">2026-09-11</span>), never the display strings
+(<span class="mono">11/Sep/26</span>), which are ambiguous to parse. The loader never raises: if the call fails it returns
+an empty frame and the history-based views say they are hidden. <span class="mono">reports/change_history.py</span>
+derives two shared views from it:</p>
+<ul>
+  <li><b>Date changes.</b> Each Target date change is <i>set</i> (empty → date), <i>moved</i> (date → another date) or
+  <i>cleared</i>; a move is <i>after the date passed</i> when it is made after the old date. Values entered on the create
+  screen have no history and are never counted.</li>
+  <li><b>Status episodes.</b> Each stay in a status, from entering it to the next status change (open when the ticket is
+  still there), with where it came from, where it went and who moved it (§13.1).</li>
+</ul>
+
+<h3>3.5 Issue links</h3>
+<p><span class="mono">issuelinks</span> is flattened into a <span class="mono">links</span> list per issue: the link
+type (Blocks, Dependent, Relates, Cloners …), the phrase from this issue's side (“blocks”, “is blocked by”), the
+direction, and the other ticket's key, status and status category. 2,010 of 4,368 PE tickets carry at least one link,
+mostly <i>relates to</i> and <i>clones</i>; only Blocks and Dependent express a dependency (§14.5).</p>
+
+<h3>3.6 Comments the dashboard posts</h3>
+<p>Writes to Jira (§16) add comments with a person's token, so Jira reports them as human. The loader recognises them by
+their exact opening line (“Target dates updated from the PE dashboard”, “Assigned to … from the PE dashboard”,
+“Backlog forecast from the PE dashboard”, “Undo of PE dashboard batch”) or the forecast tag, and keeps them in a
+separate <span class="mono">dashboard_comments</span> column, out of comment coverage, first-reply time, themes and
+phrases. Matching opening lines rather than the words “PE dashboard” keeps a person writing “see the PE dashboard” a
+human comment.</p>
 </section>
 
 <!-- ═══════════════════════════ 4 ═══════════════════════════ -->
@@ -367,7 +430,7 @@ nine hours per day).</p>
 
 <!-- ═══════════════════════════ 5 ═══════════════════════════ -->
 <section>
-<h2>5. The SLA model and breach metrics</h2>
+<h2>5. The SLA model, breach metrics and data integrity</h2>
 <h3>5.1 The SLA table</h3>
 <p>The SLA is a budget of business days indexed by priority \(p\) and estimated size \(z\); unsized tickets use the
 Medium column (shown as “Medium* (assumed)”).</p>
@@ -397,11 +460,40 @@ finished. \(r_{\text{done}}\) (“completed late”) is the conventional complet
 <p class="caption"><b>Figure 4.</b> Monthly SLA breach rate under both definitions, last 11 full months.</p>
 <h3>5.3 Re-planning guard</h3>
 <p>Because the clock starts at Target start, moving Target start later also moves the due date. When dates are
-updated through the dashboard (§15), the original Target start is recorded; the SLA page re-judges re-planned tickets
+updated through the dashboard (§16), the original Target start is recorded; the SLA page re-judges re-planned tickets
 on their <i>original</i> start by default, so re-planning cannot lower the breach rate.</p>
 <h3>5.4 Risk without a forecast</h3>
 <p>Stages with no per-ticket forecast (Validating, Blocked &amp; On Hold, Release) are classified from the SLA used:
 Breached if today is past the due date, At Risk once 80% of the SLA has been used, otherwise On Track.</p>
+
+<h3>5.5 SLA clock set after the fact</h3>
+<p>Because the clock starts at Target start, an SLA result is only a measurement if Target start was set before the
+work finished. With the change history (§3.4) a completed ticket \(i\) is flagged when its Target start was set or moved
+on or after the day it moved to Done:</p>
+$$\text{after-fact}_i=\mathbb 1\bigl[\exists\,c\in\text{changes}_i:\ c.\text{field}=\text{Target start},\ c.\text{kind}\in\{\text{set},\text{moved}\},\ \text{day}(c)\ge \text{done}_i\bigr]$$
+<p>In the last 30 days <b>102 of 293 completed tickets (35%) were flagged, and all 102 are recorded as met</b> —
+unsurprisingly, since a clock started at or near the finish cannot run out. The SLA page flags them (a warning, a column
+in Breached Tickets, its own list) and a toggle leaves them out of both breach rates:</p>
+<figure><img src="figures/f_sla_clock.svg" alt="Breach rates with and without SLA clocks set after the fact"></figure>
+<p class="caption"><b>Figure 5.</b> Breach rates over the last 30 days with all completed tickets and without those whose SLA clock was set after the fact. Today both stay under the 10% goal (4.2% → 6.4% and 4.4% → 6.8%); on 2026-10-09 the same check moved them from 7.5% to 12.1% and from 6.6% to 10.0%, across the goal.</p>
+<p>The share has grown from 5–6% of delivered tickets (Nov–Dec 2025) to 30–32% (Jul–Sep 2026), mostly set on the day
+the ticket was closed — consistent with a Done transition that asks for the field. The fix is a process one: require
+Target start before a ticket can move to In Progress.</p>
+
+<h3>5.6 Target date changes</h3>
+<p>For tickets delivered in the last 180 days (1,390 tickets) the Trend page reports moves per ticket (0.97), the share
+never moved (63%), the share of moves pushing the date later (90%; median 3 business days) and the share of moves made
+<i>after</i> the old date had already passed (65%) — re-planning after the fact rather than ahead of time.</p>
+<figure><img src="figures/f_dates.svg" alt="Target date moves and SLA clocks set after the fact by month"></figure>
+<p class="caption"><b>Figure 6.</b> Monthly Target date moves per delivered ticket, and the share of delivered tickets whose SLA clock was set after the fact.</p>
+<table style="width:80%; margin:auto">
+<tr><th>Target date moves</th><th class="num">Delivered</th><th class="num">SLA met</th><th class="num">Target end met</th></tr>
+<tr><td>0</td><td class="num">741</td><td class="num">97%</td><td class="num">67%</td></tr>
+<tr><td>1</td><td class="num">202</td><td class="num">91%</td><td class="num">59%</td></tr>
+<tr><td>2–3</td><td class="num">201</td><td class="num">92%</td><td class="num">59%</td></tr>
+<tr><td>4+</td><td class="num">108</td><td class="num">64%</td><td class="num">58%</td></tr>
+</table>
+<p class="caption"><b>Table.</b> Outcomes by number of Target date moves (last 180 days). An association, not a cause: late tickets also get re-planned more. Open tickets moved twice or more are listed on the Trend page as an early warning.</p>
 </section>
 
 <!-- ═══════════════════════════ 6 ═══════════════════════════ -->
@@ -426,15 +518,15 @@ flowchart TB
   Q & F --> O[Finish dates, confidence,<br/>risk vs SLA / Target end]
 </pre>
 </figure>
-<p class="caption"><b>Figure 5.</b> In Progress forecast pipeline (<span class="mono">reports/in_progress_report.py</span>).</p>
+<p class="caption"><b>Figure 7.</b> In Progress forecast pipeline (<span class="mono">reports/in_progress_report.py</span>).</p>
 
 <h3>6.1 History and weights</h3>
 <p>For each Done ticket \(i\) completed in the last 365 days with a Target start \(s_i\le e_i\), the execution
-time is \(d_i=\operatorname{bd}(s_i,e_i)\). Durations are strongly right-skewed (Figure 6), so the model works on
+time is \(d_i=\operatorname{bd}(s_i,e_i)\). Durations are strongly right-skewed (Figure 8), so the model works on
 \(y_i=\log(1+d_i)\). Each ticket gets an exponential recency weight with a 120-day half-life:</p>
 $$w_i = 2^{-a_i/120},\qquad a_i=\text{days since ticket } i \text{ finished}\tag{4}$$
 <figure><img src="figures/f_duration.svg" alt="Execution time by size"></figure>
-<p class="caption"><b>Figure 6.</b> Execution time by estimated size, 1,631 Done tickets in the history window (log scale). Sizes separate, but overlap heavily — one reason the model conditions on more than size.</p>
+<p class="caption"><b>Figure 8.</b> Execution time by estimated size, 1,631 Done tickets in the history window (log scale). Sizes separate, but overlap heavily — one reason the model conditions on more than size.</p>
 
 <h3>6.2 Hierarchical reference sets</h3>
 <p>For a ticket with priority \(p\) and size \(z\) the reference set \(R(p,z)\) is the first of
@@ -456,10 +548,10 @@ $$\alpha_a=\operatorname{clip}\!\left(\frac{\sum_{i\in a}w_i r_i}{\sum_{i\in a}w
 \beta_{a,p}=\operatorname{clip}\!\left(\alpha_a+\frac{\sum_{i\in a,p}w_i\,(r_i-\alpha_a)}{\sum_{i\in a,p}w_i+k},\ \pm1.5\right)\tag{6}$$
 <p>This is the posterior mean under a normal prior centred at zero with prior weight \(k\) — the James–Stein /
 empirical-Bayes idea [7] in its simplest form. With few tickets the effect is pulled to the team; one slow ticket
-cannot label someone as slow (Figure 7, right). The clip at \(\pm1.5\) bounds any effect to roughly a 4.5× speed
+cannot label someone as slow (Figure 9, right). The clip at \(\pm1.5\) bounds any effect to roughly a 4.5× speed
 ratio. Because the effect is additive on the log scale it acts multiplicatively on durations.</p>
 <figure><img src="figures/f_weights.svg" alt="Recency weight and shrinkage"></figure>
-<p class="caption"><b>Figure 7.</b> Left: recency weight (Eq. 4). Right: share of a person's raw effect retained as a function of their effective sample size, \(\sum w/(\sum w+5)\).</p>
+<p class="caption"><b>Figure 9.</b> Left: recency weight (Eq. 4). Right: share of a person's raw effect retained as a function of their effective sample size, \(\sum w/(\sum w+5)\).</p>
 
 <h3>6.5 Current load: a dampened Little's-law factor</h3>
 <p>Little's law, \(L=\lambda W\) [2], implies that at a fixed completion rate, cycle time grows with work in
@@ -479,7 +571,7 @@ $$\text{P50},\ \text{P85}=\hat Q_{0.50},\ \hat Q_{0.85}\Bigl(\{D_j-e : D_j&gt;e\
 long, the ticket is beyond history and the forecast leans on the time already spent: P50 \(=\max(1,\,0.5e)\),
 P85 \(=\max(2,\,2e)\) — multiples chosen by back-test so that about 50% and 85% of such tickets finish by them.</p>
 <figure><img src="figures/f_conditional.svg" alt="Conditional remaining time"></figure>
-<p class="caption"><b>Figure 8.</b> Weighted remaining-time CDFs for one reference cell, before start and after 5 and 12 business days. Dots mark P50 and P85. As time passes the remaining-time distribution shifts and widens rather than collapsing to zero.</p>
+<p class="caption"><b>Figure 10.</b> Weighted remaining-time CDFs for one reference cell, before start and after 5 and 12 business days. Dots mark P50 and P85. As time passes the remaining-time distribution shifts and widens rather than collapsing to zero.</p>
 
 <h3>6.7 Confidence, sampling and risk</h3>
 <p><b>Confidence</b> uses Kish's effective sample size [15] of the conditioning sample, \(n_{\text{eff}}=(\sum w)^2/\sum w^2\):
@@ -521,7 +613,7 @@ ticket's slack runs out; \(\bar p\) is the mean effort of the remaining tickets 
 <tr><td>Tiers</td><td>Urgent/Critical first (earliest due first); then ATC; On Hold, then Blocked appended; Validating excluded</td></tr>
 </table>
 <figure><img src="figures/f_atc.svg" alt="ATC worked example"></figure>
-<p class="caption"><b>Figure 9.</b> The six-ticket worked example from the README. Bars are scheduled work, ticks are due dates, red bars finish late. The workload is infeasible (10 days of work due within 7), and ATC limits the damage to one low-priority ticket, versus a Medium ticket due in two days waiting behind a 10-day ticket under the naive sort.</p>
+<p class="caption"><b>Figure 11.</b> The six-ticket worked example from the README. Bars are scheduled work, ticks are due dates, red bars finish late. The workload is infeasible (10 days of work due within 7), and ATC limits the damage to one low-priority ticket, versus a Medium ticket due in two days waiting behind a 10-day ticket under the naive sort.</p>
 <p>Complexity is \(O(n^2)\) per person, negligible at the queue lengths seen (typically under 20). The same function
 orders each backlog queue in §8 and the global assignment queue in §10.</p>
 </section>
@@ -554,7 +646,7 @@ Projected Start = median_s start[j,·];  Finish P50/P85 = quantiles of finish[j,
 Free by = quantiles over s of max(max_j finish[j,s], in-progress clear time)</code></pre>
 <p class="caption" style="margin-top:-4pt"><b>Algorithm 1.</b> <span class="mono">backlog_report._simulate_queue</span>; \(O(S\cdot n\log m)\) per assignee.</p>
 <figure><img src="figures/f_queue.svg" alt="Queue simulation"></figure>
-<p class="caption"><b>Figure 10.</b> Illustrative queue (two slots, two tickets in progress, five in the backlog) simulated with the real duration model. Uncertainty compounds down the queue: later tickets have wider start-to-P85 spans.</p>
+<p class="caption"><b>Figure 12.</b> Illustrative queue (two slots, two tickets in progress, five in the backlog) simulated with the real duration model. Uncertainty compounds down the queue: later tickets have wider start-to-P85 spans.</p>
 <h3>8.2 Start-date calibration</h3>
 <p>The start forecast was back-tested by rebuilding the backlog as it was at five past dates (Jul 20 – Sep 14, 2026)
 from Jira change history — statuses, assignees and Target starts as of each date — and comparing each Projected Start
@@ -567,13 +659,26 @@ with when the ticket actually left the backlog (266 predictions, 157 tickets).</
 </table>
 <p class="caption"><b>Table 2.</b> Start-date back-test.</p>
 <figure><img src="figures/f_start_bt.svg" alt="Start back-test errors"></figure>
-<p class="caption"><b>Figure 11.</b> Distribution of start-date errors from the same back-test (predictions whose ticket started; clipped at ±40). Projected Start is centred on zero; Jira's Target start is systematically early.</p>
+<p class="caption"><b>Figure 13.</b> Distribution of start-date errors from the same back-test (predictions whose ticket started; clipped at ±40). Projected Start is centred on zero; Jira's Target start is systematically early.</p>
 <p>The simulated P85 was too optimistic (65% coverage) because the simulation does not capture re-prioritisation,
 interruptions and new urgent arrivals. It was replaced by an empirically calibrated <b>Safe Start</b>:
 Projected Start + 16 business days for queue positions 1–3 and + 9 for position 4+, the margins that made 85% of
 tickets start by them (84% out of sample). Start Confidence (High / Medium / Low) is reported by queue position.
 This is a deliberate pattern in the system: <i>when a model's quantile is miscalibrated, calibrate it on outcomes
 rather than trust the model's internal uncertainty.</i></p>
+<h3>8.3 Closing the loop: posted forecasts and their track record</h3>
+<p>Back-tests reconstruct the past; a forecast ledger records it. A Backlog button posts each selected ticket's forecast
+to Jira as a comment — no field changes — ending in one machine-readable, versioned line:</p>
+<pre><code>[pe-forecast v1 as_of=2026-10-12 start_p50=2026-10-16 safe_start=2026-11-09 finish_p50=2026-10-20
+ finish_p85=2026-10-23 sla_due=2026-11-27 target_start=2026-10-15 target_end=2026-10-27 queue=1 confidence=High ...]</code></pre>
+<p>The tag records the Jira Target dates at posting time, so forecast, plan and outcome can be compared. Unchanged
+forecasts are skipped, batches go up to 100 tickets (add-only, unlike field writes), and a “select all new or changed”
+option is meant for a weekly post — posting only hand-picked tickets would bias the record. The <b>Forecast Track
+Record</b> parses every tag from the fetched comments and compares it with reality: the actual start is the first move
+out of To Do / Tech Discovery Required / Triage after posting (change history), the actual finish the Done date. It
+reports the share started by the likely start (aim ≈ 50%), by the safe start (≈ 85%) and by the Jira Target start,
+finished by the safe finish (≈ 85%), typical misses, and the same by start confidence. Comments live with the tickets,
+so the record survives on any machine and needs no separate store.</p>
 </section>
 
 <!-- ═══════════════════════════ 9 ═══════════════════════════ -->
@@ -612,20 +717,20 @@ flowchart TB
   RG --> UI[Cards 4/8/12 w ·<br/>“by when?” calculator ·<br/>accuracy chart]
 </pre>
 </figure>
-<p class="caption"><b>Figure 12.</b> Forecast and calibration loop (<span class="mono">reports/forecast_report.py</span>).</p>
+<p class="caption"><b>Figure 14.</b> Forecast and calibration loop (<span class="mono">reports/forecast_report.py</span>).</p>
 <figure><img src="figures/f_forecast.svg" alt="Delivery forecast"></figure>
-<p class="caption"><b>Figure 13.</b> Weekly delivery with the 12-week forecast and calibrated range. Current cumulative forecasts: 4 weeks ≈ 324 (257–512), 8 weeks ≈ 661 (555–1,183), 12 weeks ≈ 1,004 (826–1,942).</p>
+<p class="caption"><b>Figure 15.</b> Weekly delivery with the 12-week forecast and calibrated range. Current cumulative forecasts: 4 weeks ≈ 315 (250–497), 8 weeks ≈ 637 (516–1,140), 12 weeks ≈ 962 (871–1,861).</p>
 <h3>9.4 Measured accuracy</h3>
 <p>The accuracy function scores each of the last 40 forecasts with a range built <i>only</i> from errors whose
 outcome was already known at that origin (no look-ahead):</p>
 <table style="width:75%; margin:auto">
 <tr><th>Horizon</th><th class="num">Actual inside the range</th><th class="num">Median |error| of central forecast</th></tr>
-<tr><td>4 weeks</td><td class="num">82%</td><td class="num">22%</td></tr>
+<tr><td>4 weeks</td><td class="num">80%</td><td class="num">22%</td></tr>
 <tr><td>8 weeks</td><td class="num">68%</td><td class="num">23%</td></tr>
-<tr><td>12 weeks</td><td class="num">60%</td><td class="num">24%</td></tr>
+<tr><td>12 weeks</td><td class="num">62%</td><td class="num">27%</td></tr>
 </table>
 <figure><img src="figures/f_backtest.svg" alt="Back-test coverage"></figure>
-<p class="caption"><b>Figure 14.</b> Out-of-sample coverage and error by horizon. Overlapping errors on neighbouring origins are autocorrelated, so a nominal 80% band covers about 7 in 10 outcomes at longer horizons; misses were mostly <i>above</i> the range, during a period of fast growth in 2026.</p>
+<p class="caption"><b>Figure 16.</b> Out-of-sample coverage and error by horizon. Overlapping errors on neighbouring origins are autocorrelated, so a nominal 80% band covers about 7 in 10 outcomes at longer horizons; misses were mostly <i>above</i> the range, during a period of fast growth in 2026.</p>
 <p><b>Commitment calculator.</b> For a project of \(N\) tickets using share \(\rho\) of capacity, the likely completion
 week is \(\min\{h:\rho\,\hat C_h\ge N\}\) and the safe week is \(\min\{h:\rho\,L_h\ge N\}\), where \(L_h\) is the low
 end of the range.</p>
@@ -643,13 +748,14 @@ accurate and more honest. The Capacity page now uses the same engine.</p>
 and a cross-training “stretch” candidate, each with a reason. It reuses the domain taxonomy, the duration model and
 the queue simulation; it uses Jira data only.</p>
 <h3>10.1 Domain tagging</h3>
-<p>A taxonomy of 33 skill domains (e.g. GKE, BigQuery/Data, IAM/RBAC, Terraform, GitLab), each a list of
-case-insensitive regular expressions, is shared verbatim with the team's Intake dashboard; a unit test parses both
-sources and fails if they drift. A ticket's text is its summary plus all human comments; it is tagged with every
+<p>A taxonomy of 35 skill domains (e.g. GKE, BigQuery/Data, IAM/RBAC, Terraform, GitLab; CloudFront and Upwind added
+in v1.1) in four display groups (AWS, GCP, Security, Other), each a list of case-insensitive regular expressions, is
+shared verbatim with the team's Intake dashboard and, by name, with its GitLab merge-request tagging; a unit test parses
+both copies and fails if they drift, including a group missing from the display order. A ticket's text is its summary plus all human comments; it is tagged with every
 matching domain, and its <i>primary</i> domain is the first match in a priority list that ranks niche domains above
-broad ones. Adding comments raised coverage from 67% (titles alone) to 80% of PE tickets.</p>
+broad ones. Adding comments raised coverage from 68% (titles alone) to 80% of PE tickets.</p>
 <figure><img src="figures/f_domains.svg" alt="Domain distribution"></figure>
-<p class="caption"><b>Figure 15.</b> Primary domain of PE tickets (top 14).</p>
+<p class="caption"><b>Figure 17.</b> Primary domain of PE tickets (top 14).</p>
 <h3>10.2 Expertise</h3>
 <p>Expertise of person \(a\) in domain \(d\) is a recency-weighted count of their Done (weight 1) and active
 (weight 0.5) tickets tagged with \(d\), with a 120-day half-life, normalised within the domain:</p>
@@ -666,10 +772,12 @@ $$S_a=0.6\,\tilde e_a+0.4\,v_a-0.15\cdot\mathbb 1\bigl[\text{WIP}^{\text{now}}_a
 <p>where \(g_a\) is the number of tickets already given to \(a\) earlier in the same plan. Candidates are ranked
 lexicographically: SLA-feasible first, then by \(S_a\). The top candidate is suggested, the next is the backup, and
 the stretch candidate is the earliest-finishing remaining person with some but limited experience
-(\(0&lt;\tilde e_a\le0.5\)). Candidates are people with at least five PE tickets completed in the last 90 days, minus
-people who have left the team.</p>
+(\(0&lt;\tilde e_a\le0.5\)). Candidates are people with at least five PE tickets completed in the last 90 days,
+plus a short <span class="mono">NEW_MEMBERS</span> list of new hires — ranked on availability and SLA fit (their
+expertise is zero) until they have that track record, their suggestions marked “new team member” — minus people who
+have left the team.</p>
 <figure><img src="figures/f_score.svg" alt="Score decomposition"></figure>
-<p class="caption"><b>Figure 16.</b> Illustrative scoring of one ticket. The top expert (A) is overloaded and would miss the SLA, so the SLA-feasible candidate with the best score (B) is suggested.</p>
+<p class="caption"><b>Figure 18.</b> Illustrative scoring of one ticket. The top expert (A) is overloaded and would miss the SLA, so the SLA-feasible candidate with the best score (B) is suggested.</p>
 <h3>10.5 Greedy sequential planning</h3>
 <figure>
 <pre class="mermaid">
@@ -685,13 +793,13 @@ flowchart TB
   N -- none left --> OUT[Plan table · Compare Options ·<br/>Who Knows What · concentration]
 </pre>
 </figure>
-<p class="caption"><b>Figure 17.</b> The planning loop (<span class="mono">reports/assignment_report.py</span>).</p>
+<p class="caption"><b>Figure 19.</b> The planning loop (<span class="mono">reports/assignment_report.py</span>).</p>
 <p>Tickets are planned in ATC order and each suggestion is committed to the person's simulated queue before the next
 ticket is scored. Later tickets therefore see the load created by earlier suggestions, and the balance penalty spreads
 work. This is a greedy heuristic for what is formally a generalised-assignment problem with stochastic processing
 times; it is chosen for explainability (every choice has a local reason) and speed. Cost is
 \(O(T\cdot P\cdot S\cdot Q\log m)\) for \(T\) tickets, \(P\) candidates, \(S\) simulations and queue length \(Q\);
-in practice about 18 tickets × 13 people renders in a few seconds.</p>
+in practice about a dozen tickets × 14 people renders in a few seconds.</p>
 <p><b>Reasons</b> are generated from the same quantities: “≈7 recent GKE tickets; likely start Oct 12, done by
 Oct 20”, with clauses appended when no one fits the SLA or the person is above their usual load. A
 <b>concentration</b> table reports, per domain, the top person's share of recent experience, highlighting
@@ -699,7 +807,7 @@ single-person dependencies for cross-training.</p>
 <div class="callout"><span class="t">Back-test finding</span>Over 671 historical tickets, the person who actually took
 a ticket was the top domain expert 26% of the time and in the top three 49% of the time. Work is not routed mainly
 by expertise today, so the recommender balances expertise against availability and the SLA rather than imitating
-past assignments. Whether following it improves SLA outcomes can only be measured prospectively (§18).</div>
+past assignments. Whether following it improves SLA outcomes can only be measured prospectively (§19).</div>
 </section>
 
 <!-- ═══════════════════════════ 11 ═══════════════════════════ -->
@@ -721,12 +829,13 @@ flowchart TB
   BG --> LF[Lift vs previous 3 months<br/>→ Phrase of the Month]
 </pre>
 </figure>
-<p class="caption"><b>Figure 18.</b> Comment-analysis pipeline (<span class="mono">reports/word_of_the_month_report.py</span>).</p>
+<p class="caption"><b>Figure 20.</b> Comment-analysis pipeline (<span class="mono">reports/word_of_the_month_report.py</span>).</p>
 <h3>11.1 Cleaning</h3>
 <p>Comments whose author account type is <span class="mono">app</span> (e.g. Automation for Jira) are dropped at
 load. Jira wiki markup is removed by six regular expressions: <span class="mono">{code}</span>/<span class="mono">{noformat}</span>/<span class="mono">{quote}</span>
 blocks, <span class="mono">[~accountid:…]</span> mentions, <span class="mono">[text|link]</span> links, bare URLs,
-<span class="mono">!image!</span> embeds and ticket keys.</p>
+<span class="mono">!image!</span> embeds and ticket keys. Comments the dashboard itself posted are already set
+aside by the loader (§3.6); on the current data that is 76 comments on 55 tickets.</p>
 <h3>11.2 Friction themes and their cost</h3>
 <p>Seven themes are defined as word-boundary regular expressions (e.g. Waiting / blocked:
 <span class="mono">\b(?:waiting (?:on|for)|blocked|blocker|dependenc(?:y|ies)|depends on|on hold)\b</span>). A ticket
@@ -739,7 +848,7 @@ falling back to the same priority and then all tickets when fewer than eight mat
 matching in miniature. Themes are ranked by total extra days; the top three <i>causes</i> (Chasing is a symptom and is
 never recommended) become recommendations, each paired with a process change.</p>
 <figure><img src="figures/f_themes.svg" alt="Friction themes"></figure>
-<p class="caption"><b>Figure 19.</b> Total extra business days by theme for tickets completed Aug–Oct 2026.</p>
+<p class="caption"><b>Figure 21.</b> Total extra business days by theme for tickets completed Aug–Oct 2026.</p>
 <div class="callout warn"><span class="t">Association, not causation</span>Long tickets accumulate more comments and
 therefore more chances to match a theme. The matched median controls for priority and size, not for duration-driven
 exposure, so the page labels the result “associated with delay”.</div>
@@ -749,7 +858,7 @@ exposure, so the page labels the result “associated with delay”.</div>
   (median currently ≈ 15 business hours).</li>
   <li><b>Back-and-forth</b>: the number of speaker changes in the chronologically ordered comment list,
   \(\sum_k\mathbb 1[\text{author}_k\ne\text{author}_{k-1}]\).</li>
-  <li><b>Comment coverage</b>: share of completed tickets with at least one human comment (target 80%; currently 69%).</li>
+  <li><b>Comment coverage</b>: share of completed tickets with at least one human comment (target 80%; currently 72%).</li>
 </ul>
 <h3>11.4 Phrases and the Phrase of the Month</h3>
 <p>Tokens matching <span class="mono">[a-z][a-z'\-]+</span> longer than two characters are kept after a stop-word
@@ -788,7 +897,7 @@ is sorted by risk severity, then priority, then days past SLA, then age, and tru
 mean of their median work times (each with ≥ 10 tickets, otherwise a default), \(u_k=\operatorname{round}\sqrt{m_k\,m_{k+1}}\),
 enforced to be increasing. The geometric mean is the natural midpoint on the log scale where durations live.</p>
 <figure><img src="figures/f_sizing.svg" alt="Sizing guide"></figure>
-<p class="caption"><b>Figure 20.</b> Completed work (last 180 days) against the derived guide; 55% of sized tickets landed in their size's range.</p>
+<p class="caption"><b>Figure 22.</b> Completed work (last 180 days) against the derived guide; 49% of sized tickets landed in their size's range.</p>
 <table>
 <tr><th style="width:30%">Recommendation</th><th>Trigger</th></tr>
 <tr><td>Size at intake</td><td>New-ticket size coverage below 90%; names the least-sized groups with ≥ 5 tickets</td></tr>
@@ -801,7 +910,7 @@ enforced to be increasing. The geometric mean is the natural midpoint on the log
 
 <!-- ═══════════════════════════ 13 ═══════════════════════════ -->
 <section>
-<h2>13. Descriptive flow metrics</h2>
+<h2>13. Descriptive flow metrics and the Validating stage</h2>
 <p>Several pages are descriptive rather than predictive; their value comes from correct definitions.</p>
 <table>
 <tr><th style="width:24%">Metric</th><th>Definition (business days unless stated)</th></tr>
@@ -816,12 +925,103 @@ enforced to be increasing. The geometric mean is the natural midpoint on the log
 <tr><td>Silence</td><td>Business days since the last human comment (or since creation)</td></tr>
 </table>
 <figure><img src="figures/f_lead.svg" alt="Lead time distribution"></figure>
-<p class="caption"><b>Figure 21.</b> Lead time of 871 tickets completed in the last 90 days: half within 2 business days, 85% within 14, 95% within 33. The long right tail is why the dashboard quotes percentiles, never means.</p>
+<p class="caption"><b>Figure 23.</b> Lead time of 897 tickets completed in the last 90 days: half within 2 business days, 85% within 13, 95% within 31. The long right tail is why the dashboard quotes percentiles, never means.</p>
+<h3>13.1 The Validating stage</h3>
+<p>Validating holds finished work waiting for the requester to confirm it. The page is built on status episodes (§3.4):
+waiting is measured since the ticket <i>entered</i> Validating, not since it was created. Over the last 90 days 303
+validations ended: median 1 business day, P85 3, 47% the same day. <b>Rework</b> is an episode that leaves for In
+Progress, To Do, Triage or Tech Discovery instead of being closed: 8.3% (25 tickets). Who closes: the requester 45% of
+the time, the assignee 69% (overlapping when they are the same person).</p>
+<figure><img src="figures/f_validating.svg" alt="Validation time and rework by month"></figure>
+<p class="caption"><b>Figure 24.</b> Validation time (median and P85) and the share sent back, by the month the validation ended. P85 fell from 6–9 business days in late 2025 to 2–3 since mid-2026.</p>
+<p>The SLA clock keeps running during Validating. Two <b>policy what-ifs</b> are computed, never applied: pausing the
+clock during Validating (only validation time inside the clock window counts) would move the completed-late rate over
+180 days from 7.5% to 6.4% — 14 of 94 late tickets were late only because of the wait — and closing after \(N\)
+business days without a reply would have affected the validations longer than \(N\) (5, 10 or 15). A nudge list shows
+tickets waiting 5+ business days with their SLA time left and latest comment.</p>
 </section>
 
 <!-- ═══════════════════════════ 14 ═══════════════════════════ -->
 <section>
-<h2>14. On-time probability classifier (legacy)</h2>
+<h2>14. Graph analytics (Knowledge Graph)</h2>
+<p>Several questions are about relationships rather than tickets: who depends on whom, which groups talk, where
+knowledge is concentrated, and what waits on what. The Knowledge Graph page models four networks with NetworkX [27]
+and draws them with Plotly. Each graph is paired with a metric and a list, so it has a takeaway; all layouts are
+deterministic (fixed seeds). Figures in this paper replace names with codes: <b>E</b> for people assigned PE tickets,
+<b>R</b> for everyone else; the same person keeps the same code across figures.</p>
+
+<h3>14.1 Who asks whom</h3>
+<p>A weighted bipartite graph links each requester (Jira reporter) to the engineers who worked their tickets, weight
+\(w_{r,e}\) = tickets, over PE tickets created in the window (12 months by default). Tickets an engineer created for
+themselves are counted but not drawn: <b>38%</b> (845 of 2,205 assigned). A requester \(r\) with
+\(n_r=\sum_e w_{r,e}\ge10\) tickets <i>depends on one engineer</i> when</p>
+$$\max_e\,\frac{w_{r,e}}{n_r}\ \ge\ 0.6\tag{18}$$
+<p>— six requesters today, hidden key-person dependencies that a table by person does not show. The drawing puts
+requesters and engineers in two columns ordered by three alternating barycentre passes,
+\(y(r)=\sum_e w_{r,e}\,y(e)/\sum_e w_{r,e}\), the crossing-reduction step of layered graph drawing [33].
+A Sankey view shows volume from the 15 busiest requesters.</p>
+<figure><img src="figures/f_kg_ask.svg" alt="Requester to engineer network"></figure>
+<p class="caption"><b>Figure 25.</b> Who asks whom for the 14 busiest requesters (links with 2+ tickets). Requesters coded E are engineers raising work for each other.</p>
+
+<h3>14.2 Who talks to whom: signals</h3>
+<p>An undirected weighted graph links people through human comments (§3.6 removes dashboard-posted ones), with two
+signals: a <b>reply</b> when the author changes between consecutive comments on a ticket, and a <b>mention</b> when a
+comment's author @mentions someone. Mentions are stored as Jira account ids
+(<span class="mono">[~accountid:…]</span>); 44% of human comments contain one and 99.8% of 6,440 mentions resolve to a
+name through comment authors, assignees and reporters. Pair strength is replies, mentions or their sum; adding mentions
+brings in 19 people and 213 pairs that replies alone miss.</p>
+
+<h3>14.3 Who talks to whom: groups, bridges and hubs</h3>
+<p><b>Groups</b> are Louvain communities [29] (seed 7), which maximise Newman's modularity [28]</p>
+$$Q=\frac{1}{2m}\sum_{ij}\Bigl[A_{ij}-\frac{k_ik_j}{2m}\Bigr]\delta(c_i,c_j)\tag{19}$$
+<p>where \(A\) is the weighted adjacency matrix, \(k_i\) node strength and \(m\) total weight. \(Q\) near 0 means
+groups talk across each other a lot; above about 0.5, silos. <b>Bridges</b> are ranked by betweenness centrality
+[30, 31], the share of shortest paths through a person:</p>
+$$C_B(v)=\sum_{s\ne v\ne t}\frac{\sigma_{st}(v)}{\sigma_{st}}\tag{20}$$
+<p>The drawing places each community as its own cluster — clusters on a circle, people within each by Kamada–Kawai [32]
+with edge length \(1/\sqrt{w}\) — and labels the busiest three per group. Over 12 months: 109 people, 615 pairs, 3
+groups, \(Q=0.16\), “well mixed”. <b>Leave out people</b> removes up to ten people <i>before</i> anything is computed:
+without the single busiest connector, 104 people remain in <b>5 groups with \(Q=0.32\)</b>, and the strongest pair
+falls from 357 to 77. The team looks mixed largely because one person links everyone — useful for cover planning and
+for building direct links between groups.</p>
+<figure><img src="figures/f_kg_talk_all.svg" alt="Conversation groups"></figure>
+<figure><img src="figures/f_kg_talk_nohub.svg" alt="Conversation groups without the busiest connector"></figure>
+<p class="caption"><b>Figure 26.</b> Conversation groups (replies + mentions, pairs with 3+), top: everyone; bottom: without the busiest connector. Circles are people assigned PE tickets, diamonds everyone else.</p>
+<p>A <b>Strongest</b> view keeps only the top \(N\) pairs (1–10), overall or for one person, with a table of strength,
+replies, mentions and shared tickets.</p>
+
+<h3>14.4 Skills map</h3>
+<p>A bipartite graph links engineers to the domains of their tickets (§10.1), weight = tickets. A domain <i>rests on one
+person</i> when at most one person has 3+ tickets in it: <b>ECS and Looker</b> today, and ECS's main person has left PE.
+Domain pairs that go together are ranked by lift [34]</p>
+$$\operatorname{lift}(a,b)=\frac{P(a,b)}{P(a)\,P(b)}=\frac{n_{ab}\,N}{n_a\,n_b}\tag{21}$$
+<p>with \(n_{ab}\ge5\): Airflow + Composer (27.6×, 22 shared tickets), ECS + EKS (12.4×), MSK + OpenSearch (10.4×) —
+natural cross-training pairs. The drawing puts domains evenly on a ring, grouped by AWS, GCP, Security and Other, and
+each engineer at 0.82 × the weighted centre of their domains, so generalists sit in the middle and specialists near
+their domains.</p>
+<figure><img src="figures/f_kg_skills.svg" alt="Skills map"></figure>
+<p class="caption"><b>Figure 27.</b> Skills map (links with 3+ tickets). A red outline marks a domain held by one person.</p>
+
+<h3>14.5 Dependencies</h3>
+<p>A directed graph, blocker → blocked, is built from issue links (§3.5) of type <b>Blocks</b> (“blocks” / “is blocked
+by”) and <b>Dependent</b> (“depends on”); other link types are ignored and Features/Initiatives left out. Blockers can be
+in any project. For open PE work the tab reports: tickets waiting on open work (13), <b>can likely move</b> — every
+blocker already done, so the link may be stale (8) — waiting on other teams (0), other teams waiting on PE (1), top
+blockers by \(|\text{descendants}|\) in the open subgraph, circular links found with Johnson's algorithm [36] (0), and
+the <b>longest chain</b> of open tickets waiting on each other — the critical path, computed as the longest path of the
+condensation DAG (4 tickets). The drawing layers each connected group by topological generations [35], blockers left.</p>
+<figure><img src="figures/f_kg_deps.svg" alt="Dependency graph"></figure>
+<p class="caption"><b>Figure 28.</b> Open work and what it waits on (ticket keys replaced by T1, T2 …). Hollow circles are done blockers; the orange square is another team's ticket waiting on PE.</p>
+
+<h3>14.6 Use and limits</h3>
+<p>Edges are proxies: a comment right after someone is usually, not always, a reply; conversations outside Jira are not
+seen; links exist only where someone added them. Centrality rewards hubs, which is why the leave-out analysis exists.
+The graphs describe how work is connected for balancing load, cover and cross-training — never to rate individuals.</p>
+</section>
+
+<!-- ═══════════════════════════ 14 ═══════════════════════════ -->
+<section>
+<h2>15. On-time probability classifier (legacy)</h2>
 <p>The “Probability of completion on time” page predates the forecasting work above and is the only supervised
 machine-learning model in the system. It estimates \(P(\text{done by Target end})\) for a ticket.</p>
 <ul>
@@ -844,10 +1044,12 @@ indicative; re-validation is listed as future work.</div>
 
 <!-- ═══════════════════════════ 15 ═══════════════════════════ -->
 <section>
-<h2>15. Writing back to Jira safely</h2>
-<p>Two features write to Jira: updating Target start/end from the backlog forecast, and assigning tickets from the
-assignment plan. Both use the same protocol (<span class="mono">reports/jira_dates.py</span>,
-<span class="mono">reports/jira_assign.py</span>).</p>
+<h2>16. Writing back to Jira safely</h2>
+<p>Three features write to Jira: updating Target start/end from the backlog forecast, assigning tickets from the
+assignment plan, and posting the backlog forecast as a comment (§8.3). All use the same protocol
+(<span class="mono">reports/jira_dates.py</span>, <span class="mono">jira_assign.py</span>,
+<span class="mono">jira_forecast.py</span>); forecast posts change no field, so they need no re-read or undo, and may
+batch up to 100 tickets.</p>
 <figure>
 <pre class="mermaid">
 sequenceDiagram
@@ -882,7 +1084,7 @@ sequenceDiagram
   end
 </pre>
 </figure>
-<p class="caption"><b>Figure 22.</b> Safe-mode write protocol.</p>
+<p class="caption"><b>Figure 29.</b> Safe-mode write protocol.</p>
 <table>
 <tr><th style="width:28%">Safeguard</th><th>Mechanism</th></tr>
 <tr><td>Off by default</td><td><span class="mono">JIRA_WRITE_ENABLED</span> read live from the project's git-ignored <span class="mono">.env</span> on every rerun; buttons rendered disabled with the reason as a tooltip</td></tr>
@@ -892,21 +1094,24 @@ sequenceDiagram
 <tr><td>Concurrency</td><td>Optimistic check: re-read immediately before writing and skip if the value differs from what was reviewed (compare-and-set semantics)</td></tr>
 <tr><td>Traceability</td><td>Jira comment on every change; append-only JSONL audit with old/new values, actor and batch id</td></tr>
 <tr><td>Reversibility</td><td>Compensating undo of the last batch, applied only where Jira still holds the written value</td></tr>
-<tr><td>Metric integrity</td><td>SLA re-judged on original Target starts from the audit log (§5.3)</td></tr>
+<tr><td>Metric integrity</td><td>SLA re-judged on original Target starts from the audit log (§5.3); the dashboard's own comments kept out of human-comment metrics (§3.6)</td></tr>
 </table>
 </section>
 
 <!-- ═══════════════════════════ 16 ═══════════════════════════ -->
 <section>
-<h2>16. Verification and testing</h2>
-<p>The suite contains over 400 automated tests across two virtual environments (the Streamlit app and the FastAPI
+<h2>17. Verification and testing</h2>
+<p>The suite contains over 450 automated tests across two virtual environments (the Streamlit app and the FastAPI
 “darkstar” service pin incompatible Starlette versions). Testing has three layers:</p>
 <ol>
   <li><b>Unit and property tests on synthetic data.</b> Fixtures build small Jira-shaped DataFrames relative to “today”
   and the holiday calendar, then pin behaviour: scope rules, SLA arithmetic, risk labels, shrinkage direction,
   conditioning on elapsed time, queue ordering, sizing-guide monotonicity, theme tagging, the taxonomy matching
   darkstar's copy, the expert being chosen when available and not when the SLA cannot be met, departed members never
-  being suggested, and the plan spreading work.</li>
+  being suggested, new members being candidates, and the plan spreading work. v1.1 adds the change-history loader
+  (pagination, ISO dates, never raising), date-change classes and SLA clocks set after the fact, Validating episodes,
+  forecast tags that round-trip exactly, the dashboard-comment filter, and every graph takeaway (dependency flags,
+  communities and bridges on graphs with known structure, leave-out recomputation, lift, link direction, cycles).</li>
   <li><b>Writer tests against a fake Jira.</b> An in-memory Jira double records updates and comments, so tests verify
   permissions, validation, skip-on-concurrent-change, failure isolation, audit records and undo without touching a
   real instance.</li>
@@ -920,11 +1125,14 @@ skip themselves there and run in the app environment.</p>
 
 <!-- ═══════════════════════════ 17 ═══════════════════════════ -->
 <section>
-<h2>17. Limitations and threats to validity</h2>
+<h2>18. Limitations and threats to validity</h2>
 <ul>
-  <li><b>Data quality drives everything.</b> The SLA clock depends on Target start, which is often edited (in the
-  back-test window Target start was changed 686 times and Target end 1,082 times across 157 tickets). Unsized tickets are
-  judged as Medium. Missing Target starts make tickets unassessable.</li>
+  <li><b>Data quality drives everything.</b> The SLA clock depends on Target start, which is often edited and, for
+  35% of recently completed tickets, set only after the work finished (§5.5); their “met” results flatter compliance.
+  65% of Target date moves happen after the date has passed. Unsized tickets are judged as Medium; missing Target starts
+  make tickets unassessable.</li>
+  <li><b>History scope.</b> Change history covers DevOps tickets updated in the last 400 days and three fields; values
+  entered on the create screen have no history.</li>
   <li><b>Survivorship.</b> Execution-time history contains only finished tickets; abandoned or very long tickets are
   under-represented, partly offset by the beyond-history rule.</li>
   <li><b>Non-stationarity.</b> Team composition, intake processes and sizing adoption (≈ 4% → ≈ 60% of new tickets in
@@ -936,16 +1144,19 @@ skip themselves there and run in the app environment.</p>
   re-prioritisation; the empirically calibrated Safe Start compensates.</li>
   <li><b>Text signals.</b> Regex themes have imperfect precision and recall and are correlated with ticket length;
   results are associations. Comments beyond the first 20 per ticket are not loaded.</li>
+  <li><b>Graph proxies.</b> Reply and mention edges approximate conversation; dependency links exist only where someone
+  added them and can go stale; centrality favours hubs (§14.6).</li>
   <li><b>Assignment effects are unmeasured.</b> The recommender is validated for internal consistency, not yet for
   causal impact on SLA outcomes.</li>
   <li><b>Ethics.</b> Per-person views are for balancing work and spotting gaps, not for performance evaluation;
-  shrinkage avoids over-reading small samples, and the paper's figures name no individuals.</li>
+  shrinkage avoids over-reading small samples, graph figures in this paper are anonymised, and the dashboard's graph
+  page states its purpose on screen.</li>
 </ul>
 </section>
 
 <!-- ═══════════════════════════ 18 ═══════════════════════════ -->
 <section>
-<h2>18. Future work</h2>
+<h2>19. Future work</h2>
 <ol>
   <li><b>Measure the recommender prospectively.</b> Log suggested vs actual assignee and compare SLA outcomes for
   followed vs not-followed suggestions (an observational A/B), before tuning weights.</li>
@@ -955,14 +1166,19 @@ skip themselves there and run in the app environment.</p>
   directly instead of conditioning on finished ones.</li>
   <li><b>Adaptive conformal intervals</b> (e.g. ACI) to restore coverage under drift at longer horizons.</li>
   <li><b>Load all comments</b> via the per-issue comment endpoint for the ≈ 1% of tickets with more than 20.</li>
-  <li><b>Snapshot store.</b> Persist daily facts so trends and back-tests no longer need to be reconstructed from change
-  history.</li>
+  <li><b>Snapshot store</b> — <i>partly addressed in v1.1</i>: the change history (§3.4) and posted forecast tags (§8.3)
+  now provide the record; a daily snapshot of derived facts would complete it.</li>
+  <li><b>Review the forecast track record</b> after eight weekly posts and recalibrate Safe Start from prospective,
+  rather than reconstructed, outcomes.</li>
+  <li><b>Close the SLA-clock gap at the source</b>: require Target start before In Progress, then track §5.5 falling.</li>
+  <li><b>Graphs over time</b>: monthly snapshots of the conversation and skills graphs to show cross-training and
+  hub-dependence changing, and the SLA impact of dependency chains.</li>
 </ol>
 </section>
 
 <!-- ═══════════════════════════ REFERENCES ═══════════════════════════ -->
 <section class="newpage">
-<h2>19. References</h2>
+<h2>20. References</h2>
 <ol class="refs">
   <li>Vepsalainen, A. P. J., &amp; Morton, T. E. (1987). Priority rules for job shops with weighted tardiness costs. <i>Management Science</i>, 33(8), 1035–1047.</li>
   <li>Little, J. D. C. (1961). A proof for the queuing formula: L = λW. <i>Operations Research</i>, 9(3), 383–387.</li>
@@ -988,8 +1204,18 @@ skip themselves there and run in the app environment.</p>
   <li>McKinney, W. (2010). Data structures for statistical computing in Python. <i>Proceedings of the 9th Python in Science Conference</i>, 56–61.</li>
   <li>Efron, B., &amp; Tibshirani, R. J. (1993). <i>An Introduction to the Bootstrap</i>. Chapman &amp; Hall.</li>
   <li>Metropolis, N., &amp; Ulam, S. (1949). The Monte Carlo method. <i>Journal of the American Statistical Association</i>, 44(247), 335–341.</li>
-  <li>Atlassian. <i>Jira Cloud Platform REST API v3</i>: issue search (enhanced JQL search with <span class="mono">nextPageToken</span>), edit issue, add comment. developer.atlassian.com.</li>
+  <li>Atlassian. <i>Jira Cloud Platform REST API v3</i>: issue search (enhanced JQL search with <span class="mono">nextPageToken</span>), bulk changelog, edit issue, add comment. developer.atlassian.com.</li>
   <li>Streamlit Inc. <i>Streamlit documentation</i>: session state, dialogs, data editor, AppTest. docs.streamlit.io.</li>
+  <li>Hagberg, A. A., Schult, D. A., &amp; Swart, P. J. (2008). Exploring network structure, dynamics, and function using NetworkX. <i>Proceedings of the 7th Python in Science Conference</i>, 11–15.</li>
+  <li>Newman, M. E. J. (2006). Modularity and community structure in networks. <i>Proceedings of the National Academy of Sciences</i>, 103(23), 8577–8582.</li>
+  <li>Blondel, V. D., Guillaume, J.-L., Lambiotte, R., &amp; Lefebvre, E. (2008). Fast unfolding of communities in large networks. <i>Journal of Statistical Mechanics</i>, P10008.</li>
+  <li>Freeman, L. C. (1977). A set of measures of centrality based on betweenness. <i>Sociometry</i>, 40(1), 35–41.</li>
+  <li>Brandes, U. (2001). A faster algorithm for betweenness centrality. <i>Journal of Mathematical Sociology</i>, 25(2), 163–177.</li>
+  <li>Kamada, T., &amp; Kawai, S. (1989). An algorithm for drawing general undirected graphs. <i>Information Processing Letters</i>, 31(1), 7–15.</li>
+  <li>Sugiyama, K., Tagawa, S., &amp; Toda, M. (1981). Methods for visual understanding of hierarchical system structures. <i>IEEE Transactions on Systems, Man, and Cybernetics</i>, 11(2), 109–125.</li>
+  <li>Brin, S., Motwani, R., Ullman, J. D., &amp; Tsur, S. (1997). Dynamic itemset counting and implication rules for market basket data. <i>Proceedings of ACM SIGMOD</i>, 255–264.</li>
+  <li>Kahn, A. B. (1962). Topological sorting of large networks. <i>Communications of the ACM</i>, 5(11), 558–562.</li>
+  <li>Johnson, D. B. (1975). Finding all the elementary circuits of a directed graph. <i>SIAM Journal on Computing</i>, 4(1), 77–84.</li>
 </ol>
 </section>
 
@@ -1024,7 +1250,14 @@ skip themselves there and run in the app environment.</p>
 <tr><td>SLA_TARGET / BREACH_GOAL</td><td class="num">90% / 10%</td><td>executive_summary / SLA</td><td>Targets</td></tr>
 <tr><td>MIN_EMERGING_COUNT</td><td class="num">4</td><td>word_of_the_month</td><td>Minimum mentions for an emerging phrase</td></tr>
 <tr><td>COVERAGE_TARGET / MIN_GUIDE_SAMPLE</td><td class="num">90% / 10</td><td>estimated_size</td><td>Size coverage goal; tickets per size for the guide</td></tr>
-<tr><td>MAX_BATCH</td><td class="num">25</td><td>jira_dates / jira_assign</td><td>Maximum writes per batch</td></tr>
+<tr><td>MAX_BATCH</td><td class="num">25 / 100</td><td>jira_dates, jira_assign / jira_forecast</td><td>Maximum tickets per batch (field writes / forecast comments)</td></tr>
+<tr><td>HISTORY_DAYS (change history)</td><td class="num">400</td><td>fetch_change_history</td><td>Tickets updated within this window get history</td></tr>
+<tr><td>NUDGE_BD / OUTCOME_DAYS</td><td class="num">5 / 180</td><td>validating_report</td><td>Nudge threshold; window for SLA impact and what-ifs</td></tr>
+<tr><td>REPLANNED_MIN_MOVES</td><td class="num">2</td><td>trend_report</td><td>Open tickets listed as most re-planned</td></tr>
+<tr><td>NEW_MEMBERS</td><td class="num">list</td><td>assignment_report</td><td>New hires who are candidates before 5 completions</td></tr>
+<tr><td>DEPENDENCY_MIN_TICKETS / SHARE</td><td class="num">10 / 0.6</td><td>knowledge_graph</td><td>Requester depending on one engineer (Eq. 18)</td></tr>
+<tr><td>SKILL_MIN_TICKETS / PAIR_MIN_TICKETS</td><td class="num">3 / 5</td><td>knowledge_graph</td><td>Holding a domain; minimum shared tickets for lift</td></tr>
+<tr><td>SEED / leave-out limit</td><td class="num">7 / 10</td><td>knowledge_graph</td><td>Louvain and layout seed; people that can be left out</td></tr>
 </table>
 </section>
 
@@ -1048,6 +1281,10 @@ skip themselves there and run in the app environment.</p>
 <tr><td>legend, parent, parent_project</td><td>customfield_10300, parent, parentProject</td><td>links</td></tr>
 <tr><td>comments</td><td>comment.comments (human)</td><td>list of {author, created (UTC), body}</td></tr>
 <tr><td>comment_total, bot_comment_count</td><td>comment.total; accountType = app</td><td>int</td></tr>
+<tr><td>dashboard_comments, dashboard_comment_count</td><td>comment (dashboard-posted)</td><td>list as comments; int</td></tr>
+<tr><td>links</td><td>issuelinks</td><td>list of {type, relation, direction, key, status, status_category, summary}</td></tr>
+<tr><td>reporter_account_id; comments[].author_id</td><td>reporter.accountId; comment author.accountId</td><td>str</td></tr>
+<tr><td>change history (separate frame)</td><td>bulk changelog</td><td>key, at (UTC), author, field (status / target_start / target_end), frm, to</td></tr>
 <tr><td>project_due_date</td><td>duedate</td><td>datetime (rarely used)</td></tr>
 <tr><td>days_old, last_updated_days, velocity*</td><td>derived</td><td>legacy calendar-day helpers used by older views</td></tr>
 </table>
@@ -1059,7 +1296,12 @@ skip themselves there and run in the app environment.</p>
 <tr><th style="width:32%">Module</th><th>Responsibility</th></tr>
 <tr><td>app.py</td><td>Streamlit entry point: sidebar, navigation, page rendering, write dialogs</td></tr>
 <tr><td>config/load_configuration.py, validate_and_connect_to_jira.py</td><td>Credential precedence (Streamlit secrets → environment → config.json); Jira connection</td></tr>
-<tr><td>data/build_dataframe_new.py</td><td>JQL fetch, pagination, field flattening, human-comment extraction</td></tr>
+<tr><td>data/build_dataframe_new.py</td><td>JQL fetch, pagination, field flattening, human-comment extraction, issue links</td></tr>
+<tr><td>data/fetch_change_history.py, dashboard_comments.py</td><td>Bulk changelog loader; recognising dashboard-posted comments and the forecast tag</td></tr>
+<tr><td>reports/change_history.py</td><td>Date changes, SLA clock set after the fact, status episodes</td></tr>
+<tr><td>reports/validating_report.py</td><td>Validating episodes, rework, SLA impact, what-ifs</td></tr>
+<tr><td>reports/knowledge_graph.py, dependency_graph.py</td><td>Graph analytics (§14)</td></tr>
+<tr><td>reports/jira_forecast.py, welcome.py</td><td>Forecast comments and track record; Welcome page</td></tr>
 <tr><td>reports/in_progress_report.py</td><td>Scope rules, SLA table, calendar, execution-time model, sampling, In Progress page</td></tr>
 <tr><td>reports/executive_summary.py</td><td>Canonical facts, stages, tiles, headlines, Needs Attention</td></tr>
 <tr><td>reports/atc_sequence.py</td><td>Apparent Tardiness Cost ordering and calendar</td></tr>
@@ -1077,7 +1319,7 @@ skip themselves there and run in the app environment.</p>
 </table>
 <p class="small" style="margin-top:14pt; color: var(--muted)">Figures were generated by
 <span class="mono">docs/whitepaper/make_figures.py</span> from the live dataset using the dashboard's own functions;
-numbers quoted in the text are as of 2026-10-08 unless stated.</p>
+numbers quoted in the text are as of 2026-10-21 unless stated (v1.0 figures were as of 2026-10-08).</p>
 </section>
 
 </main>

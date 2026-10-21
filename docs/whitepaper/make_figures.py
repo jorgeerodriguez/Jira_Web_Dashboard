@@ -1,12 +1,17 @@
 """Figures for the technical white paper, computed with the dashboard's own code.
 
-Usage: .venv/bin/python docs/whitepaper/make_figures.py <issues.pkl> [<backlog_start_backtest.pkl>]
+Usage: .venv/bin/python docs/whitepaper/make_figures.py <issues.pkl> [--history <history.pkl>]
+                                                      [--start-backtest <backtest.pkl>]
 
-Every chart is aggregated; no individual is named. Output: docs/whitepaper/figures/*.svg and
+issues.pkl and history.pkl are what data/build_dataframe_new.build_issues_dataframe and
+data/fetch_change_history.fetch_change_history return. Without --start-backtest the existing start-date
+back-test figure is kept. Every chart is aggregated or anonymised; no individual is named (graph figures label
+people "E1", "R1" ...). Output: docs/whitepaper/figures/*.svg and
 docs/whitepaper/figures/numbers.json (the figures quoted in the text).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -39,7 +44,8 @@ INK, MUTED, GRID = "#1f2937", "#64748b", "#e2e8f0"
 RISK = {"On Track": "#0ca30c", "At Risk": "#fab219", "Likely Late": "#ec835a", "Breached": "#d03b3b"}
 
 plt.rcParams.update({
-    "font.family": "DejaVu Sans", "font.size": 9, "axes.titlesize": 10, "axes.titleweight": "bold",
+    # SVG text is rendered by the browser printing the paper: name fonts every Mac and PC has.
+    "font.family": "sans-serif", "font.sans-serif": ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"], "font.size": 9, "axes.titlesize": 10, "axes.titleweight": "bold",
     "axes.edgecolor": MUTED, "axes.labelcolor": INK, "xtick.color": MUTED, "ytick.color": MUTED,
     "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.8, "axes.axisbelow": True,
     "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False,
@@ -55,7 +61,13 @@ def save(fig, name):
     print("wrote", name)
 
 
-df = pd.read_pickle(sys.argv[1])
+ARGS = argparse.ArgumentParser()
+ARGS.add_argument("issues")
+ARGS.add_argument("--history")
+ARGS.add_argument("--start-backtest")
+ARGS = ARGS.parse_args()
+df = pd.read_pickle(ARGS.issues)
+change_hist = pd.read_pickle(ARGS.history) if ARGS.history else None
 today = ipr.today_local()
 hol = ipr._calendar_holidays(today)
 facts = es._facts(df, today, hol)
@@ -231,8 +243,8 @@ ax.set_title("Queue simulation, 1,000 runs, 2 slots: start (●), likely finish 
 save(fig, "f_queue")
 
 # ── F8 Backlog start back-test ───────────────────────────────────────────────────
-if len(sys.argv) > 2:
-    bt = pd.read_pickle(sys.argv[2])
+if ARGS.start_backtest:
+    bt = pd.read_pickle(ARGS.start_backtest)
     bt = bt[bt["started"]].copy()
     for c in ("p50", "actual", "target"):
         bt[c] = pd.to_datetime(bt[c])
@@ -368,6 +380,195 @@ ax.axvline(0, color=INK, lw=0.8)
 ax.legend(fontsize=8, loc="lower right")
 ax.set_title("Scoring one ticket (illustrative): SLA fit first, then score")
 save(fig, "f_score")
+
+# ═══════════════════ v1.1 additions: change history, Validating, graphs ═══════════════════
+from reports import change_history as chg  # noqa: E402
+from reports import dependency_graph as dg  # noqa: E402
+from reports import knowledge_graph as kg  # noqa: E402
+from reports import trend_report as trend  # noqa: E402
+from reports import validating_report as val  # noqa: E402
+
+if change_hist is not None:
+    # ── F15 Target date changes and SLA clocks set after the fact ──
+    tr = trend.build_trend_visuals(df, history=change_hist)
+    m = tr["monthly"].iloc[:-1].tail(12)                      # full months only
+    x = [p.strftime("%b %y") for p in m.index]
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+    axes[0].plot(x, m["date_moves"], color=C1, lw=2, marker="o", ms=3.5)
+    axes[0].set_title("Target date moves per delivered ticket")
+    axes[0].set_ylim(0, None)
+    axes[1].plot(x, m["clock_after_fact"] * 100, color=C2, lw=2, marker="o", ms=3.5)
+    axes[1].set_title("SLA clock set after the fact (%)")
+    axes[1].set_ylim(0, None)
+    for ax in axes:
+        ax.tick_params(axis="x", labelrotation=60, labelsize=7)
+    save(fig, "f_dates")
+    dc = tr["date_changes"]["kpis"]
+    NUM["dates"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in dc.items()}
+    NUM["dates_outcome"] = tr["date_changes"]["outcome_df"].to_dict("records")
+    NUM["clock_after_fact_trend"] = {p.strftime("%Y-%m"): round(float(v), 2) for p, v in m["clock_after_fact"].items()}
+
+    # ── F16 Breach rates with and without SLA clocks set after the fact ──
+    rates = {}
+    for label, ex in (("All completed tickets", False), ("Excluding clocks set after the fact", True)):
+        k = sla.build_sla_visuals(df, 30, history=change_hist, exclude_after_fact=ex)["kpis"]
+        rates[label] = (k["due_rate"], k["done_rate"])
+        NUM.setdefault("sla_clock", {})[label] = {"due_rate": round(k["due_rate"], 3), "done_rate": round(k["done_rate"], 3),
+                                                  "after_fact": k["after_fact"], "after_fact_n": k["after_fact_n"],
+                                                  "after_fact_met": k["after_fact_met"]}
+    fig, ax = plt.subplots(figsize=(7.2, 2.5))
+    labels = ["SLA came due (strict)", "Completed late"]
+    xs = np.arange(2)
+    for i, (label, vals) in enumerate(rates.items()):
+        bars = ax.bar(xs + (i - 0.5) * 0.36, np.array(vals) * 100, width=0.34, color=[C1, C2][i], label=label)
+        ax.bar_label(bars, fmt="%.1f%%", fontsize=8)
+    ax.axhline(10, color=MUTED, ls="--", lw=1)
+    ax.text(1.55, 10.4, "goal < 10%", ha="right", color=MUTED, fontsize=8)
+    ax.set_xticks(xs, labels)
+    ax.set_ylabel("Breach rate, last 30 days (%)")
+    ax.legend(fontsize=8, loc="upper left")
+    ax.set_title("Breach rates with and without tickets whose SLA clock was set after the fact")
+    save(fig, "f_sla_clock")
+
+    # ── F17 Validating ──
+    v = val.build_validating_visuals(df, change_hist)
+    NUM["validating"] = {k: (round(x, 3) if isinstance(x, float) else x) for k, x in v["kpis"].items()}
+    ep = chg.status_episodes(change_hist, "Validating", today, hol)
+    ep = ep[~ep["open"].astype(bool) & ep["key"].isin(pe["key"])].copy()
+    ep["month"] = pd.to_datetime(ep["left"]).dt.to_period("M")
+    ep["rework"] = ep["exit_to"].astype(str).str.strip().str.casefold().isin(val.REWORK_STATUSES)
+    months = pd.period_range(today.to_period("M") - 12, today.to_period("M") - 1, freq="M")
+    g = ep[ep["month"].isin(months)].groupby("month")
+    x = [p.strftime("%b %y") for p in months]
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+    axes[0].plot(x, g["bd"].quantile(0.85).reindex(months), color=C2, lw=2, marker="o", ms=3.5, label="P85")
+    axes[0].plot(x, g["bd"].median().reindex(months), color=C1, lw=2, marker="o", ms=3.5, label="Median")
+    axes[0].set_title("Business days in Validating")
+    axes[0].legend(fontsize=8)
+    axes[1].plot(x, g["rework"].mean().reindex(months) * 100, color=C1, lw=2, marker="o", ms=3.5)
+    axes[1].set_title("Sent back to be worked on (%)")
+    for ax in axes:
+        ax.set_ylim(0, None)
+        ax.tick_params(axis="x", labelrotation=60, labelsize=7)
+    save(fig, "f_validating")
+
+
+# ── Graph figures: the app's own Plotly layouts, redrawn with names replaced ──
+def _anon(names_pe: set[str]):
+    codes: dict[str, str] = {}
+
+    def code(name: str) -> str:
+        if name not in codes:
+            prefix = "E" if name in names_pe else "R"
+            codes[name] = f"{prefix}{sum(1 for c in codes.values() if c[0] == prefix) + 1}"
+        return codes[name]
+    return code
+
+
+def plotly_to_svg(pfig, name: str, rename, title: str, size=(7.2, 4.6), keep=frozenset()):
+    """Redraw a Plotly network figure (line traces + marker traces + arrow annotations) with matplotlib."""
+    fig, ax = plt.subplots(figsize=size)
+    for tr in pfig.data:
+        if tr.type != "scatter":
+            continue
+        xs, ys = list(tr.x), list(tr.y)
+        if tr.mode == "lines":
+            color = tr.line.color or MUTED
+            alpha = 0.5
+            if isinstance(color, str) and color.startswith("rgba"):
+                parts = color[5:-1].split(",")
+                color = tuple(int(c) / 255 for c in parts[:3])
+                alpha = float(parts[3])
+            seg_x, seg_y = [], []
+            for xv, yv in zip(xs + [None], ys + [None]):
+                if xv is None:
+                    if seg_x:
+                        ax.plot(seg_x, seg_y, color=color, alpha=alpha, lw=(tr.line.width or 1) * 0.8, zorder=1)
+                    seg_x, seg_y = [], []
+                else:
+                    seg_x.append(xv)
+                    seg_y.append(yv)
+            continue
+        sizes = tr.marker.size if tr.marker.size is not None else 10
+        sizes = np.atleast_1d(np.asarray(sizes, dtype=float))
+        sizes = np.resize(sizes, len(xs))
+        colors = tr.marker.color
+        symbol = tr.marker.symbol
+        symbols = list(symbol) if isinstance(symbol, (list, tuple)) else [symbol] * len(xs)
+        mk = {"circle": "o", "diamond": "D", "square": "s", "circle-open": "o", None: "o"}
+        for xv, yv, sz, sy in zip(xs, ys, sizes, symbols):
+            hollow = sy == "circle-open"
+            ax.scatter([xv], [yv], s=(sz * 0.62) ** 2, marker=mk.get(sy, "o"), zorder=3,
+                       facecolors="none" if hollow else colors, edgecolors=colors if hollow else "white", linewidths=1)
+        texts = list(tr.text) if tr.text is not None else [""] * len(xs)
+        tpos = tr.textposition
+        tpos = list(tpos) if isinstance(tpos, (list, tuple)) else [tpos or "top center"] * len(xs)
+        for xv, yv, label, where in zip(xs, ys, texts, tpos):
+            if not label:
+                continue
+            vert, _, horiz = str(where).partition(" ")
+            dx = {"left": -5, "right": 5}.get(horiz, 0)
+            dy = {"top": 5, "bottom": -5}.get(vert, 0)
+            ax.annotate(label if label in keep else rename(label), (xv, yv), xytext=(dx, dy), textcoords="offset points",
+                        fontsize=6.5, color=INK, zorder=4,
+                        ha={"left": "right", "right": "left"}.get(horiz, "center"),
+                        va={"top": "bottom", "bottom": "top"}.get(vert, "center"))
+        if tr.name and tr.showlegend is not False:
+            ax.scatter([], [], s=40, marker=mk.get(symbols[0], "o"),
+                       facecolors="none" if symbols[0] == "circle-open" else (colors if isinstance(colors, str) else MUTED),
+                       edgecolors=colors if isinstance(colors, str) else MUTED, label=tr.name)
+    for an in pfig.layout.annotations or []:
+        if an.showarrow and an.ax is not None and an.axref == "x":
+            ax.annotate("", xy=(an.x, an.y), xytext=(an.ax, an.ay),
+                        arrowprops=dict(arrowstyle="-|>", color="#94a3b8", lw=0.9), zorder=2)
+    ax.set_axis_off()
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize=7, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=min(len(handles), 5), frameon=False)
+    ax.set_title(title, pad=26)
+    ax.margins(x=0.08, y=0.04)
+    save(fig, name)
+
+
+graph = kg.build_knowledge_graph(df, 12)
+pe_people = graph["pe_people"]
+code = _anon(pe_people)
+NUM["kg"] = {"ask": graph["ask_stats"], "tickets": graph["tickets"],
+             "dependency_flagged": int((graph["dependency_df"]["Depends on One Engineer"] == "yes").sum()),
+             "single_person_domains": graph["single_person_df"][["Domain", "Main Person Left PE"]].to_dict("records"),
+             "top_pairs": graph["pairs_df"].head(5).to_dict("records")}
+
+# Who asks whom: top requesters only, so the figure stays readable at print size.
+edges = graph["requester_edges"]
+top_req = edges.groupby("requester")["tickets"].sum().sort_values(ascending=False).head(14).index
+pf = kg.requester_graph_figure(edges[edges["requester"].isin(top_req)], min_tickets=2)
+plotly_to_svg(pf, "f_kg_ask", code, "Who asks whom: 14 busiest requesters (R) → engineers (E), links with 2+ tickets",
+              size=(7.2, 5.4))
+
+# Who talks to whom: everyone vs without the busiest connector.
+G_talk = kg.weighted(graph["conversation_graph"])
+hub = max(G_talk.nodes, key=lambda n: G_talk.degree(n, weight="weight"))
+for label, H in (("all", G_talk), ("nohub", kg.without(G_talk, [hub]))):
+    pfig, kp, br_df = kg.conversation_outputs(H, pe_people, min_replies=3)
+    NUM.setdefault("talk", {})[label] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in kp.items()}
+    NUM["talk"][label]["top_pair_strength"] = [int(x) for x in kg.strongest_pairs(H, 3)["Strength"]]
+    plotly_to_svg(pfig, f"f_kg_talk_{label}", code,
+                  "Conversation groups (replies + mentions, pairs with 3+)" if label == "all"
+                  else "The same, without the busiest connector", size=(7.2, 4.3))
+
+# Skills ring: domains named, engineers anonymised.
+pfig = kg.skills_figure(graph["skill_edges"])
+plotly_to_svg(pfig, "f_kg_skills", code, "Skills map: domains on the ring, engineers (E) between their domains",
+              size=(7.2, 6.0), keep=set(graph["skill_edges"]["domain"]))
+
+# Dependencies: ticket keys replaced by T1, T2 ...
+G_dep = dg.build_graph(df)
+dep = dg.analyse(G_dep)
+NUM["deps"] = dep["kpis"]
+tickets = {}
+pfig = dg.figure(G_dep)
+plotly_to_svg(pfig, "f_kg_deps", lambda k: tickets.setdefault(k, f"T{len(tickets) + 1}"),
+              "Open work waiting on other tickets (blockers on the left)", size=(7.2, 6.4))
 
 (OUT / "numbers.json").write_text(json.dumps(NUM, indent=2, default=str))
 print(json.dumps(NUM, indent=2, default=str))
