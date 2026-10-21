@@ -238,6 +238,7 @@ with st.sidebar:
         "🎯  Probability of completion on time",
         "🧑‍💼  Personal Dashboard",
         "📏  Distribution of Ticket by Estimated Size",
+        "🕸️  Knowledge Graph",
     ]
 
     selected = st.radio(
@@ -2841,3 +2842,176 @@ elif selected == "📏  Distribution of Ticket by Estimated Size":
             st.dataframe(size_visuals["detail_df"], width="stretch", hide_index=True, column_config=link)
 
 
+# ── Knowledge Graph ──────────────────────────────────────────────────────────────
+elif selected == "🕸️  Knowledge Graph":
+    from reports import knowledge_graph as kg
+
+    st.title("🕸️ Knowledge Graph")
+    st.caption(
+        "Relationships in PE work, analysed with NetworkX: who asks whom, who talks to whom, and who holds which skills. "
+        "PE tickets created in the selected window. For balancing work and cross-training, not for rating people."
+    )
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    months = st.radio("Tickets created in the last", list(kg.WINDOW_OPTIONS), index=len(kg.WINDOW_OPTIONS) - 1,
+                      format_func=lambda m: f"{m} months", horizontal=True, key="kg_months")
+    cache = st.session_state.get("kg_cache")
+    if not cache or cache[0] is not df_issues or cache[1] != months:
+        with st.spinner("Building the graphs…"):
+            cache = (df_issues, months, kg.build_knowledge_graph(df_issues, months))
+        st.session_state["kg_cache"] = cache
+    g = cache[2]
+    if g.get("error_message"):
+        st.info(g["error_message"])
+        st.stop()
+
+    t_ask, t_talk, t_skill = st.tabs(["🙋 Who Asks Whom", "💬 Who Talks to Whom", "🧠 Skills Map"])
+
+    with t_ask:
+        a = g["ask_stats"]
+        dep = g["dependency_df"]
+        flagged = int((dep["Depends on One Engineer"] == "yes").sum()) if not dep.empty else 0
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Requesters", f"{a['requesters']}", help="People who raised tickets someone else worked.")
+        k2.metric("Engineers", f"{a['engineers']}")
+        k3.metric("Created by the Engineer", f"{(a['self_share'] or 0):.0%}",
+                  help=f"{a['self_created']:,} of {a['tickets']:,} assigned tickets were raised by the engineer who worked "
+                       "them (self-generated work). They aren't drawn in the graph.")
+        k4.metric("Depend on One Engineer", f"{flagged}",
+                  help=f"Requesters with {kg.DEPENDENCY_MIN_TICKETS}+ tickets who sent {kg.DEPENDENCY_SHARE:.0%}+ of them "
+                       "to one engineer: a hidden key-person dependency.")
+        c1, c2, c3 = st.columns([2, 2, 3])
+        with c1:
+            view = st.radio("View", ["Network", "Flow"], horizontal=True, key="kg_ask_view",
+                            help="Network: every requester-engineer link. Flow: ticket volume from the 15 busiest requesters.")
+        with c2:
+            min_t = st.slider("Hide links with fewer tickets than", 1, 5, 2, key="kg_ask_min", disabled=view == "Flow")
+        with c3:
+            people = sorted(set(g["requester_edges"]["requester"]) | set(g["requester_edges"]["engineer"]))
+            focus = st.selectbox("Focus on one person", ["Everyone"] + people, key="kg_ask_focus", disabled=view == "Flow")
+        fig = (kg.requester_sankey(g["requester_edges"]) if view == "Flow" else
+               kg.requester_graph_figure(g["requester_edges"], min_t, None if focus == "Everyone" else focus))
+        st.caption("Requesters (orange) on the left, engineers (blue) on the right; thicker lines = more tickets. "
+                   "Hover for counts." if view == "Network" else "Ticket volume from the 15 busiest requesters to engineers.")
+        if fig is not None:
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("No links with these filters.")
+        st.subheader("Requester Dependency")
+        st.caption("Each requester's spread of work across engineers. Flagged rows are candidates for a backup engineer.")
+        st.dataframe(dep, width="stretch", hide_index=True, height=360, column_config={
+            "Top Engineer Share %": st.column_config.ProgressColumn("Top Engineer Share %", format="%d%%",
+                                                                    min_value=0, max_value=100)})
+
+    with t_talk:
+        with st.expander("How this graph is built", expanded=False):
+            st.markdown(
+                "- **Data:** the human comments on PE tickets created in the selected window. Automation comments and "
+                "comments the dashboard posted are left out.\n"
+                "- **Replies:** on each ticket, comments are read in time order. Each time the author changes "
+                "(Ana, then Ben), Ana and Ben get one reply link.\n"
+                "- **Mentions:** when someone @mentions a person in a comment, those two get one mention link.\n"
+                "- **Strength** of a pair = the signal you choose (replies, mentions, or both added together), across "
+                "all their tickets. Thicker line = stronger.\n"
+                "- **Groups** (colours) are people who talk more among themselves than with others (Louvain "
+                "communities). **Bridges** connect groups. Both use every conversation, whatever you filter.\n"
+                "- **Leave out people** removes them before anything is calculated, so groups, bridges and strongest "
+                "pairs show how everyone else connects (useful for people who are in most conversations).\n"
+                "- **Limits:** a comment right after someone isn't always a reply; talk outside Jira (Teams, Slack) "
+                "isn't seen; Jira returns at most 20 comments per ticket."
+            )
+        c0, c1, c2, c3 = st.columns([3, 2, 3, 3])
+        with c0:
+            signal = st.radio("Signal", kg.SIGNALS, horizontal=True, key="kg_talk_signal",
+                              help="Replies: commenting right after each other. Mentions: @mentioning each other.")
+        G_full = kg.weighted(g["conversation_graph"], signal)
+        busiest = sorted(G_full.nodes, key=lambda n: -G_full.degree(n, weight="weight"))
+        left_out = st.multiselect(
+            "Leave out people (up to 10)", busiest, key="kg_talk_leave_out", max_selections=10,
+            placeholder="Nobody left out (busiest people are listed first)",
+            help="Removes them before groups, bridges and strongest pairs are calculated, to see how everyone else "
+                 "connects. Useful for people in most conversations, such as a team lead.")
+        G_talk = kg.without(G_full, left_out)
+        with c1:
+            show = st.radio("Show", ["All links", "Strongest"], horizontal=True, key="kg_talk_show")
+        with c2:
+            if show == "Strongest":
+                top_n = st.slider("Strongest pairs (top N)", 1, 10, 5, key="kg_talk_top")
+                min_r = 1
+            else:
+                min_r = st.slider("Hide pairs weaker than", 1, 6, 2, key="kg_talk_min")
+                top_n = None
+        with c3:
+            focus = st.selectbox("Focus on one person", ["Everyone"] + sorted(G_talk.nodes), key="kg_talk_focus",
+                                 help="With 'Strongest', shows that person's top N partners.")
+        who = None if focus == "Everyone" else focus
+        # Groups, bridges and KPIs use every conversation; only the drawing follows the filters.
+        fig, kp, bridges = kg.conversation_outputs(G_talk, g["pe_people"], min_r, who, top_n)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("People in Conversations", f"{kp.get('people', 0)}")
+        k2.metric("Linked Pairs", f"{kp.get('pairs', 0)}", help=f"Pairs with at least one {signal.lower()} link.")
+        k3.metric("Groups", f"{kp.get('communities', 0)}", help="Communities found by Louvain modularity.")
+        mod = kp.get("modularity")
+        k4.metric("Siloed?", "—" if mod is None else ("No, well mixed" if mod < 0.3 else "Somewhat" if mod < 0.5 else "Yes"),
+                  help=f"Modularity {mod:.2f}: near 0 means groups talk across each other a lot; above 0.5 means silos."
+                  if mod is not None else None)
+        if left_out and G_talk.number_of_nodes() == 0:
+            st.warning("Everyone has been left out. Remove some people from **Leave out people** to see the graph.")
+        elif left_out:
+            named = ", ".join(left_out[:5]) + (f" and {len(left_out) - 5} more" if len(left_out) > 5 else "")
+            dropped = G_full.number_of_nodes() - G_talk.number_of_nodes()
+            st.info(f"Showing how the team connects without {named}. Groups, bridges and strongest pairs are "
+                    f"recalculated ({dropped} people drop out in total, including anyone who only talked to them).")
+        st.caption("Colour = group, circle = PE engineer, diamond = someone else (requesters, other teams). "
+                   "Bigger = stronger links overall; thicker line = stronger pair.")
+        if fig is not None:
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("No conversations with these filters.")
+        s1, s2 = st.columns(2)
+        with s1:
+            n_pairs = top_n or 10
+            st.subheader("Strongest Relationships" + (f" · {who}" if who else ""))
+            st.caption(f"Top {n_pairs} pairs by {signal.lower()}" + (f" for {who}" if who else "") +
+                       ". Shared Tickets = tickets where both took part.")
+            st.dataframe(kg.strongest_pairs(G_talk, n_pairs, who), width="stretch", hide_index=True)
+        with s2:
+            st.subheader("Bridges")
+            st.caption("People who connect groups that otherwise talk little (betweenness centrality). If a bridge is "
+                       "away, those groups lose their link, so plan cover for the top few.")
+            st.dataframe(bridges, width="stretch", hide_index=True)
+
+    with t_skill:
+        single = g["single_person_df"]
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Domains Worked", f"{g['skill_edges']['domain'].nunique()}")
+        k2.metric("Engineers", f"{g['skill_edges']['person'].nunique()}")
+        k3.metric("Resting on One Person", f"{len(single)}",
+                  help=f"Domains where at most one person has {kg.SKILL_MIN_TICKETS}+ tickets.")
+        c1, c2, c3 = st.columns([3, 2, 3])
+        with c1:
+            grp = st.radio("Domain group", ["All", "AWS", "GCP", "Security", "Other"], horizontal=True, key="kg_skill_group")
+        with c2:
+            min_s = st.slider("Hide links with fewer tickets than", 1, 6, kg.SKILL_MIN_TICKETS, key="kg_skill_min")
+        with c3:
+            options = sorted(set(g["skill_edges"]["person"])) + sorted(set(g["skill_edges"]["domain"]))
+            focus = st.selectbox("Focus on a person or domain", ["Everyone"] + options, key="kg_skill_focus")
+        fig = kg.skills_figure(g["skill_edges"], None if grp == "All" else grp, min_s, None if focus == "Everyone" else focus)
+        st.caption("Squares = skill domains (blue GCP, orange AWS, violet Security, grey other); dark dots = engineers. "
+                   "A red outline marks a domain only one person holds.")
+        if fig is not None:
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("No links with these filters.")
+        s1, s2 = st.columns(2)
+        with s1:
+            st.subheader("Domains Resting on One Person")
+            st.caption("Cross-training candidates. 'Left PE' means the knowledge may already be gone.")
+            if single.empty:
+                st.success("Every active domain has at least two people with real experience.")
+            else:
+                st.dataframe(single, width="stretch", hide_index=True)
+        with s2:
+            st.subheader("Skills That Go Together")
+            st.caption(f"Domain pairs on the same tickets more often than chance (lift; {kg.PAIR_MIN_TICKETS}+ shared tickets). "
+                       "Good pairings for cross-training and for staffing work that spans both.")
+            st.dataframe(g["pairs_df"], width="stretch", hide_index=True)

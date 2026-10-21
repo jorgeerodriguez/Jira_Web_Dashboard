@@ -33,6 +33,8 @@ def _human_comments(fields: dict) -> tuple[list[dict], int, int, list[dict]]:
             continue
         record = {
             "author": author.get("displayName", "Unknown"),
+            # Account id: resolves @mentions ([~accountid:...]) in comment bodies to people.
+            "author_id": author.get("accountId"),
             "created": pd.to_datetime(comment.get("created"), utc=True, errors="coerce"),
             "body": comment.get("body") or "",
         }
@@ -240,6 +242,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "parent_project": parent_project,
             "parent": parent,
             "reporter_name": (fields.get("reporter") or {}).get("displayName", "Unknown"),
+            "reporter_account_id": (fields.get("reporter") or {}).get("accountId"),
             "comments": human_comments,
             "comment_total": comment_total,
             "bot_comment_count": bot_comments,

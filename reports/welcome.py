@@ -50,6 +50,7 @@ PAGE_GROUPS = [
         ("💬  Teams Conversations", "What ticket comments say: friction that costs time, response times, comment coverage."),
         ("⚡  Velocity", "Lead time we can promise requesters, waiting vs working time, whether sizes predict effort."),
         ("📏  Distribution of Ticket by Estimated Size", "Sizing coverage, a sizing guide from our own work, size accuracy."),
+        ("🕸️  Knowledge Graph", "Relationship graphs: who asks whom, who talks to whom, who holds which skills."),
         ("🎯  Probability of completion on time", "Legacy machine-learning estimate of on-time completion; treat as indicative."),
     ]),
 ]

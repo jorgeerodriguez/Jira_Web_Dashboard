@@ -29,6 +29,8 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kiwisolver==1.5.0
 MarkupSafe==3.0.3
+# Relationship graphs on the Knowledge Graph page (communities, centrality, layouts).
+networkx==3.7
 narwhals==2.21.0
 nest-asyncio==1.6.0
 numpy==2.4.4

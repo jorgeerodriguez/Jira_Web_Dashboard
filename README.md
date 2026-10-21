@@ -31,6 +31,7 @@ It supports:
 - **Velocity**: what lead time we can promise a requester (50/85/95%), waiting vs in-progress time by priority, whether sizes predict effort, an SLA reality check per Priority × Size, and what was delivered — see [How Velocity works](#how-velocity-works)
 - **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, Target date changes (moves, re-planning after the date passed, SLA clocks set after the fact), plus team contribution over time — see [How Trend works](#how-trend-works)
 - **Validating**: work waiting for the requester to confirm — time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs — see [How Validating works](#how-validating-works)
+- **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) and a skills map (who holds which domains, single-person domains, skills that go together) — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
 - **Change history**: status and Target date history loaded with every fetch (Jira bulk changelog) — see [Change history](#change-history)
 
 ---
@@ -63,6 +64,7 @@ Jira_Web_Dashboard/
 │   ├── __init__.py
 │   ├── assignment_report.py     # Suggested Assignments
 │   ├── welcome.py               # Welcome page content and layout
+│   ├── knowledge_graph.py       # Knowledge Graph (NetworkX analysis, Plotly drawing)
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
 │   ├── change_history.py        # date changes, SLA clock set after the fact, status episodes
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
@@ -107,6 +109,7 @@ Jira_Web_Dashboard/
 │   ├── test_change_history.py
 │   ├── test_welcome.py
 │   ├── test_jira_forecast.py
+│   ├── test_knowledge_graph.py
 │   └── ...
 └── backup/
 ```
@@ -261,6 +264,31 @@ The app opens on **👋 Welcome** (`reports/welcome.py`), written for the PE tea
 The text lives in plain lists at the top of `reports/welcome.py` (`QUICK_START`, `PAGE_GROUPS`, `PRINCIPLES`,
 `GLOSSARY`). When you add, rename or remove a menu page, update `PAGE_GROUPS` too: `tests/test_welcome.py` fails
 if the Welcome page and the menu disagree. The page runs no calculations, so it opens instantly.
+
+---
+
+## How the Knowledge Graph works
+
+The **🕸️ Knowledge Graph** page (`reports/knowledge_graph.py`) analyses relationships with **NetworkX** and draws
+them with Plotly. PE tickets created in the last 3, 6 or 12 months. Every graph has filters (hide weak links, focus on
+one person or domain) and is paired with a metric and a list, so it has a takeaway. Layouts are deterministic (fixed
+seeds). Meant for balancing work and cross-training, not for rating people.
+
+| Tab | Graph | Takeaway |
+| --- | --- | --- |
+| Who Asks Whom | Requester (Jira reporter) → engineer, requesters left and engineers right, ordered to reduce crossings; or a **Flow** (Sankey) of the 15 busiest requesters | Share of tickets created by the engineer who worked them (not drawn); **Requester Dependency**: requesters with 10+ tickets who send 60%+ to one engineer. Automation requesters are marked |
+| Who Talks to Whom | Two signals from human comments (automation and dashboard-posted comments excluded): **replies** (each time the author changes between consecutive comments on a ticket) and **@mentions** (a comment's author and each person they mention; account ids resolved to names from comment authors, assignees and reporters). Choose Replies, Mentions or both. One cluster per **Louvain community**; **All links** (with a minimum strength) or the **Strongest** top N pairs (1–10), overall or for one person. **Leave out people** (up to 10) removes them before anything is calculated, so groups, bridges and strongest pairs show how everyone else connects. A "How this graph is built" note sits on the tab | **Siloed?** from modularity (near 0 = well mixed); **Strongest Relationships** (strength, replies, mentions, shared tickets); **Bridges**: betweenness centrality, the people who connect groups |
+| Skills Map | Domains on a ring (grouped GCP, AWS, Security, Other), each engineer placed between the domains they work in (generalists in the middle) | **Domains Resting on One Person** (at most one person with 3+ tickets; flags owners who left PE); **Skills That Go Together**: domain pairs with the highest lift, P(a,b) / (P(a) P(b)) |
+
+As of 2026-10-20 (12 months): 96 requesters and 30 engineers; 38% of tickets were created by their engineer; 6
+requesters depend on one engineer; 44% of human comments @mention someone (99.8% of 6,440 mentions resolve to a
+name) and mentions add 19 people and 213 pairs to the conversation graph (108 people, 611 pairs, 4 groups, modularity
+0.17, well mixed). Leaving out the single busiest connector splits the rest into 5 groups (modularity 0.33,
+somewhat siloed): the team looks well mixed largely because one person links everyone; ECS and Looker rest on one
+person (ECS's main person has left PE); Airflow + Composer co-occur 27× more than chance.
+
+**Next (Phase 2):** a dependency graph from Jira issue links (blocks / is blocked by), which needs `issuelinks` in
+the fetch.
 
 ---
 
@@ -1120,6 +1148,12 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-10-20
+- **Knowledge Graph · Who Talks to Whom**: **Leave out people** (up to 10) to see how everyone else connects; groups, bridges and strongest pairs are recalculated without them
+- **Knowledge Graph · Who Talks to Whom**: @mentions as a second signal (Replies / Mentions / both), a **Strongest** top N (1–10) view overall or per person, a Strongest Relationships table and a "How this graph is built" note; the loader keeps comment authors' and reporters' account ids to resolve mentions
+- New **🕸️ Knowledge Graph** page (NetworkX): who asks whom, who talks to whom, skills map, each with filters, a metric and a list (see [How the Knowledge Graph works](#how-the-knowledge-graph-works)); `networkx` added to `requirements.txt`
+- Added `tests/test_knowledge_graph.py`
+
 ### 2026-10-12
 - **Backlog**: **📝 Post forecast as comments** adds the forecast to tickets as Jira comments without changing any dates, with a machine-readable tag; a **Forecast Track Record** compares posted forecasts with actual starts and finishes (see [Posting the forecast as comments](#posting-the-forecast-as-comments-no-date-changes))
 - Comments posted by the dashboard are no longer counted as human comments (comment coverage, first reply, Teams Conversations)
@@ -1261,7 +1295,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py tests/test_knowledge_graph.py -q
 ```
 
 ---
