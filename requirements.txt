@@ -29,8 +29,9 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kiwisolver==1.5.0
 MarkupSafe==3.0.3
-# Relationship graphs on the Knowledge Graph page (communities, centrality, layouts).
-networkx==3.7
+# Relationship graphs on the Knowledge Graph page (communities, centrality, layouts). 3.6.x: 3.7+ needs
+# Python 3.12, which breaks GitLab dependency scanning (its analyzer installs these pins with Python 3.11).
+networkx==3.6.1
 narwhals==2.21.0
 nest-asyncio==1.6.0
 numpy==2.4.4
