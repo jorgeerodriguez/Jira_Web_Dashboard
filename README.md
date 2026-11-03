@@ -32,6 +32,7 @@ It supports:
 - **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, Target date changes (moves, re-planning after the date passed, SLA clocks set after the fact), plus team contribution over time — see [How Trend works](#how-trend-works)
 - **Validating**: work waiting for the requester to confirm — time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs — see [How Validating works](#how-validating-works)
 - **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) a skills map (who holds which domains, single-person domains, skills that go together) and dependencies (what waits on what, from Jira issue links) — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
+- **Status of My Ticket**: everything about one ticket — where it stands in plain English, a timeline of status, assignee, dates and comments, where the time went vs similar tickets, Target date history, the conversation, what it waits on, people involved, similar tickets, posted forecasts vs reality, a shareable `?ticket=KEY` link and a printable summary — see [How Status of My Ticket works](#how-status-of-my-ticket-works)
 - **Change history**: status and Target date history loaded with every fetch (Jira bulk changelog) — see [Change history](#change-history)
 
 ---
@@ -66,6 +67,7 @@ Jira_Web_Dashboard/
 │   ├── welcome.py               # Welcome page content and layout
 │   ├── knowledge_graph.py       # Knowledge Graph (NetworkX analysis, Plotly drawing)
 │   ├── dependency_graph.py      # Knowledge Graph · Dependencies (issue links)
+│   ├── ticket_story.py          # Status of My Ticket
 │   ├── atc_sequence.py          # ATC ordering shared by Personal Dashboard + Backlog
 │   ├── change_history.py        # date changes, SLA clock set after the fact, status episodes
 │   ├── domains.py               # domain (skill-area) taxonomy, kept identical to darkstar's Intake page
@@ -112,6 +114,7 @@ Jira_Web_Dashboard/
 │   ├── test_jira_forecast.py
 │   ├── test_knowledge_graph.py
 │   ├── test_dependency_graph.py
+│   ├── test_ticket_story.py
 │   └── ...
 └── backup/
 ```
@@ -309,6 +312,34 @@ state of open work, not the selected window.
 As of 2026-10-20: 2,010 of 4,368 PE tickets have links (most are *relates to* / *clones*); 15 open PE tickets wait on
 open work, 9 are blocked only by finished work, the longest chain is 4 tickets, the top blocker holds up 6 PE
 tickets, no cycles.
+
+---
+
+## How Status of My Ticket works
+
+The **🔍 Status of My Ticket** page (`reports/ticket_story.py`) shows the whole status and history of one ticket.
+It covers PE tickets plus Release Management (CAR) tickets linked to PE work (either side of the link). Pick a ticket by
+key or title words, or open a link: `/?ticket=DEVOPS-123` opens the page on that ticket (after **Fetch All Jira
+Tickets** in a new session). The **🔍 story** column in the SLA Detail, Breached Tickets, Backlog Forecast Detail and
+In Progress Forecast Detail tables opens a ticket's story the same way (in a new tab, so a new session).
+
+- **Header**: status, priority and size, assignee, requester, business lead, SLA, domains, Jira link and the share link.
+- **Where it stands**: plain-English verdict from rules (no AI): time in the current status, the forecast (likely and
+  safe finish for In Progress; likely/safe start and safe finish for Backlog), SLA due and days left, what it waits on
+  (or "blocked only by finished work"), waiting for the requester, no assignee, date moves and rework; for closed
+  tickets, SLA met or missed and whether the SLA clock was set after the fact.
+- **Key numbers**: age, time in the current status, SLA used and days left, waiting vs working, date moves and rework
+  (only Validating/Done → back to work counts; *Reviewing* is intake), comments, people and first reply.
+- **Timeline**: status and assignee over time (from the change history), created / Target start (and earlier ones) /
+  Target end / SLA due / done markers, every comment by role, and the forecast range for open work.
+- **Where the Time Went**: business days per status against the median for similar completed tickets (same priority ×
+  size, falling back to priority, then all; last 365 days).
+- **Target Date History**, **Conversation** (roles, reply gaps in business hours, friction themes, @mentions,
+  dashboard-posted comments marked), **Connections** (dependency chain and all links, parent Epic), **People
+  Involved**, **Similar Tickets** (same domain and priority when there are 5+), **Forecasts Posted vs Reality**.
+- **Download a one-page summary** (HTML; print to PDF from the browser).
+
+The change history now also includes **assignee** changes, for the assignee lane of the timeline.
 
 ---
 
@@ -1170,6 +1201,11 @@ In practical terms, this means the model now uses both binary history and latene
 
 ## Release notes
 
+### 2026-11-03
+- New **🔍 Status of My Ticket** page: verdict, key numbers, timeline, time vs similar tickets, date history, conversation, connections, people, similar tickets, posted forecasts vs reality, shareable `?ticket=` links, 🔍 story links in the SLA, Backlog and In Progress tables, and a printable summary (see [How Status of My Ticket works](#how-status-of-my-ticket-works))
+- Change history now also loads assignee changes
+- Added `tests/test_ticket_story.py`
+
 ### 2026-10-21
 - **Anastasiia Yerchenko** joins PE: added to `PE_TEAM_MEMBERS`, darkstar's `ROSTER` and `GITLAB_USERNAMES` (`anastasiia.yerchenko`), and to the new `NEW_MEMBERS` list so Suggested Assignments considers her before she has 5 completed tickets
 - darkstar: **Andriy Petryshyn** moved from `ROSTER` to `ALUMNI` (out of capacity and SME suggestions; his past work still counts as PE)
@@ -1322,7 +1358,7 @@ Streamlit app's packages (the In Progress, Backlog, Teams Conversations, Blocked
 skip themselves there. Run them in the app environment:
 
 ```bash
-.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py tests/test_knowledge_graph.py tests/test_dependency_graph.py -q
+.venv/bin/python -m pytest tests/test_in_progress_forecast.py tests/test_backlog_forecast.py tests/test_word_of_the_month.py tests/test_blocked_on_hold.py tests/test_executive_summary.py tests/test_ticket_age.py tests/test_business_leader.py tests/test_capacity.py tests/test_trend.py tests/test_velocity_flow.py tests/test_forecast.py tests/test_sla.py tests/test_jira_dates.py tests/test_size_distribution.py tests/test_assignments.py tests/test_jira_assign.py tests/test_change_history.py tests/test_welcome.py tests/test_jira_forecast.py tests/test_knowledge_graph.py tests/test_dependency_graph.py tests/test_ticket_story.py -q
 ```
 
 ---

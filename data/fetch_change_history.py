@@ -1,4 +1,4 @@
-"""Change history (status, Target start, Target end) for the tickets the history-based reports use.
+"""Change history (status, Target start, Target end, assignee) for the tickets the history-based reports use.
 
 Read-only. Uses Jira Cloud's bulk changelog endpoint (POST /rest/api/3/changelog/bulkfetch), which returns
 the history of up to 1,000 issues per request filtered to the fields asked for, so a fetch takes about
@@ -8,8 +8,8 @@ through the connector's authenticated session.
 Scope: DevOps-project issues (Release Management CAR tickets have no PE SLA) updated in the last
 HISTORY_DAYS days, which covers every ticket delivered or still open in the reports' 12-month windows.
 
-Returned columns: key, at (UTC), author, field ("status", "target_start", "target_end"), frm, to.
-For status the values are status names; for the Target dates they are ISO dates ("2026-09-11"), never the
+Returned columns: key, at (UTC), author, field ("status", "target_start", "target_end", "assignee"), frm, to.
+For status and assignee the values are display names (empty = unassigned); for the Target dates they are ISO dates ("2026-09-11"), never the
 display strings ("11/Sep/26"), which are ambiguous to parse.
 """
 from __future__ import annotations
@@ -18,7 +18,8 @@ import pandas as pd
 
 HISTORY_DAYS = 400
 BATCH = 1000
-FIELDS = {"status": "status", "customfield_10946": "target_start", "customfield_10947": "target_end"}
+FIELDS = {"status": "status", "customfield_10946": "target_start", "customfield_10947": "target_end",
+          "assignee": "assignee"}
 COLUMNS = ["key", "at", "author", "field", "frm", "to"]
 EXCLUDED_PROJECTS = {"release management"}
 
@@ -52,7 +53,7 @@ def _parse_items(change_logs: list[dict], key_by_id: dict[str, str]) -> list[dic
                 field = FIELDS.get(item.get("fieldId"))
                 if field is None:
                     continue
-                if field == "status":
+                if field in ("status", "assignee"):
                     frm, to = item.get("fromString"), item.get("toString")
                 else:
                     frm, to = item.get("from"), item.get("to")

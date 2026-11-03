@@ -113,6 +113,10 @@ _defaults = {
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+# Shareable links: ?ticket=DEVOPS-123 opens "Status of My Ticket" on that ticket.
+if st.query_params.get("ticket") and not st.session_state.get("_ticket_link_opened"):
+    st.session_state["selected_menu"] = "🔍  Status of My Ticket"
+    st.session_state["_ticket_link_opened"] = True
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -239,6 +243,7 @@ with st.sidebar:
         "🧑‍💼  Personal Dashboard",
         "📏  Distribution of Ticket by Estimated Size",
         "🕸️  Knowledge Graph",
+        "🔍  Status of My Ticket",
     ]
 
     selected = st.radio(
@@ -952,6 +957,20 @@ start_date = report_date - timedelta(days=lookback_days - 1)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Executive Summary ────────────────────────────────────────────────────────
+def _story_links(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add a "Story" column (link to Status of My Ticket) next to a Jira "Ticket" link column."""
+    if frame is None or frame.empty or "Ticket" not in frame.columns:
+        return frame
+    keys = frame["Ticket"].astype(str).str.split("/").str[-1]
+    out = frame.copy()
+    out.insert(out.columns.get_loc("Ticket") + 1, "Story", "/?ticket=" + keys)
+    return out
+
+
+STORY_LINK = st.column_config.LinkColumn("Story", help="Open this ticket's status and history",
+                                         display_text="🔍 story", width="small")
+
+
 def _go_to(page: str) -> None:
     st.session_state["selected_menu"] = page
 
@@ -1385,10 +1404,11 @@ elif selected == "🔄  In Progress":
 
         st.subheader("In Progress Forecast Detail")
         st.dataframe(
-            ip["forecast_df"],
+            _story_links(ip["forecast_df"]),
             width="stretch",
             hide_index=True,
             column_config={
+                "Story": STORY_LINK,
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
                     help="Open Jira ticket",
@@ -1672,10 +1692,11 @@ elif selected == "🗂️  Backlog":
             f"Medium (#2–3, ±{BACKLOG_START_MISS['Medium']} bd), Low (#4+, ±{BACKLOG_START_MISS['Low']} bd)."
         )
         st.dataframe(
-            backlog["forecast_df"],
+            _story_links(backlog["forecast_df"]),
             width="stretch",
             hide_index=True,
             column_config={
+                "Story": STORY_LINK,
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
                     help="Open Jira ticket",
@@ -2385,7 +2406,9 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         with s2:
             st.download_button("⬇️ CSV", shown.to_csv(index=False).encode("utf-8"), file_name=file_name,
                                mime="text/csv", key=f"{key}_csv", width="stretch")
+        shown = _story_links(shown)
         config = {
+            "Story": STORY_LINK,
             "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira to comment or review",
                                                   display_text=r".*/([^/]+)$"),
             "Latest Comment": st.column_config.TextColumn("Latest Comment", width="large"),
@@ -3096,3 +3119,172 @@ elif selected == "🕸️  Knowledge Graph":
                     st.success("No other team's open ticket is waiting on open PE work.")
                 else:
                     st.dataframe(dep["others_waiting_df"], width="stretch", hide_index=True, column_config=link)
+
+
+# ── Status of My Ticket ──────────────────────────────────────────────────────────
+elif selected == "🔍  Status of My Ticket":
+    from reports import ticket_story as tstory
+
+    st.title("🔍 Status of My Ticket")
+    st.caption("Everything about one ticket: where it stands, what happened, who was involved and what it's waiting on. "
+               "PE tickets, plus Release Management (CAR) tickets linked to PE work. Times in business days.")
+    df_issues = st.session_state.get("jira_df_issues", pd.DataFrame())
+    if df_issues is None or df_issues.empty:
+        wanted = st.query_params.get("ticket")
+        st.info("📥 Fetch Jira tickets from the sidebar first" + (f", then {wanted} opens here." if wanted else "."))
+        st.stop()
+    history = st.session_state.get("jira_change_history")
+    cache = st.session_state.get("ticket_story_cache")
+    if not cache or cache[0] is not df_issues:
+        with st.spinner("Preparing ticket data…"):
+            from reports import backlog_report as _br, dependency_graph as _dg, knowledge_graph as _kg
+            shared = {
+                "options": tstory.searchable(df_issues),
+                "forecasts": {"in_progress": build_in_progress_visuals(df_issues)["forecast_df"],
+                              "backlog": _br.build_backlog_visuals(df_issues)["planning_df"]},
+                "graph": _dg.build_graph(df_issues),
+                "names": _kg.account_names(df_issues),
+            }
+        cache = (df_issues, shared)
+        st.session_state["ticket_story_cache"] = cache
+    shared = cache[1]
+    options = shared["options"]
+    labels = dict(zip(options["key"], options["label"]))
+    wanted = st.query_params.get("ticket")
+    keys = list(options["key"])
+    pick = st.selectbox("Find a ticket (type the key or words from the title)", keys,
+                        index=keys.index(wanted) if wanted in keys else None, format_func=lambda k: labels.get(k, k),
+                        placeholder="e.g. DEVOPS-10807 or 'CloudFront'", key="ticket_pick")
+    if wanted and wanted not in keys:
+        st.warning(f"{wanted} isn't a PE ticket (or a CAR ticket linked to PE work) in the fetched data.")
+    if not pick:
+        st.stop()
+    if st.query_params.get("ticket") != pick:
+        st.query_params["ticket"] = pick
+    story = tstory.build_ticket_story(df_issues, history, pick, shared["forecasts"], shared["graph"], shared["names"])
+    if story.get("error_message"):
+        st.warning(story["error_message"])
+        st.stop()
+    h, k = story["header"], story["kpis"]
+
+    # Header
+    t1, t2 = st.columns([5, 2])
+    with t1:
+        st.subheader(f"{h['key']} · {h['summary']}")
+        st.caption(f"{h['issuetype']} · {h['project']} · created {h['created']:%b %d, %Y}"
+                   + (f" · domains: {', '.join(h['domains'])}" if h["domains"] else ""))
+    with t2:
+        st.link_button("Open in Jira ↗", h["url"], width="stretch")
+        host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+        st.caption(f"Share: `{('http://' + host) if host else ''}/?ticket={h['key']}`")
+    c = st.columns(6)
+    for col, (label, value) in zip(c, [("Status", h["status"]), ("Priority · Size", f"{h['priority']} · {h['size']}"),
+                                       ("Assignee", h["assignee"]), ("Requester", h["requester"]),
+                                       ("Business Lead", h["lead"]),
+                                       ("SLA", "No PE SLA" if not h["sla_applies"] else f"{k['sla_bd']} business days")]):
+        col.caption(label)
+        col.markdown(f"**{value}**")
+
+    # Verdict
+    icon = {"good": "✓", "warn": "!", "bad": "✖", "info": "•"}
+    with st.container(border=True):
+        st.markdown("**Where it stands**")
+        st.markdown("  \n".join(f"{icon.get(tone, '•')}&nbsp; {text}" for tone, text in story["verdict"]))
+
+    # Key numbers
+    pct = lambda v: "—" if v is None else f"{v:.0%}"  # noqa: E731
+    n = st.columns(6)
+    n[0].metric("Age", f"{k['age_bd']} bd", help="Business days from request to done (or to today).")
+    n[1].metric("In Current Status", "—" if k["in_status_bd"] is None else f"{k['in_status_bd']} bd")
+    n[2].metric("SLA Used", pct(k["sla_used"]),
+                None if k["sla_left_bd"] is None else (f"{k['sla_left_bd']} bd left" if k["sla_left_bd"] >= 0
+                                                        else f"{-k['sla_left_bd']} bd overdue"),
+                delta_color="normal" if (k["sla_left_bd"] or 0) >= 0 else "inverse")
+    n[3].metric("Waiting · Working", f"{k['waiting_bd'] if k['waiting_bd'] is not None else '—'} · "
+                                     f"{k['working_bd'] if k['working_bd'] is not None else '—'} bd",
+                help="Waiting: created → Target start. Working: Target start → done (or today).")
+    n[4].metric("Date Moves · Rework", f"{k['date_moves']} · {k['rework']}",
+                help="Target date moves (after the date passed: " + str(k["late_moves"]) + "); times sent back after validation.")
+    n[5].metric("Comments · People", f"{k['comments']} · {k['people']}",
+                help="First reply by someone other than the requester: "
+                     + ("—" if k["first_reply_h"] is None else f"{k['first_reply_h']} business hours"))
+    if not story["history"]:
+        st.info("Change history wasn't loaded with the last fetch, so the status timeline, date history and time in each "
+                "status are limited. Fetch Jira tickets again.")
+
+    # Timeline
+    st.subheader("Timeline")
+    st.caption("Status and assignee over the ticket's life, key dates (◇ SLA due, ▷ Target start, hollow ▷ earlier Target "
+               "starts, ✕ Target end, ★ done), every comment by role, and the forecast for open work. Hover for details.")
+    st.plotly_chart(story["timeline_fig"], width="stretch")
+
+    a1, a2 = st.columns(2)
+    with a1:
+        st.subheader("Where the Time Went")
+        st.caption("Business days in each status, against the median for similar completed tickets"
+                   + (f" ({story['typical_basis']})." if story["typical_basis"] else "."))
+        tf = tstory.time_figure(story["time_df"])
+        if tf is not None:
+            st.plotly_chart(tf, width="stretch")
+    with a2:
+        st.subheader("Target Date History")
+        if k["clock_after_fact"]:
+            st.warning("The SLA clock (Target start) was set on or after the day the work was done.")
+        if story["date_df"].empty:
+            st.caption("No Target date changes recorded (dates entered when the ticket was created have no history).")
+        else:
+            st.dataframe(story["date_df"], width="stretch", hide_index=True)
+
+    st.subheader("Conversation")
+    conv = story["conversation_df"]
+    if conv.empty:
+        st.caption("No comments.")
+    else:
+        st.caption("Every comment in order. Reply After = business hours since the previous person's comment. Themes are "
+                   "the friction themes from Teams Conversations. Dashboard rows are comments the dashboard posted.")
+        st.dataframe(conv.assign(When=conv["When"].dt.strftime("%b %d, %Y %H:%M")), width="stretch", hide_index=True,
+                     height=min(460, 38 + 35 * len(conv)),
+                     column_config={"Comment": st.column_config.TextColumn("Comment", width="large")})
+
+    b1, b2 = st.columns([3, 2])
+    with b1:
+        st.subheader("Connections")
+        if story["deps_fig"] is not None:
+            st.caption("What this ticket waits on (left) and holds up (right), at any depth.")
+            st.plotly_chart(story["deps_fig"], width="stretch")
+        if not story["links_df"].empty:
+            st.dataframe(_story_links(story["links_df"]), width="stretch", hide_index=True, column_config={
+                "Story": STORY_LINK,
+                "Ticket": st.column_config.LinkColumn("Ticket", display_text=r".*/([^/]+)$")})
+        elif story["deps_fig"] is None:
+            st.caption("No linked tickets.")
+    with b2:
+        st.subheader("People Involved")
+        if not story["people_df"].empty:
+            st.dataframe(story["people_df"], width="stretch", hide_index=True)
+
+    d1, d2 = st.columns(2)
+    with d1:
+        st.subheader("Similar Tickets")
+        sim = story["similar"]
+        if sim.get("n"):
+            st.caption(f"Completed in the last year: {sim['basis']} ({sim['n']} tickets).")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Typical Lead Time", f"{sim['lead_p50']:.0f} bd")
+            s2.metric("85% Done Within", f"{sim['lead_p85']:.0f} bd")
+            s3.metric("SLA Met", pct(sim.get("sla_met")))
+            if "recent_df" in sim:
+                st.dataframe(_story_links(sim["recent_df"]), width="stretch", hide_index=True, column_config={
+                    "Story": STORY_LINK,
+                    "Ticket": st.column_config.LinkColumn("Ticket", display_text=r".*/([^/]+)$")})
+        else:
+            st.caption("No similar completed tickets.")
+    with d2:
+        st.subheader("Forecasts Posted vs Reality")
+        if story["posted_df"].empty:
+            st.caption("No forecast has been posted to this ticket (Backlog → Post forecast as comments).")
+        else:
+            st.dataframe(story["posted_df"], width="stretch", hide_index=True)
+
+    st.download_button("⬇️ Download a one-page summary (HTML, print to PDF)", tstory.summary_html(story).encode("utf-8"),
+                       file_name=f"{h['key']}_status.html", mime="text/html", key="ticket_summary")
