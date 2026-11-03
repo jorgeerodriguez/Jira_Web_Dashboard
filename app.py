@@ -115,7 +115,7 @@ for k, v in _defaults.items():
         st.session_state[k] = v
 # Shareable links: ?ticket=DEVOPS-123 opens "Status of My Ticket" on that ticket.
 if st.query_params.get("ticket") and not st.session_state.get("_ticket_link_opened"):
-    st.session_state["selected_menu"] = "🔍  Status of My Ticket"
+    st.session_state["_nav_pending"] = "🔍  Status of My Ticket"
     st.session_state["_ticket_link_opened"] = True
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
@@ -246,15 +246,17 @@ with st.sidebar:
         "🔍  Status of My Ticket",
     ]
 
-    selected = st.radio(
-        "Navigate to",
-        MENU_ITEMS,
-        index=MENU_ITEMS.index(st.session_state.get("selected_menu"))
-        if st.session_state.get("selected_menu") in MENU_ITEMS else MENU_ITEMS.index(WELCOME),
-        label_visibility="collapsed",
-    )
-    if selected != st.session_state.get("selected_menu"):
-        st.session_state["selected_menu"] = selected
+    # The menu has a fixed key, so its identity never changes. Code that jumps to a page (Welcome buttons, ticket
+    # stories, shareable links) sets `_nav_pending`, applied here before the menu is drawn; changing the menu's
+    # default instead would make Streamlit treat it as a new widget and drop the user's next click.
+    pending = st.session_state.pop("_nav_pending", None)
+    if pending in MENU_ITEMS:
+        st.session_state["nav_menu"] = pending
+    elif st.session_state.get("nav_menu") not in MENU_ITEMS:
+        st.session_state["nav_menu"] = (st.session_state.get("selected_menu")
+                                        if st.session_state.get("selected_menu") in MENU_ITEMS else WELCOME)
+    selected = st.radio("Navigate to", MENU_ITEMS, key="nav_menu", label_visibility="collapsed")
+    st.session_state["selected_menu"] = selected
 
     st.divider()
     report_date = st.date_input("Report date", value=date.today())
@@ -957,22 +959,35 @@ start_date = report_date - timedelta(days=lookback_days - 1)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Executive Summary ────────────────────────────────────────────────────────
-def _story_links(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add a "Story" column (link to Status of My Ticket) next to a Jira "Ticket" link column."""
-    if frame is None or frame.empty or "Ticket" not in frame.columns:
-        return frame
-    keys = frame["Ticket"].astype(str).str.split("/").str[-1]
-    out = frame.copy()
-    out.insert(out.columns.get_loc("Ticket") + 1, "Story", "/?ticket=" + keys)
-    return out
+TICKET_PAGE = "🔍  Status of My Ticket"
 
 
-STORY_LINK = st.column_config.LinkColumn("Story", help="Open this ticket's status and history",
-                                         display_text="🔍 story", width="small")
+def _open_story(ticket: str) -> None:
+    """Switch to Status of My Ticket on `ticket` in this session (no re-fetch), and update the share link."""
+    st.session_state["_story_nav_n"] = st.session_state.get("_story_nav_n", 0) + 1   # fresh tables: no stale selection
+    st.session_state["_ticket_pending"] = ticket
+    st.session_state["_nav_pending"] = TICKET_PAGE
+    st.query_params["ticket"] = ticket
+    st.rerun()
+
+
+def _story_table(frame: pd.DataFrame, key: str, **kwargs) -> None:
+    """A dataframe whose rows open the ticket's story when selected (same tab, same session)."""
+    if frame is None or frame.empty:
+        st.dataframe(frame, **kwargs)
+        return
+    n = st.session_state.get("_story_nav_n", 0)
+    event = st.dataframe(frame, key=f"{key}_{n}", on_select="rerun", selection_mode="single-row", **kwargs)
+    rows = event.selection.rows if event is not None else []
+    if rows:
+        _open_story(str(frame.iloc[rows[0]]["Ticket"]).split("/")[-1])
+
+
+STORY_HINT = "Select a row to open that ticket in Status of My Ticket."
 
 
 def _go_to(page: str) -> None:
-    st.session_state["selected_menu"] = page
+    st.session_state["_nav_pending"] = page
 
 
 if selected == WELCOME:
@@ -1403,12 +1418,12 @@ elif selected == "🔄  In Progress":
             st.plotly_chart(ip["velocity_fig"], width="stretch")
 
         st.subheader("In Progress Forecast Detail")
-        st.dataframe(
-            _story_links(ip["forecast_df"]),
+        st.caption(STORY_HINT)
+        _story_table(
+            ip["forecast_df"], "ip_story",
             width="stretch",
             hide_index=True,
             column_config={
-                "Story": STORY_LINK,
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
                     help="Open Jira ticket",
@@ -1691,12 +1706,12 @@ elif selected == "🗂️  Backlog":
             f"Start Confidence by queue position: High (#1, typically within ±{BACKLOG_START_MISS['High']} bd), "
             f"Medium (#2–3, ±{BACKLOG_START_MISS['Medium']} bd), Low (#4+, ±{BACKLOG_START_MISS['Low']} bd)."
         )
-        st.dataframe(
-            _story_links(backlog["forecast_df"]),
+        st.caption(STORY_HINT)
+        _story_table(
+            backlog["forecast_df"], "bl_story",
             width="stretch",
             hide_index=True,
             column_config={
-                "Story": STORY_LINK,
                 "Ticket": st.column_config.LinkColumn(
                     "Ticket",
                     help="Open Jira ticket",
@@ -2406,17 +2421,16 @@ elif selected == "🛡️  SLA (Service Level Agreements)":
         with s2:
             st.download_button("⬇️ CSV", shown.to_csv(index=False).encode("utf-8"), file_name=file_name,
                                mime="text/csv", key=f"{key}_csv", width="stretch")
-        shown = _story_links(shown)
         config = {
-            "Story": STORY_LINK,
             "Ticket": st.column_config.LinkColumn("Ticket", help="Open in Jira to comment or review",
                                                   display_text=r".*/([^/]+)$"),
             "Latest Comment": st.column_config.TextColumn("Latest Comment", width="large"),
             "Summary": st.column_config.TextColumn("Summary", width="medium"),
         }
         config.update(extra_config or {})
-        st.dataframe(shown, width="stretch", hide_index=True, column_config=config, height=min(560, 38 + 35 * len(shown)))
-        st.caption(f"{len(shown)} of {len(frame)} tickets")
+        _story_table(shown.reset_index(drop=True), f"{key}_story", width="stretch", hide_index=True, column_config=config,
+                     height=min(560, 38 + 35 * len(shown)))
+        st.caption(f"{len(shown)} of {len(frame)} tickets · {STORY_HINT}")
 
     st.divider()
     _searchable_table(
@@ -3150,10 +3164,15 @@ elif selected == "🔍  Status of My Ticket":
     shared = cache[1]
     options = shared["options"]
     labels = dict(zip(options["key"], options["label"]))
-    wanted = st.query_params.get("ticket")
+    pending = st.session_state.pop("_ticket_pending", None)
     keys = list(options["key"])
+    if pending in keys:
+        st.session_state["ticket_pick"] = pending
+    elif st.query_params.get("ticket") in keys and st.session_state.get("ticket_pick") is None:
+        st.session_state["ticket_pick"] = st.query_params.get("ticket")
+    wanted = st.query_params.get("ticket")
     pick = st.selectbox("Find a ticket (type the key or words from the title)", keys,
-                        index=keys.index(wanted) if wanted in keys else None, format_func=lambda k: labels.get(k, k),
+                        index=None, format_func=lambda k: labels.get(k, k),
                         placeholder="e.g. DEVOPS-10807 or 'CloudFront'", key="ticket_pick")
     if wanted and wanted not in keys:
         st.warning(f"{wanted} isn't a PE ticket (or a CAR ticket linked to PE work) in the fetched data.")
@@ -3253,8 +3272,8 @@ elif selected == "🔍  Status of My Ticket":
             st.caption("What this ticket waits on (left) and holds up (right), at any depth.")
             st.plotly_chart(story["deps_fig"], width="stretch")
         if not story["links_df"].empty:
-            st.dataframe(_story_links(story["links_df"]), width="stretch", hide_index=True, column_config={
-                "Story": STORY_LINK,
+            st.caption(STORY_HINT)
+            _story_table(story["links_df"], "tk_links", width="stretch", hide_index=True, column_config={
                 "Ticket": st.column_config.LinkColumn("Ticket", display_text=r".*/([^/]+)$")})
         elif story["deps_fig"] is None:
             st.caption("No linked tickets.")
@@ -3274,8 +3293,7 @@ elif selected == "🔍  Status of My Ticket":
             s2.metric("85% Done Within", f"{sim['lead_p85']:.0f} bd")
             s3.metric("SLA Met", pct(sim.get("sla_met")))
             if "recent_df" in sim:
-                st.dataframe(_story_links(sim["recent_df"]), width="stretch", hide_index=True, column_config={
-                    "Story": STORY_LINK,
+                _story_table(sim["recent_df"], "tk_similar", width="stretch", hide_index=True, column_config={
                     "Ticket": st.column_config.LinkColumn("Ticket", display_text=r".*/([^/]+)$")})
         else:
             st.caption("No similar completed tickets.")

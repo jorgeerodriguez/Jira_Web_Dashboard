@@ -320,8 +320,11 @@ tickets, no cycles.
 The **🔍 Status of My Ticket** page (`reports/ticket_story.py`) shows the whole status and history of one ticket.
 It covers PE tickets plus Release Management (CAR) tickets linked to PE work (either side of the link). Pick a ticket by
 key or title words, or open a link: `/?ticket=DEVOPS-123` opens the page on that ticket (after **Fetch All Jira
-Tickets** in a new session). The **🔍 story** column in the SLA Detail, Breached Tickets, Backlog Forecast Detail and
-In Progress Forecast Detail tables opens a ticket's story the same way (in a new tab, so a new session).
+Tickets** in a new session). **Selecting a row** in the SLA Detail, Breached Tickets, Backlog Forecast Detail and In
+Progress Forecast Detail tables — and in the page's own Connections and Similar Tickets tables — opens that ticket's story
+in the same tab and session, with no re-fetch, and updates the share link. The sidebar menu has a fixed key; code that
+jumps to a page (Welcome buttons, ticket stories, shareable links) sets a pending page that is applied before the menu is
+drawn, so a jump never swallows the user's next menu click.
 
 - **Header**: status, priority and size, assignee, requester, business lead, SLA, domains, Jira link and the share link.
 - **Where it stands**: plain-English verdict from rules (no AI): time in the current status, the forecast (likely and
@@ -1202,7 +1205,8 @@ In practical terms, this means the model now uses both binary history and latene
 ## Release notes
 
 ### 2026-11-03
-- New **🔍 Status of My Ticket** page: verdict, key numbers, timeline, time vs similar tickets, date history, conversation, connections, people, similar tickets, posted forecasts vs reality, shareable `?ticket=` links, 🔍 story links in the SLA, Backlog and In Progress tables, and a printable summary (see [How Status of My Ticket works](#how-status-of-my-ticket-works))
+- **Status of My Ticket**: selecting a row in the SLA, Backlog and In Progress detail tables (and the page's Connections and Similar Tickets) opens the story in the same tab, no re-fetch; fixed the menu occasionally ignoring a click after the app jumped to a page
+- New **🔍 Status of My Ticket** page: verdict, key numbers, timeline, time vs similar tickets, date history, conversation, connections, people, similar tickets, posted forecasts vs reality, shareable `?ticket=` links, story links from the SLA, Backlog and In Progress tables, and a printable summary (see [How Status of My Ticket works](#how-status-of-my-ticket-works))
 - Change history now also loads assignee changes
 - Added `tests/test_ticket_story.py`
 
