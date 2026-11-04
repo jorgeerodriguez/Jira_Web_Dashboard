@@ -990,6 +990,58 @@ def _go_to(page: str) -> None:
     st.session_state["_nav_pending"] = page
 
 
+def _executive_report_panel() -> None:
+    """Monthly Executive Report download: only on the machine running the app (see report_permission)."""
+    from reports import executive_report as er
+    from reports import jira_dates
+
+    host = st.context.headers.get("Host", "") if hasattr(st, "context") else ""
+    if not jira_dates.is_local_host(host):
+        return                                     # shared copies never show it
+    allowed, reason = er.report_permission(host)
+    if not allowed:
+        st.caption(f"📄 Executive Report: {reason}")
+        return
+    df = st.session_state.get("jira_df_issues")
+    months = er.available_months(df)
+    with st.expander("📄 Executive Report (this machine only)"):
+        if not months:
+            st.info("Fetch the Jira tickets first.")
+            return
+        st.caption("A self-contained report for leadership: one full month compared with the month before. "
+                   "It names tickets and business leads, not engineers. Nothing is saved or sent: you download it.")
+        c1, c2 = st.columns([2, 1])
+        month = c1.selectbox("Month", months, format_func=lambda m: pd.Period(m, "M").strftime("%B %Y"),
+                             key="exec_report_month")
+        want_pdf = c2.checkbox("Also make a PDF", value=er.chrome_path() is not None,
+                               disabled=er.chrome_path() is None, key="exec_report_pdf",
+                               help="Printed with Google Chrome on this machine.")
+        if st.button("Build report", type="primary", key="exec_report_build"):
+            with st.spinner("Building the report…"):
+                report = er.build_executive_report(df, st.session_state.get("jira_change_history"), month=month,
+                                                   fetched_at=st.session_state.get("jira_fetched_at"))
+                if report.get("error_message"):
+                    st.error(report["error_message"])
+                    return
+                html_text = er.render_html(report)
+                st.session_state["exec_report_files"] = {
+                    "month": month, "html": html_text.encode("utf-8"), "html_name": er.filename(report),
+                    "pdf": er.html_to_pdf(html_text) if want_pdf else None, "pdf_name": er.filename(report, "pdf"),
+                    "notes": report["notes"]}
+        files = st.session_state.get("exec_report_files")
+        if files and files["month"] == month:
+            for note in files["notes"]:
+                st.caption(f"⚠️ {note}")
+            d1, d2 = st.columns(2)
+            d1.download_button("⬇️ Download HTML", files["html"], files["html_name"], "text/html",
+                               key="exec_report_dl_html")
+            if files["pdf"]:
+                d2.download_button("⬇️ Download PDF", files["pdf"], files["pdf_name"], "application/pdf",
+                                   key="exec_report_dl_pdf")
+            elif want_pdf:
+                d2.caption("The PDF could not be printed; open the HTML and print it from the browser.")
+
+
 if selected == WELCOME:
     render_welcome(st, _go_to, st.session_state.get("jira_df_issues"), st.session_state.get("jira_change_history"),
                    st.session_state.get("jira_fetched_at"))
@@ -1000,6 +1052,7 @@ elif selected == "📋  Executive Summary":
         report_date,
         lookback_days,
     )
+    _executive_report_panel()
 
 
 # ── Overview ───────────────────────────────────────────────────────────────────

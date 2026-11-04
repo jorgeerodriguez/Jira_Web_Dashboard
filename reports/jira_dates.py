@@ -66,15 +66,26 @@ def _env_file_value(name: str) -> str | None:
     return value or None
 
 
-def write_flag() -> tuple[bool, str]:
+def env_flag(name: str) -> tuple[bool, str]:
     """(enabled, where the setting came from). The .env value wins; an empty or missing one falls back to
     the environment; anything not true-ish (or nothing at all) means off."""
-    value, source = _env_file_value("JIRA_WRITE_ENABLED"), ".env"
+    value, source = _env_file_value(name), ".env"
     if value is None:
-        value, source = os.environ.get("JIRA_WRITE_ENABLED", "").strip() or None, "environment"
+        value, source = os.environ.get(name, "").strip() or None, "environment"
     if value is None:
         return False, "not set"
     return value.lower() in TRUE_VALUES, source
+
+
+def write_flag() -> tuple[bool, str]:
+    return env_flag("JIRA_WRITE_ENABLED")
+
+
+def is_local_host(host: str | None) -> bool:
+    """True when the browser's Host header (e.g. 'localhost:8501') names this machine."""
+    host = (host or "").strip().lower()
+    hostname = host.split("]")[0] + "]" if host.startswith("[") else host.split(":")[0]
+    return hostname in LOCAL_HOSTS
 
 
 # ── Permission ──────────────────────────────────────────────────────────────────
@@ -85,9 +96,7 @@ def write_permission(host: str | None) -> tuple[bool, str]:
     if not enabled:
         return False, ("Jira updates are off. To enable them on your own machine, set JIRA_WRITE_ENABLED=true "
                        f"in the project .env file (currently: {source if source == 'not set' else 'off in ' + source}).")
-    host = (host or "").strip().lower()
-    hostname = host.split("]")[0] + "]" if host.startswith("[") else host.split(":")[0]
-    if hostname not in LOCAL_HOSTS and os.environ.get("JIRA_WRITE_ALLOW_REMOTE", "").strip().lower() != "true":
+    if not is_local_host(host) and os.environ.get("JIRA_WRITE_ALLOW_REMOTE", "").strip().lower() != "true":
         return False, ("Jira updates are only allowed from the machine running the app (localhost). "
                        "This copy has no login, so updates are blocked here.")
     return True, f"Jira updates are enabled (JIRA_WRITE_ENABLED=true in {source})."

@@ -236,3 +236,6 @@ __marimo__/
 
 # Generated white paper and leadership brief PDFs (internal numbers; the GitHub repo is public)
 docs/whitepaper/*.pdf
+
+# Generated executive reports (ticket and business-lead names; the GitHub repo is public)
+docs/executive_report/output/
