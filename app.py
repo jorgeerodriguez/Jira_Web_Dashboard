@@ -3287,7 +3287,8 @@ elif selected == "🔍  Status of My Ticket":
     # Timeline
     st.subheader("Timeline")
     st.caption("Status and assignee over the ticket's life, key dates (◇ SLA due, ▷ Target start, hollow ▷ earlier Target "
-               "starts, ✕ Target end, ★ done), every comment by role, and the forecast for open work. Hover for details.")
+               "starts, ✕ Target end, ★ done), every comment by role, merge requests (■, when their link was posted on "
+               "the ticket), and the forecast for open work. Hover for details.")
     st.plotly_chart(story["timeline_fig"], width="stretch")
 
     a1, a2 = st.columns(2)
@@ -3334,6 +3335,20 @@ elif selected == "🔍  Status of My Ticket":
         st.subheader("People Involved")
         if not story["people_df"].empty:
             st.dataframe(story["people_df"], width="stretch", hide_index=True)
+
+    st.subheader("Merge Requests")
+    mrs = story["mr_df"]
+    if mrs.empty:
+        st.caption("No GitLab merge request links in this ticket's description or comments. Jira's GitLab "
+                   "integration isn't connected, so MRs only show here when someone pastes their link.")
+    else:
+        st.caption("GitLab MRs whose links were pasted in the description or comments, dated when the link was "
+                   "first posted (not when the MR was opened or merged).")
+        st.dataframe(mrs.drop(columns=["First Mentioned"]).assign(When=mrs["When"].dt.strftime("%b %d, %Y %H:%M"))
+                     [["MR", "Project", "MR #", "When", "By", "Where", "Mentions"]],
+                     width="stretch", hide_index=True, column_config={
+                         "MR": st.column_config.LinkColumn("MR", display_text="Open"),
+                         "When": st.column_config.TextColumn("Link Posted")})
 
     d1, d2 = st.columns(2)
     with d1:

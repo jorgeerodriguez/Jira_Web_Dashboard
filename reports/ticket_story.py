@@ -7,6 +7,8 @@ the dashboard, so the numbers agree with the other pages:
 - the change history (status, Target dates, assignee) for the timeline, date history and time in each status;
 - human comments for the conversation log (friction themes, @mentions, reply gaps in business hours);
 - issue links for what the ticket waits on and holds up (dependency_graph);
+- GitLab merge requests whose links were pasted in the description or comments (data/merge_request_links), dated
+  when the link was posted (Jira's GitLab integration isn't connected, so open / merge times aren't known);
 - forecasts posted to the ticket (jira_forecast tags) against what actually happened.
 
 `build_ticket_story(df, history, key)` returns a payload of plain values, tables and figures; the page and the
@@ -23,6 +25,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from data.dashboard_comments import parse_forecast
+from data.merge_request_links import merge_request_table
 from reports import change_history as chg
 from reports import domains
 from reports import executive_summary as es
@@ -39,6 +42,7 @@ TYPICAL_DAYS = 365
 _MENTION = re.compile(r"\[~accountid:([^\]]+)\]")
 STAGE_COLORS = {"Backlog": "#8891a7", "In Progress": "#2a78d6", "Validating": "#1baf7a", "Blocked & On Hold": "#e34948",
                 "Release": "#4a3aa7", "Closed": "#008300", "Other": "#b0b8c6"}
+MR_COLOR = "#6b4fbb"
 ROLE_COLORS = {"Requester": "#eb6834", "Assignee": "#2a78d6", "PE": "#1baf7a", "Other": "#8891a7", "Dashboard": "#b0b8c6"}
 INK = ipr.INK
 
@@ -187,8 +191,9 @@ def conversation(row: pd.Series, assignees: set[str], pe_people: set[str], names
 # ── Timeline figure ─────────────────────────────────────────────────────────────
 
 def timeline_figure(status_spans, assignee_spans, markers: list[dict], comments: pd.DataFrame,
-                    forecast: dict | None, today: pd.Timestamp) -> go.Figure:
-    lanes = ["Status", "Assignee", "Dates", "Comments", "Forecast"]
+                    forecast: dict | None, today: pd.Timestamp, mrs: pd.DataFrame | None = None) -> go.Figure:
+    has_mrs = mrs is not None and not mrs.empty
+    lanes = ["Status", "Assignee", "Dates", "Comments"] + (["Merge requests"] if has_mrs else []) + ["Forecast"]
     fig = go.Figure()
     ms = lambda a, b: (pd.Timestamp(b) - pd.Timestamp(a)).total_seconds() * 1000  # noqa: E731
     shown = set()
@@ -236,6 +241,20 @@ def timeline_figure(status_spans, assignee_spans, markers: list[dict], comments:
                 marker=dict(size=10, color=ROLE_COLORS.get(role, "#8891a7"), line=dict(color="white", width=1)),
                 customdata=np.stack([g["Author"], g["Comment"].str[:140]], axis=1),
                 hovertemplate="<b>%{customdata[0]}</b> · %{x|%b %d %H:%M}<br>%{customdata[1]}<extra></extra>"))
+    if has_mrs:
+        # Links posted together (one comment) share a marker, so their labels don't pile up.
+        groups = [(when, g) for when, g in mrs.groupby("When", sort=True)]
+        labels = [g.iloc[0]["MR #"] if len(g) == 1 else f"{len(g)} MRs" for _, g in groups]
+        hover = ["<br>".join(html_lib.escape(f"{m['Project']} {m['MR #']}") for _, m in g.iterrows())
+                 + f"<br>Link posted %{{x|%b %d %H:%M}} by {html_lib.escape(str(g.iloc[0]['By']))} "
+                   f"({html_lib.escape(str(g.iloc[0]['Where']))})<extra></extra>" for _, g in groups]
+        for (when, _), label, tip in zip(groups, labels, hover):
+            fig.add_trace(go.Scatter(
+                x=[when], y=["Merge requests"], mode="markers+text", name="Merge request (link posted)",
+                legendgroup="mr", showlegend=label == labels[0] and when == groups[0][0],
+                text=[label], textposition="top center", textfont=dict(size=9, color=INK),
+                marker=dict(size=11, symbol="square", color=MR_COLOR, line=dict(color="white", width=1)),
+                hovertemplate=tip))
     fig.add_vline(x=today, line_dash="dash", line_color=INK, line_width=1)
     fig.add_annotation(x=today, y=1.0, yref="paper", text="Today", showarrow=False, xanchor="left", yanchor="bottom",
                        font=dict(color=INK, size=10))
@@ -360,6 +379,11 @@ def build_ticket_story(df_issues: pd.DataFrame, history: pd.DataFrame | None, ke
         if not other.empty:
             reply = round(business_hours_between(created.to_pydatetime(), other.iloc[0]["When"].to_pydatetime()), 1)
 
+    # ── Merge requests (links pasted on the ticket) ──
+    mr_df = merge_request_table(raw.get("merge_requests"))
+    if not mr_df.empty:
+        mr_df["When"] = mr_df["First Mentioned"].map(_local)
+
     # ── Rework and time in status ──
     seq = [str(s["value"]).casefold() for s in status_spans]
     rework = sum(1 for a, b in zip(seq, seq[1:]) if a in REWORK_FROM and b in REWORK_TO)
@@ -483,7 +507,7 @@ def build_ticket_story(df_issues: pd.DataFrame, history: pd.DataFrame | None, ke
         "late_moves": int(k_dates["late_moves"]) if k_dates is not None else 0,
         "clock_after_fact": bool(k_dates["clock_after_fact"]) if k_dates is not None else False,
         "rework": rework, "comments": int(len(human)), "people": len(people), "first_reply_h": reply,
-        "status_changes": max(len(status_spans) - 1, 0),
+        "status_changes": max(len(status_spans) - 1, 0), "mrs": int(len(mr_df)),
     }
 
     markers = [
@@ -499,7 +523,7 @@ def build_ticket_story(df_issues: pd.DataFrame, history: pd.DataFrame | None, ke
             markers.append({"at": c["old"], "label": f"Earlier Target start (moved {c['day']:%b %d})", "short": "",
                             "symbol": "triangle-right-open", "color": "#8891a7"})
     fig = timeline_figure(status_spans, assignee_spans, markers, comments, forecast,
-                          pd.Timestamp.now(tz=ipr.LOCAL_TZ).tz_localize(None))
+                          pd.Timestamp.now(tz=ipr.LOCAL_TZ).tz_localize(None), mr_df)
 
     header = {"key": key, "url": JIRA + key, "summary": raw.get("summary") or "", "status": r["status"], "stage": stage,
               "priority": r["priority_bucket"], "size": r["size"], "assignee": r["assignee_name"],
@@ -510,7 +534,7 @@ def build_ticket_story(df_issues: pd.DataFrame, history: pd.DataFrame | None, ke
     return {"error_message": None, "header": header, "kpis": kpis,
             "verdict": _verdict(r, kpis, forecast, blockers, hol), "timeline_fig": fig, "time_df": time_df,
             "typical_basis": basis, "date_df": date_df, "conversation_df": comments, "deps_fig": deps_fig,
-            "links_df": links_df, "posted_df": posted_df, "people_df": people_df, "similar": similar,
+            "links_df": links_df, "mr_df": mr_df, "posted_df": posted_df, "people_df": people_df, "similar": similar,
             "history": chg.has_history(history)}
 
 
@@ -538,6 +562,10 @@ def summary_html(story: dict) -> str:
     dates = story["date_df"]
     date_rows = "".join(f"<tr><td>{d['When']}</td><td>{d['Field']}</td><td>{d['Change']}</td><td>{d['From'] or '—'} → "
                         f"{d['To'] or '—'}</td></tr>" for _, d in dates.tail(8).iterrows()) if not dates.empty else ""
+    mrs = story.get("mr_df", pd.DataFrame())
+    mr_rows = "".join(f"<tr><td><a href=\"{html_lib.escape(m['MR'])}\">{html_lib.escape(m['Project'])} {m['MR #']}</a></td>"
+                      f"<td>link posted {m['When']:%b %d} by {html_lib.escape(str(m['By']))}</td></tr>"
+                      for _, m in mrs.head(10).iterrows()) if not mrs.empty else ""
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{h['key']} status</title>
 <style>body{{font-family:Inter,Helvetica,Arial,sans-serif;color:#1f2937;max-width:7.2in;margin:0.5in auto;font-size:10pt}}
 h1{{font-size:16pt;margin:0}} h2{{font-size:11pt;border-bottom:1.5px solid #2a78d6;padding-bottom:3px;margin-top:16px}}
@@ -548,6 +576,7 @@ table{{border-collapse:collapse;width:100%}} td{{border-bottom:1px solid #e2e8f0
 <h2>Where it stands</h2><ul>{verdict}</ul>
 <h2>Key facts</h2><table>{facts}</table>
 {'<h2>Target date changes</h2><table>' + date_rows + '</table>' if date_rows else ''}
+{'<h2>Merge requests</h2><table>' + mr_rows + '</table>' if mr_rows else ''}
 <h2>Latest conversation</h2><ul>{comments or '<li>No human comments.</li>'}</ul>
 <p class="muted">Business days skip weekends and company holidays. Generated from Jira data by the PE Delivery Dashboard.</p>
 </body></html>"""

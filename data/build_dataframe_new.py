@@ -1,6 +1,7 @@
 import pandas as pd
 
 from data.dashboard_comments import is_dashboard_comment
+from data.merge_request_links import issue_merge_requests
 
 # Custom field definitions
 CF_BUSINESS_LEAD    = "customfield_11751"
@@ -84,7 +85,7 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
         "assignee, summary, key, status, created, updated, issuetype, creator, project, "
         "duedate, priority, customfield_10947, customfield_11751, customfield_11445, "
         "customfield_11312, customfield_10300, parentProject, parent, customfield_10946, resolutiondate, customfield_10968, "
-        "statuscategorychangedate, comment, reporter, issuelinks"
+        "statuscategorychangedate, comment, reporter, issuelinks, description"
     )
 
     # Build JQL query — 24-month lookback
@@ -273,6 +274,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "comments": human_comments,
             # Issue links (blocks / is blocked by / relates to ...), for the dependency graph.
             "links": _issue_links(fields),
+            # GitLab MR links pasted in the description or comments (the description itself is not kept).
+            "merge_requests": issue_merge_requests(fields),
             "comment_total": comment_total,
             "bot_comment_count": bot_comments,
             # Posted by the dashboard (Target date updates, assignments, forecasts): not human conversation.
