@@ -102,23 +102,19 @@ def _example(t: pd.DataFrame, ids) -> str:
     return " · ".join(t.loc[sorted(ids, key=lambda i: t.at[i, "created_day"], reverse=True)[:EXAMPLES], "key"])
 
 
-def build_domain_suggestions(df_issues: pd.DataFrame, people: list[str] | None = None,
-                             today: pd.Timestamp | None = None) -> dict:
-    if df_issues is None or df_issues.empty or "summary" not in df_issues.columns:
-        return _empty("No ticket data loaded.")
-    today = today if today is not None else ipr.today_local()
+def _prepare(df_issues: pd.DataFrame, today: pd.Timestamp) -> dict | None:
+    """Tickets of the last MONTHS months with their terms and domains, and which tickets carry each term/domain."""
     hol = ipr._calendar_holidays(today)
     facts = es._facts(df_issues, today, hol)
     t = facts[facts["created_day"] > today - pd.DateOffset(months=MONTHS)].copy().reset_index(drop=True)
     if t.empty:
-        return _empty("No tickets in the last year.")
+        return None
     description = t["description_text"] if "description_text" in t.columns else pd.Series("", index=t.index)
     skip = _people_words(df_issues)
     t["terms"] = [terms(f"{s or ''} {d if isinstance(d, str) else ''}", skip) for s, d in zip(t["summary"], description)]
-    t["domains"] = [domains.tag(domains.ticket_text(r)) for _, r in t.iterrows()]
+    t["text"] = [domains.ticket_text(r) for _, r in t.iterrows()]
+    t["domains"] = t["text"].map(domains.tag)
     n = len(t)
-    recent = set(t.index[t["created_day"] > today - pd.Timedelta(days=RECENT_DAYS)])
-
     docs: dict[str, set[int]] = defaultdict(set)
     for i, ts in t["terms"].items():
         for term in ts:
@@ -129,11 +125,15 @@ def build_domain_suggestions(df_issues: pd.DataFrame, people: list[str] | None =
     for i, ds in t["domains"].items():
         for d in ds:
             in_domain[d].add(i)
+    return {"t": t, "n": n, "docs": docs, "in_domain": in_domain, "skip": skip,
+            "recent": set(t.index[t["created_day"] > today - pd.Timedelta(days=RECENT_DAYS)])}
 
-    # 1. Keyword additions.
+
+def _keyword_additions(ctx: dict) -> pd.DataFrame:
+    t, n = ctx["t"], ctx["n"]
     rows = []
-    for term, ids in docs.items():
-        for d, members in in_domain.items():
+    for term, ids in ctx["docs"].items():
+        for d, members in ctx["in_domain"].items():
             inside = len(ids & members)
             precision = inside / len(ids)
             lift = precision / (len(members) / n)
@@ -147,40 +147,62 @@ def build_domain_suggestions(df_issues: pd.DataFrame, people: list[str] | None =
         kw = (kw.sort_values(["Domain", "Would Add", "Precision %"], ascending=[True, False, False])
               .groupby("Domain").head(PER_DOMAIN).sort_values(["Would Add", "Precision %"], ascending=False)
               .reset_index(drop=True))
+    return kw
 
-    # 2. New-domain candidates.
+
+def _new_candidates(ctx: dict) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+    """Candidate new domains, and the ticket keys behind each one."""
+    t, recent, in_domain = ctx["t"], ctx["recent"], ctx["in_domain"]
     candidates = {}
-    for term, ids in docs.items():
+    for term, ids in ctx["docs"].items():
         owned = max((len(ids & m) / len(ids) for m in in_domain.values()), default=0.0)
         untagged = sum(1 for i in ids if not t.at[i, "domains"])
         if (len(ids) >= NEW_MIN_TICKETS and owned < NEW_MAX_PRECISION
                 and (untagged >= NEW_MIN_UNTAGGED or len(ids & recent) / len(ids) >= NEW_MIN_RECENT)):
             candidates[term] = ids
-    new = pd.DataFrame(columns=NEW_COLUMNS)
-    groups = _group_terms(candidates)
-    if groups:
-        out = []
-        for group in groups:
-            ids = set().union(*(candidates[x] for x in group))
-            if len(ids) < NEW_MIN_TICKETS:
-                continue
-            keywords = sorted(group, key=lambda x: (-len(candidates[x]), len(x)))
-            rows_t = t.loc[sorted(ids)]
-            car = rows_t["project_name"].astype(str).str.casefold().eq("release management")
-            who = Counter(p for p in rows_t["assignee_name"] if isinstance(p, str) and p != "Unassigned")
-            out.append({"Candidate": _title(keywords), "Keywords": ", ".join(keywords[:6]), "Tickets": len(ids),
-                        "Untagged": int(sum(1 for i in ids if not t.at[i, "domains"])), "DEVOPS": int((~car).sum()),
-                        "CAR": int(car.sum()), "Recent %": round(len(ids & recent) / len(ids) * 100),
-                        "People": ", ".join(f"{p} ({c})" for p, c in who.most_common(3)),
-                        "Examples": _example(t, ids)})
-        new = pd.DataFrame(out, columns=NEW_COLUMNS).sort_values("Tickets", ascending=False).reset_index(drop=True)
+    out, keys = [], {}
+    for group in _group_terms(candidates):
+        ids = set().union(*(candidates[x] for x in group))
+        if len(ids) < NEW_MIN_TICKETS:
+            continue
+        keywords = sorted(group, key=lambda x: (-len(candidates[x]), len(x), x))   # deterministic order
+        rows_t = t.loc[sorted(ids)]
+        car = rows_t["project_name"].astype(str).str.casefold().eq("release management")
+        who = Counter(p for p in rows_t["assignee_name"] if isinstance(p, str) and p != "Unassigned")
+        name = _title(keywords)
+        keys[name] = list(rows_t["key"])
+        out.append({"Candidate": name, "Keywords": ", ".join(keywords[:6]), "Tickets": len(ids),
+                    "Untagged": int(sum(1 for i in ids if not t.at[i, "domains"])), "DEVOPS": int((~car).sum()),
+                    "CAR": int(car.sum()), "Recent %": round(len(ids & recent) / len(ids) * 100),
+                    "People": ", ".join(f"{p} ({c})" for p, c in who.most_common(3)), "Examples": _example(t, ids)})
+    new = pd.DataFrame(out, columns=NEW_COLUMNS)
+    return (new.sort_values("Tickets", ascending=False).reset_index(drop=True) if len(new) else new), keys
 
+
+def candidate_domains(df_issues: pd.DataFrame, today: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
+    """Only the candidate new domains (fast: no back-test), for the application map."""
+    if df_issues is None or df_issues.empty or "summary" not in df_issues.columns:
+        return pd.DataFrame(columns=NEW_COLUMNS), {}
+    ctx = _prepare(df_issues, today if today is not None else ipr.today_local())
+    return _new_candidates(ctx) if ctx else (pd.DataFrame(columns=NEW_COLUMNS), {})
+
+
+def build_domain_suggestions(df_issues: pd.DataFrame, people: list[str] | None = None,
+                             today: pd.Timestamp | None = None) -> dict:
+    if df_issues is None or df_issues.empty or "summary" not in df_issues.columns:
+        return _empty("No ticket data loaded.")
+    today = today if today is not None else ipr.today_local()
+    ctx = _prepare(df_issues, today)
+    if ctx is None:
+        return _empty("No tickets in the last year.")
+    kw = _keyword_additions(ctx)
+    new, _ = _new_candidates(ctx)
     test = what_if(df_issues, kw, people, today) if people and len(kw) else None
     if test is not None:
         kw.insert(1, "Domain Effect", kw["Domain"].map(test["effect"]).fillna(0).astype(int))
         kw = kw.sort_values(["Domain Effect", "Would Add"], ascending=False).reset_index(drop=True)
     helpful = kw[kw["Domain Effect"] > 0] if test is not None else kw
-    return {"error_message": None, "tickets": n, "keywords_df": kw, "new_df": new,
+    return {"error_message": None, "tickets": ctx["n"], "keywords_df": kw, "new_df": new,
             "keywords_snippet": keyword_snippet(helpful), "new_snippet": new_domain_snippet(new), "what_if": test}
 
 
@@ -189,8 +211,8 @@ def _group_terms(candidates: dict[str, set[int]]) -> list[set[str]]:
     generic word, while real themes come as a name plus a phrase (vader / adtech vader)."""
     import networkx as nx
     G = nx.Graph()
-    G.add_nodes_from(candidates)
     names = sorted(candidates)
+    G.add_nodes_from(names)                       # sorted: same groups on every run
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             overlap = len(candidates[a] & candidates[b]) / len(candidates[a] | candidates[b])
@@ -199,12 +221,12 @@ def _group_terms(candidates: dict[str, set[int]]) -> list[set[str]]:
     G.remove_nodes_from([x for x in list(G) if G.degree(x) == 0])   # a theme needs two terms that go together
     if G.number_of_nodes() == 0:
         return []
-    return [set(c) for c in nx.community.louvain_communities(G, weight="weight", seed=1)]
+    return [set(c) for c in sorted(nx.community.louvain_communities(G, weight="weight", seed=1), key=min)]
 
 
 def _title(keywords: list[str]) -> str:
     """A readable name: the shortest of the leading keywords, title-cased."""
-    lead = min(keywords[:3], key=len)
+    lead = min(keywords[:3], key=lambda x: (len(x), x))
     return lead if any(c.isupper() for c in lead) else lead.title()
 
 

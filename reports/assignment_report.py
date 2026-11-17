@@ -89,7 +89,7 @@ def expertise_matrix(tickets: pd.DataFrame, today: pd.Timestamp, people: list[st
 
 
 def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str], days: int = ACCURACY_DAYS,
-                    keys=None) -> dict:
+                    keys=None, extra: pd.DataFrame | None = None) -> dict:
     """How well domain experience predicts who does the work: a back-test on recently completed tickets.
 
     For each PE ticket completed in the last `days` days by a current candidate, rank the candidates on their
@@ -98,7 +98,8 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
     busiest people at the time (all domains), i.e. what a suggestion without domains would get. Availability is
     not replayed, so this scores the domain part of the suggestions only; tickets with no domain count as misses.
     `keys` limits the tickets scored (all earlier work still counts as experience): domain_suggestions uses it to
-    re-score only the tickets a taxonomy change can affect.
+    re-score only the tickets a taxonomy change can affect. `extra` adds other evidence of experience as rows
+    (assignee_name, closed_day = when it happened, domains, weight), e.g. help given on other people's tickets.
     """
     done = tickets[tickets["outcome"].eq("Done") & tickets["assignee_name"].isin(people) & tickets["closed_day"].notna()]
     evaluate = done[done["closed_day"] > today - pd.Timedelta(days=days)]
@@ -108,7 +109,10 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
              "baseline": None, "days": days, "by_domain_df": pd.DataFrame()}
     if evaluate.empty:
         return empty
-    work = done[["assignee_name", "closed_day", "domains"]].explode("domains")
+    work = done[["assignee_name", "closed_day", "domains"]].assign(weight=1.0)
+    if extra is not None and len(extra):
+        work = pd.concat([work, extra[["assignee_name", "closed_day", "domains", "weight"]]], ignore_index=True)
+    work = work.explode("domains")
     halflife = float(EXPERTISE_HALF_LIFE_DAYS)
     rows = []
     for _, t in evaluate.iterrows():
@@ -116,7 +120,7 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
         volume = 0.5 ** ((t["created_day"] - before["closed_day"]).dt.days / halflife)
         busiest = volume.groupby(before["assignee_name"]).sum().reindex(people, fill_value=0.0)
         prior = work[work["closed_day"] < t["created_day"]]                # one row per ticket and domain
-        weight = 0.5 ** ((t["created_day"] - prior["closed_day"]).dt.days / halflife)
+        weight = 0.5 ** ((t["created_day"] - prior["closed_day"]).dt.days / halflife) * prior["weight"]
         base_top = list(busiest.sort_values(ascending=False).index[:ACCURACY_TOP])
         domain = t["domain"] if isinstance(t["domain"], str) else None
         top = []

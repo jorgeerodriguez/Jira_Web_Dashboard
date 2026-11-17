@@ -1990,6 +1990,57 @@ elif selected == "🧭  Suggested Assignments":
                                      help="Share of the tickets created in the last 90 days.")})
                     with st.expander("Snippet to apply (pick the ones you want)"):
                         st.code(sug["new_snippet"], language="python")
+                st.caption("Who knows these applications: Knowledge Graph → 📱 Applications.")
+
+                st.markdown("##### Deeper Analysis: Domains to Split and Hidden Expertise")
+                deep = st.session_state.get("_skill_deep")
+                if deep is None or deep[0] != cache_key:
+                    st.caption("Looks for separate kinds of work inside each busy domain, and for people who help on a "
+                               "domain's tickets without being assigned. Takes about 30 seconds.")
+                    if st.button("🔎 Run the deeper analysis", key="asg_deep"):
+                        from reports import skill_learning as sl
+                        people = list(asg["load_df"]["Person"]) if not asg["load_df"].empty else []
+                        with st.spinner("Grouping tickets inside each domain and back-testing each split…"):
+                            splits = sl.split_candidates(df_issues, people)
+                            hidden = sl.hidden_expertise(df_issues, people)
+                        st.session_state["_skill_deep"] = (cache_key, splits, hidden)
+                        st.rerun()
+                else:
+                    from reports import skill_learning as sl
+                    _, splits, hidden = deep
+                    st.markdown("**Domains to split**")
+                    st.caption(
+                        "Groups of tickets inside a domain that share their own vocabulary (each ticket in at most one "
+                        "group). **Effect** back-tests making the group a sub-domain, ranked before its parent: how many "
+                        "recent tickets gain (+) or lose (−) the person who did them from the top 3. Different Expert: "
+                        "the group's main person isn't the domain's. Only splits with a positive effect go into the snippet.")
+                    if splits.empty:
+                        st.caption("No separate kinds of work stand out inside the busy domains.")
+                    else:
+                        st.dataframe(splits, width="stretch", hide_index=True, height=360,
+                                     column_config={"Share of Domain %": st.column_config.ProgressColumn(
+                                         "Share of Domain %", format="%d%%", min_value=0, max_value=100)})
+                        snippet = sl.split_snippet(splits)
+                        if snippet:
+                            with st.expander("Snippet to apply (helpful splits only)"):
+                                st.code(snippet, language="python")
+                    st.markdown("**Hidden expertise**")
+                    hw = hidden["what_if"]
+                    st.caption(
+                        "Current team members who help on a domain's tickets assigned to someone else (commenting, not as "
+                        "the requester, or posting MR links) at least as often as they're assigned that domain: good "
+                        "backups and cross-training partners."
+                        + (f" Counting that help toward expertise (at {hw['weight']:.0%} of an assigned ticket) would move "
+                           f"the top-3 hit rate from {pct(hw['before'])} to {pct(hw['after'])}, so the suggestions "
+                           f"{'would gain from it' if hw['after'] > hw['before'] else 'stay based on assigned work only'}."
+                           if hw else ""))
+                    if hidden["hidden_df"].empty:
+                        st.caption("No hidden expertise found.")
+                    else:
+                        st.dataframe(hidden["hidden_df"], width="stretch", hide_index=True)
+                    if st.button("↻ Run again", key="asg_deep_again"):
+                        st.session_state.pop("_skill_deep", None)
+                        st.rerun()
 
 
 # ── Forecast ─────────────────────────────────────────────────────────────────────
@@ -3037,8 +3088,8 @@ elif selected == "🕸️  Knowledge Graph":
         st.info(g["error_message"])
         st.stop()
 
-    t_ask, t_talk, t_skill, t_dep = st.tabs(["🙋 Who Asks Whom", "💬 Who Talks to Whom", "🧠 Skills Map",
-                                             "⛓️ Dependencies"])
+    t_ask, t_talk, t_skill, t_dep, t_apps = st.tabs(["🙋 Who Asks Whom", "💬 Who Talks to Whom", "🧠 Skills Map",
+                                                     "⛓️ Dependencies", "📱 Applications"])
 
     with t_ask:
         a = g["ask_stats"]
@@ -3269,6 +3320,32 @@ elif selected == "🕸️  Knowledge Graph":
                     st.success("No other team's open ticket is waiting on open PE work.")
                 else:
                     st.dataframe(dep["others_waiting_df"], width="stretch", hide_index=True, column_config=link)
+
+    with t_apps:
+        from reports import skill_learning as sl
+        st.subheader("Who Knows Which Application")
+        st.caption(
+            "Applications and other themes learned from the text of DEVOPS and CAR tickets created in the last 12 months "
+            "(the candidate new domains on Suggested Assignments; this tab ignores the window above). Each cell counts "
+            "tickets: 1 for working on it as the assignee, 0.5 for discussing it in the comments. The busiest 15 people "
+            "are shown. For knowing who to ask and where knowledge is thin, not for rating people.")
+        apps_cache = st.session_state.get("kg_apps_cache")
+        if not apps_cache or apps_cache[0] is not df_issues:
+            with st.spinner("Finding applications in ticket text…"):
+                apps_cache = (df_issues, sl.application_map(df_issues))
+            st.session_state["kg_apps_cache"] = apps_cache
+        apps = apps_cache[1]
+        if apps["apps_df"].empty:
+            st.info("No application themes found in the ticket text yet.")
+        else:
+            fig = sl.application_figure(apps["matrix"])
+            if fig is not None:
+                st.plotly_chart(fig, width="stretch")
+            st.caption("Main Share %: the main person's share of all the work on that application. A high share with few "
+                       "people involved means the knowledge rests on one person.")
+            st.dataframe(apps["apps_df"], width="stretch", hide_index=True,
+                         column_config={"Main Share %": st.column_config.ProgressColumn(
+                             "Main Share %", format="%d%%", min_value=0, max_value=100)})
 
 
 # ── Status of My Ticket ──────────────────────────────────────────────────────────

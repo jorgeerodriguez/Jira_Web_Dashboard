@@ -74,7 +74,7 @@ def _ticket(key, summary, description="", assignee="Ana", project="DevOps", days
 def _suggestion_data():
     rows = [_ticket(f"DEVOPS-{i}", f"Grafana panel zorbex tuning {i}") for i in range(6)]          # in Grafana
     rows += [_ticket(f"DEVOPS-{10 + i}", f"Zorbex rollout step {i}") for i in range(2)]           # would be added
-    rows += [_ticket(f"CAR-{20 + i}", f"Quokka console deploy {i}", project="Release Management") for i in range(9)]
+    rows += [_ticket(f"CAR-{20 + i}", f"Quokka console {i}", project="Release Management") for i in range(9)]
     rows += [_ticket(f"DEVOPS-{40 + i}", f"Fumbleton asked again {i}", assignee="Zed Fumbleton") for i in range(8)]
     rows += [_ticket(f"DEVOPS-{60 + i}", f"wibblefish other{i}", "screenshot width alt") for i in range(8)]
     rows += [_ticket(f"DEVOPS-{100 + i}", f"filler{i} thing{i}") for i in range(90)]
@@ -111,3 +111,60 @@ def test_back_test_can_score_a_subset():
     full = domain_accuracy(t, pd.Timestamp("2026-11-17"), ["Ana", "Ben"])
     part = domain_accuracy(t, pd.Timestamp("2026-11-17"), ["Ana", "Ben"], keys={"R1"})
     assert (full["n"], full["hits"]) == (2, 1) and (part["n"], part["hits"]) == (1, 1)
+
+
+# ── Phase 3: splits, hidden expertise, applications ─────────────────────────────
+
+def _comment(author, days_ago=15):
+    from reports import in_progress_report as ipr
+    from tests.test_ticket_story import _bd
+    return {"author": author, "author_id": None, "body": "looked at this",
+            "created": (_bd(ipr, days_ago) + pd.Timedelta(hours=10)).tz_localize("UTC")}
+
+
+def test_split_finds_separate_kinds_of_work(monkeypatch):
+    pytest.importorskip("networkx")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import skill_learning as sl
+    monkeypatch.setattr(sl, "SPLIT_MIN_DOMAIN", 20)
+    rows = [_ticket(f"DEVOPS-{i}", f"Grafana zorbex quibble panel {i}", assignee="Ana") for i in range(12)]
+    rows += [_ticket(f"DEVOPS-{20 + i}", f"Grafana wombat frizzle tuning {i}", assignee="Ben") for i in range(12)]
+    rows += [_ticket(f"DEVOPS-{40 + i}", f"Grafana misc{i} other{i}", assignee="Ana") for i in range(30)]
+    splits = sl.split_candidates(pd.DataFrame(rows))
+    themes = [set(x.split(" · ")) for x in splits["Sub-Theme"]]
+    assert len(themes) == 2 and any({"zorbex", "quibble"} <= x for x in themes) and any({"wombat", "frizzle"} <= x for x in themes)
+    wombat = splits[splits["Sub-Theme"].str.contains("wombat")].iloc[0]
+    assert wombat["Domain"] == "Grafana" and wombat["Tickets"] == 12 and wombat["Different Expert"] == "yes"
+    assert splits["Effect"].isna().all()                                   # no team given: no back-test
+    assert "Grafana: " in sl.split_snippet(splits.assign(Effect=1))
+
+
+def test_hidden_expertise_counts_help_not_requests():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import skill_learning as sl
+    rows = []
+    for i in range(4):
+        row = _ticket(f"DEVOPS-{i}", f"Grafana alert {i}", assignee="Ana")
+        row["reporter_name"] = "Rae"
+        row["comments"] = [_comment("Ben"), _comment("Rae"), _comment("Ana")]
+        rows.append(row)
+    out = sl.hidden_expertise(pd.DataFrame(rows), ["Ana", "Ben", "Rae"])
+    h = out["hidden_df"]
+    assert list(h["Person"]) == ["Ben"] and h.iloc[0]["Helped On"] == 4 and h.iloc[0]["Assigned"] == 0
+    assert out["what_if"]["help_rows"] == 4
+
+
+def test_application_map_links_apps_to_people():
+    pytest.importorskip("networkx")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import skill_learning as sl
+    df = _suggestion_data()
+    df.loc[df["key"].str.startswith("CAR-"), "assignee_name"] = "Jo"
+    df.loc[df["key"] == "CAR-20", "comments"] = pd.Series([[_comment("Kim")]], index=df.index[df["key"] == "CAR-20"])
+    apps = sl.application_map(df)
+    row = apps["apps_df"].set_index("Application").loc["Quokka"]
+    assert row["Main Person"] == "Jo" and row["Worked On (Main)"] == 9 and row["People Involved"] == 2
+    assert apps["matrix"].loc["Quokka", "Kim"] == 0.5 and sl.application_figure(apps["matrix"]) is not None
