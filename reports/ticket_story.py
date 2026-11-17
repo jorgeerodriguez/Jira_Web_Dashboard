@@ -467,8 +467,7 @@ def build_ticket_story(df_issues: pd.DataFrame, history: pd.DataFrame | None, ke
                               for p, rs in people.items()]).sort_values("Comments", ascending=False) if people else pd.DataFrame()
 
     # ── Similar tickets ──
-    text = f"{raw.get('summary') or ''} " + " ".join(c.get("body", "") for c in (raw.get("comments") or []) if isinstance(c, dict))
-    tags = domains.tag(text)
+    tags = domains.tag(domains.ticket_text(raw))
     domain = domains.primary(tags)
     similar = {}
     done = facts[facts["sla_applies"] & facts["outcome"].eq("Done") & facts["key"].ne(key)

@@ -11,7 +11,7 @@ CANDIDATE_DAYS days, plus NEW_MEMBERS (new hires, before they have that track re
 
 Each candidate is scored on what the other pages already measure:
 - Expertise: recency-weighted completed (1.0) and active (0.5) tickets in the ticket's primary domain,
-  tagged from title + human comments with the shared taxonomy (reports/domains.py).
+  tagged from title + description + human comments with the shared taxonomy (reports/domains.py).
 - Availability and SLA fit: the Backlog queue simulation with the ticket added to the candidate's
   queue in ATC order (their In Progress work first), using their own speed at that priority. Gives a
   likely start and a P85 finish, and whether that finish beats the SLA due date.
@@ -54,18 +54,19 @@ WEIGHT_EXPERTISE, WEIGHT_AVAILABILITY = 0.6, 0.4
 LOAD_PENALTY, LOAD_PENALTY_FROM = 0.15, 1.3      # penalise when current WIP is 1.3x+ the usual
 PLAN_BALANCE_PENALTY = 0.08                      # per ticket already suggested to the same person in this plan
 STRETCH_MAX_SHARE = 0.5                          # stretch = some exposure, but at most half the top expert's
+ACCURACY_DAYS = 90                               # back-test: tickets completed in this window
+ACCURACY_TOP = 3
 INK = ipr.INK
 
 
 def _empty_payload(message: str | None = None) -> dict:
     return {"error_message": message, "kpis": {}, "plan_df": pd.DataFrame(), "options": {}, "matrix_fig": None, "matrix_df": pd.DataFrame(),
-            "concentration_df": pd.DataFrame(), "load_df": pd.DataFrame(), "account_ids": {}, "current_accounts": {}}
+            "concentration_df": pd.DataFrame(), "load_df": pd.DataFrame(), "account_ids": {}, "current_accounts": {},
+            "accuracy": {}}
 
 
 def _text(row) -> str:
-    comments = row.get("comments")
-    bodies = " ".join(c.get("body", "") for c in comments) if isinstance(comments, list) else ""
-    return f"{row.get('summary') or ''} {bodies}"
+    return domains.ticket_text(row)
 
 
 def expertise_matrix(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str]) -> pd.DataFrame:
@@ -85,6 +86,52 @@ def expertise_matrix(tickets: pd.DataFrame, today: pd.Timestamp, people: list[st
         return pd.DataFrame(columns=people)
     return (pd.DataFrame(rows, columns=["domain", "person", "w"]).pivot_table(
         index="domain", columns="person", values="w", aggfunc="sum", fill_value=0.0).reindex(columns=people, fill_value=0.0))
+
+
+def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str], days: int = ACCURACY_DAYS) -> dict:
+    """How well domain experience predicts who does the work: a back-test on recently completed tickets.
+
+    For each PE ticket completed in the last `days` days by a current candidate, rank the candidates on their
+    recency-weighted experience in the ticket's primary domain, counting only work they finished *before* the ticket
+    was created, and check whether the person who did it is in the top ACCURACY_TOP. Baseline: the ACCURACY_TOP
+    busiest people at the time (all domains), i.e. what a suggestion without domains would get. Availability is
+    not replayed, so this scores the domain part of the suggestions only; tickets with no domain count as misses.
+    """
+    done = tickets[tickets["outcome"].eq("Done") & tickets["assignee_name"].isin(people) & tickets["closed_day"].notna()]
+    evaluate = done[done["closed_day"] > today - pd.Timedelta(days=days)]
+    empty = {"n": 0, "tagged": 0, "top": ACCURACY_TOP, "hit": None, "hit_tagged": None, "first": None,
+             "baseline": None, "days": days, "by_domain_df": pd.DataFrame()}
+    if evaluate.empty:
+        return empty
+    work = done[["assignee_name", "closed_day", "domains"]].explode("domains")
+    halflife = float(EXPERTISE_HALF_LIFE_DAYS)
+    rows = []
+    for _, t in evaluate.iterrows():
+        before = done[done["closed_day"] < t["created_day"]]              # one row per ticket, for the baseline
+        volume = 0.5 ** ((t["created_day"] - before["closed_day"]).dt.days / halflife)
+        busiest = volume.groupby(before["assignee_name"]).sum().reindex(people, fill_value=0.0)
+        prior = work[work["closed_day"] < t["created_day"]]                # one row per ticket and domain
+        weight = 0.5 ** ((t["created_day"] - prior["closed_day"]).dt.days / halflife)
+        base_top = list(busiest.sort_values(ascending=False).index[:ACCURACY_TOP])
+        domain = t["domain"] if isinstance(t["domain"], str) else None
+        top = []
+        if domain is not None:
+            mine = prior["domains"].eq(domain)
+            expertise = weight[mine].groupby(prior.loc[mine, "assignee_name"]).sum()
+            top = list(expertise[expertise > 0].sort_values(ascending=False).index[:ACCURACY_TOP])
+        rows.append({"domain": domain or "No domain", "hit": t["assignee_name"] in top,
+                     "first": bool(top) and top[0] == t["assignee_name"], "baseline": t["assignee_name"] in base_top,
+                     "tagged": domain is not None})
+    r = pd.DataFrame(rows)
+    tagged = r[r["tagged"]]
+    by_domain = (r.groupby("domain").agg(Tickets=("hit", "size"), Hit=("hit", "mean"), Baseline=("baseline", "mean"))
+                 .reset_index().rename(columns={"domain": "Domain"}))
+    by_domain["Top-3 Hit %"] = (by_domain.pop("Hit") * 100).round().astype(int)
+    by_domain["Busiest-3 Hit %"] = (by_domain.pop("Baseline") * 100).round().astype(int)
+    by_domain = by_domain.sort_values(["Top-3 Hit %", "Tickets"], ascending=[True, False]).reset_index(drop=True)
+    return {"n": int(len(r)), "tagged": int(len(tagged)), "top": ACCURACY_TOP, "hit": float(r["hit"].mean()),
+            "hit_tagged": float(tagged["hit"].mean()) if len(tagged) else None, "first": float(r["first"].mean()),
+            "baseline": float(r["baseline"].mean()), "days": days, "by_domain_df": by_domain}
 
 
 class _Queues:
@@ -186,6 +233,7 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     queues = _Queues(t, in_progress, history, effects, wip_factor, typical, today, hol, people)
 
     matrix = expertise_matrix(t, today, people)
+    payload_accuracy = domain_accuracy(t, today, people)
     wip_now = in_progress.groupby("assignee_name").size()
     load = pd.DataFrame({"Person": people,
                          "In Progress Now": [int(wip_now.get(p, 0)) for p in people],
@@ -198,6 +246,7 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
         payload["matrix_fig"], payload["concentration_df"] = _matrix_outputs(matrix)
         payload["matrix_df"] = matrix
         payload["load_df"] = load
+        payload["accuracy"] = payload_accuracy
         return payload
 
     # Plan order: the ATC rule across the whole queue, so the most urgent tickets pick first.
@@ -284,6 +333,7 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     payload["matrix_fig"], payload["concentration_df"] = _matrix_outputs(matrix)
     payload["matrix_df"] = matrix
     payload["load_df"] = load
+    payload["accuracy"] = payload_accuracy
     return payload
 
 

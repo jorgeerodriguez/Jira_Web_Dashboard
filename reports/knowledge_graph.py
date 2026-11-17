@@ -62,9 +62,7 @@ def _scope(df_issues: pd.DataFrame, months: int) -> pd.DataFrame:
 
 
 def _text(row) -> str:
-    comments = row.get("comments")
-    bodies = " ".join(c.get("body", "") for c in comments) if isinstance(comments, list) else ""
-    return f"{row.get('summary') or ''} {bodies}"
+    return domains.ticket_text(row)
 
 
 def _ego(G: nx.Graph, focus: str | None) -> nx.Graph:

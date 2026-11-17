@@ -1908,6 +1908,33 @@ elif selected == "🧭  Suggested Assignments":
             with st.expander("Team load used for the suggestions"):
                 st.dataframe(asg["load_df"], width="stretch", hide_index=True)
 
+            st.divider()
+            st.subheader("Learning: How Well Do Our Domains Predict Who Does the Work?")
+            acc = asg.get("accuracy") or {}
+            pct = lambda v: "—" if v is None else f"{v:.0%}"  # noqa: E731
+            if not acc.get("n"):
+                st.caption("Not enough recently completed tickets to measure yet.")
+            else:
+                st.caption(
+                    f"A back-test on the {acc['n']} PE tickets completed in the last {acc['days']} days by the current team. "
+                    f"For each one, the team is ranked on domain experience from work finished *before* the ticket was "
+                    f"created. The score is how often the person who actually did it was in the top {acc['top']}. "
+                    f"Availability isn't replayed, so this measures the domain part of the suggestions only. Better domains "
+                    f"(phases 2 and 3 of this section) should move this number up.")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric(f"Top-{acc['top']} Hit Rate", pct(acc["hit"]),
+                          help="All recently completed tickets; tickets with no domain count as misses.")
+                m2.metric(f"Busiest-{acc['top']} Baseline", pct(acc["baseline"]),
+                          help=f"What you'd get without domains: always suggesting the {acc['top']} busiest people.")
+                m3.metric("Tickets With a Domain", pct(acc["tagged"] / acc["n"]),
+                          help="Tagged from title, description and comments.")
+                m4.metric("Top-1 Hit Rate", pct(acc["first"]), help="The top-ranked person did the work.")
+                st.caption("Hit rate by domain, lowest first. Domains near or below the baseline are where the taxonomy "
+                           "helps least: candidates to split or to sharpen with better keywords.")
+                st.dataframe(acc["by_domain_df"], width="stretch", hide_index=True, height=320,
+                             column_config={c: st.column_config.ProgressColumn(c, format="%d%%", min_value=0, max_value=100)
+                                            for c in ("Top-3 Hit %", "Busiest-3 Hit %")})
+
 
 # ── Forecast ─────────────────────────────────────────────────────────────────────
 elif selected == "🔮  Forecast":

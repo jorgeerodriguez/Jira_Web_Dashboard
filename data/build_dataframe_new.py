@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 
 from data.dashboard_comments import is_dashboard_comment
@@ -41,6 +43,26 @@ def _human_comments(fields: dict) -> tuple[list[dict], int, int, list[dict]]:
         }
         (dashboard if is_dashboard_comment(record["body"]) else comments).append(record)
     return comments, int(block.get("total", len(block.get("comments", [])))), bots, dashboard
+
+
+DESCRIPTION_CHARS = 4000
+_URL = re.compile(r"https?://\S+")
+
+
+def _adf_text(node) -> str:
+    """Plain text of an Atlassian document format node (API v3 descriptions)."""
+    if isinstance(node, dict):
+        return " ".join(filter(None, [node.get("text") or ""] + [_adf_text(c) for c in node.get("content") or []]))
+    if isinstance(node, list):
+        return " ".join(_adf_text(c) for c in node)
+    return ""
+
+
+def _description_text(value) -> str:
+    """The description as plain text for domain tagging: links removed (MR links are kept separately and would
+    otherwise tag every ticket "GitLab"), whitespace collapsed, at most DESCRIPTION_CHARS characters."""
+    text = value if isinstance(value, str) else _adf_text(value)
+    return " ".join(_URL.sub(" ", text).split())[:DESCRIPTION_CHARS]
 
 
 def _issue_links(fields: dict) -> list[dict]:
@@ -276,6 +298,8 @@ def build_issues_dataframe(jira_connector, projects=("DEVOPS", "CAR")):
             "links": _issue_links(fields),
             # GitLab MR links pasted in the description or comments (the description itself is not kept).
             "merge_requests": issue_merge_requests(fields),
+            # Description text for domain tagging (reports/domains.ticket_text).
+            "description_text": _description_text(fields.get("description")),
             "comment_total": comment_total,
             "bot_comment_count": bot_comments,
             # Posted by the dashboard (Target date updates, assignments, forecasts): not human conversation.

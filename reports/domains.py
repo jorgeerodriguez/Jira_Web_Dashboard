@@ -193,6 +193,15 @@ def tag(text: str) -> list[str]:
     return [d for d, regexes in _compiled() if any(r.search(text) for r in regexes)]
 
 
+def ticket_text(row) -> str:
+    """What a ticket is tagged from: title, description (data/build_dataframe_new keeps a cleaned copy without
+    links) and human comments. Every page that tags tickets uses this, so they agree on a ticket's domains."""
+    comments = row.get("comments")
+    bodies = " ".join(c.get("body", "") for c in comments if isinstance(c, dict)) if isinstance(comments, list) else ""
+    description = row.get("description_text")
+    return f"{row.get('summary') or ''} {description if isinstance(description, str) else ''} {bodies}"
+
+
 def primary(domains: list[str]) -> str | None:
     return next((d for d in DOMAIN_PRIORITY if d in domains), None)
 
