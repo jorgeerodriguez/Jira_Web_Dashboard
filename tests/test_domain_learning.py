@@ -59,3 +59,55 @@ def test_back_test_uses_only_earlier_work():
     more = t.copy()
     more["domains"] = [d + ["Grafana", "IAM/RBAC"] if k.startswith("B") else d for k, d in zip(more["key"], more["domains"])]
     assert domain_accuracy(more, today, ["Ana", "Ben", "Cy", "Dee", "Eve", "Fay"], days=90)["baseline"] == acc["baseline"]
+
+
+# ── Phase 2: suggested domain updates ───────────────────────────────────────────
+
+def _ticket(key, summary, description="", assignee="Ana", project="DevOps", days_ago=20):
+    from reports import in_progress_report as ipr
+    from tests.test_ticket_story import _bd, _issue
+    row = _issue(key, "To Do", _bd(ipr, days_ago), project=project, assignee=assignee, summary=summary)
+    row["description_text"] = description
+    return row
+
+
+def _suggestion_data():
+    rows = [_ticket(f"DEVOPS-{i}", f"Grafana panel zorbex tuning {i}") for i in range(6)]          # in Grafana
+    rows += [_ticket(f"DEVOPS-{10 + i}", f"Zorbex rollout step {i}") for i in range(2)]           # would be added
+    rows += [_ticket(f"CAR-{20 + i}", f"Quokka console deploy {i}", project="Release Management") for i in range(9)]
+    rows += [_ticket(f"DEVOPS-{40 + i}", f"Fumbleton asked again {i}", assignee="Zed Fumbleton") for i in range(8)]
+    rows += [_ticket(f"DEVOPS-{60 + i}", f"wibblefish other{i}", "screenshot width alt") for i in range(8)]
+    rows += [_ticket(f"DEVOPS-{100 + i}", f"filler{i} thing{i}") for i in range(90)]
+    return pd.DataFrame(rows)
+
+
+def test_suggestions_find_keywords_and_new_themes():
+    pytest.importorskip("networkx")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import domain_suggestions as ds
+    s = ds.build_domain_suggestions(_suggestion_data())
+    kw = s["keywords_df"]
+    row = kw[(kw["Domain"] == "Grafana") & (kw["Add Keyword"] == "zorbex")].iloc[0]
+    assert row["Would Add"] == 2 and row["Already In Domain"] == 6 and row["Precision %"] == 75
+    assert row["Pattern"] == r"\bzorbex\b" and "DEVOPS-1" in row["Examples"]
+    new = s["new_df"]
+    quokka = new[new["Keywords"].str.contains("quokka")].iloc[0]
+    assert quokka["Tickets"] == 9 and quokka["CAR"] == 9 and quokka["Untagged"] == 9
+    every = " ".join(kw["Add Keyword"]) + " " + " ".join(new["Keywords"])
+    assert "fumbleton" not in every and "screenshot" not in every            # names and image markup are ignored
+    assert "wibblefish" not in every                                          # a lone word is not a theme
+    assert repr(ds.pattern("quokka")) in s["new_snippet"] and "DOMAIN_PRIORITY" in s["new_snippet"]
+    assert ds.pattern("node pool") == r"\bnode\spool\b" and s["what_if"] is None    # no team given: no back-test
+
+
+def test_back_test_can_score_a_subset():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports.assignment_report import domain_accuracy
+    t = pd.DataFrame([_done("H1", "Ana", "Fastly", "2026-01-05", "2026-01-10"),
+                      _done("R1", "Ana", "Fastly", "2026-11-01", "2026-11-05"),
+                      _done("R2", "Ben", "GKE", "2026-11-01", "2026-11-05")])
+    full = domain_accuracy(t, pd.Timestamp("2026-11-17"), ["Ana", "Ben"])
+    part = domain_accuracy(t, pd.Timestamp("2026-11-17"), ["Ana", "Ben"], keys={"R1"})
+    assert (full["n"], full["hits"]) == (2, 1) and (part["n"], part["hits"]) == (1, 1)

@@ -1836,7 +1836,7 @@ elif selected == "🧭  Suggested Assignments":
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Tickets to Assign", f"{kp['to_assign']}", help="Open PE tickets that are unassigned or in Triage/Reviewing.")
             k2.metric("With a Known Domain", f"{kp['with_domain']}",
-                      help="Domain recognised from the title or comments; the rest are suggested on availability alone.")
+                      help="Domain recognised from the title, description or comments; the rest are suggested on availability alone.")
             k3.metric("Plan Fits SLA", f"{kp['fit']} of {kp['to_assign']}" if kp["to_assign"] else "—",
                       help="Suggested owner likely finishes within the SLA (P85).")
             k4.metric("People in the Plan", f"{kp['people']} of {kp['candidates']}" if kp["to_assign"] else "—",
@@ -1934,6 +1934,62 @@ elif selected == "🧭  Suggested Assignments":
                 st.dataframe(acc["by_domain_df"], width="stretch", hide_index=True, height=320,
                              column_config={c: st.column_config.ProgressColumn(c, format="%d%%", min_value=0, max_value=100)
                                             for c in ("Top-3 Hit %", "Busiest-3 Hit %")})
+
+            st.subheader("Learning: Suggested Domain Updates")
+            st.caption("Learned from the title and description of DEVOPS and CAR tickets created in the last 12 months. "
+                       "Nothing changes automatically: the domains are shared with darkstar's Intake page, so review "
+                       "these and apply the ones you agree with by hand in reports/domains.py and "
+                       "darkstar/dashboards/intake.html.")
+            cache_key = st.session_state.get("jira_fetched_at")
+            cached = st.session_state.get("_domain_suggestions")
+            if cached is None or cached[0] != cache_key:
+                from reports.domain_suggestions import build_domain_suggestions
+                with st.spinner("Learning from ticket text and back-testing each suggestion (about 20 seconds)…"):
+                    people = list(asg["load_df"]["Person"]) if not asg["load_df"].empty else None
+                    st.session_state["_domain_suggestions"] = (cache_key, build_domain_suggestions(df_issues, people))
+            sug = st.session_state["_domain_suggestions"][1]
+            if sug["error_message"]:
+                st.info(sug["error_message"])
+            else:
+                w = sug["what_if"]
+                st.markdown("##### Keywords to Add to Existing Domains")
+                st.caption(
+                    "Words and phrases no domain matches yet, whose tickets mostly sit in one domain already (Precision: "
+                    "share of their tickets in it; Lift: how much likelier than for a random ticket). Would Add: tickets "
+                    "it would also tag. **Domain Effect** back-tests all of a domain's additions: how many recent tickets "
+                    "would gain (+) or lose (−) the person who did them from the top 3. Some additions hurt, because they "
+                    "pull tickets into a broad domain; only domains with a positive effect go into the snippet.")
+                if w:
+                    v1, v2, v3 = st.columns(3)
+                    v1.metric("Top-3 Hit Rate Now", pct(w["before"]))
+                    v2.metric("With the Helpful Additions", pct(w["after"]),
+                              delta=f"{(w['after'] - w['before']) * 100:+.1f} pts")
+                    v3.metric("Domains That Help", f"{len(w['helpful'])} of {len(w['effect'])}")
+                kw = sug["keywords_df"]
+                if kw.empty:
+                    st.caption("No keyword additions stand out right now.")
+                else:
+                    st.dataframe(kw, width="stretch", hide_index=True, height=360,
+                                 column_config={"Examples": st.column_config.TextColumn("Examples (would add)", width="medium")})
+                    if sug["keywords_snippet"]:
+                        with st.expander("Snippet to apply (helpful domains only)"):
+                            st.code(sug["keywords_snippet"], language="python")
+
+                st.markdown("##### Candidate New Domains")
+                st.caption(
+                    "Terms no domain covers and no single domain owns, that are common among untagged tickets or rising, "
+                    "grouped by how often they appear on the same tickets. Many are applications released through "
+                    "CAR tickets; People shows who did that work. Untagged: tickets that have no domain today.")
+                new = sug["new_df"]
+                if new.empty:
+                    st.caption("No new themes stand out right now.")
+                else:
+                    st.dataframe(new, width="stretch", hide_index=True,
+                                 column_config={"Recent %": st.column_config.ProgressColumn(
+                                     "Recent %", format="%d%%", min_value=0, max_value=100,
+                                     help="Share of the tickets created in the last 90 days.")})
+                    with st.expander("Snippet to apply (pick the ones you want)"):
+                        st.code(sug["new_snippet"], language="python")
 
 
 # ── Forecast ─────────────────────────────────────────────────────────────────────

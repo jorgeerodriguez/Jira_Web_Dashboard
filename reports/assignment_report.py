@@ -88,7 +88,8 @@ def expertise_matrix(tickets: pd.DataFrame, today: pd.Timestamp, people: list[st
         index="domain", columns="person", values="w", aggfunc="sum", fill_value=0.0).reindex(columns=people, fill_value=0.0))
 
 
-def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str], days: int = ACCURACY_DAYS) -> dict:
+def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str], days: int = ACCURACY_DAYS,
+                    keys=None) -> dict:
     """How well domain experience predicts who does the work: a back-test on recently completed tickets.
 
     For each PE ticket completed in the last `days` days by a current candidate, rank the candidates on their
@@ -96,10 +97,14 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
     was created, and check whether the person who did it is in the top ACCURACY_TOP. Baseline: the ACCURACY_TOP
     busiest people at the time (all domains), i.e. what a suggestion without domains would get. Availability is
     not replayed, so this scores the domain part of the suggestions only; tickets with no domain count as misses.
+    `keys` limits the tickets scored (all earlier work still counts as experience): domain_suggestions uses it to
+    re-score only the tickets a taxonomy change can affect.
     """
     done = tickets[tickets["outcome"].eq("Done") & tickets["assignee_name"].isin(people) & tickets["closed_day"].notna()]
     evaluate = done[done["closed_day"] > today - pd.Timedelta(days=days)]
-    empty = {"n": 0, "tagged": 0, "top": ACCURACY_TOP, "hit": None, "hit_tagged": None, "first": None,
+    if keys is not None:
+        evaluate = evaluate[evaluate["key"].isin(set(keys))]
+    empty = {"n": 0, "hits": 0, "tagged": 0, "top": ACCURACY_TOP, "hit": None, "hit_tagged": None, "first": None,
              "baseline": None, "days": days, "by_domain_df": pd.DataFrame()}
     if evaluate.empty:
         return empty
@@ -129,7 +134,8 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
     by_domain["Top-3 Hit %"] = (by_domain.pop("Hit") * 100).round().astype(int)
     by_domain["Busiest-3 Hit %"] = (by_domain.pop("Baseline") * 100).round().astype(int)
     by_domain = by_domain.sort_values(["Top-3 Hit %", "Tickets"], ascending=[True, False]).reset_index(drop=True)
-    return {"n": int(len(r)), "tagged": int(len(tagged)), "top": ACCURACY_TOP, "hit": float(r["hit"].mean()),
+    return {"n": int(len(r)), "hits": int(r["hit"].sum()), "tagged": int(len(tagged)), "top": ACCURACY_TOP,
+            "hit": float(r["hit"].mean()),
             "hit_tagged": float(tagged["hit"].mean()) if len(tagged) else None, "first": float(r["first"].mean()),
             "baseline": float(r["baseline"].mean()), "days": days, "by_domain_df": by_domain}
 
