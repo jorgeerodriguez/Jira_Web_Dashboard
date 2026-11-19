@@ -135,3 +135,15 @@ def test_leaving_out_a_hub_reveals_how_everyone_else_connects():
     assert kpis["communities"] == 2 and kpis["pairs"] == 2
     assert set(kg.without(G, ["Hub", "Ana", "Ben"]).nodes) == {"Cy", "Dee"}       # people left with no links drop
     assert G.has_node("Hub")                                                          # the original is untouched
+
+
+def test_skills_map_handles_every_domain_group():
+    """Every group in the taxonomy (e.g. the Applications group added in 2026-11) gets a place on the ring and a colour."""
+    from reports import domains
+    assert set(domains.GROUP_ORDER) <= set(kg.RING_GROUPS) and set(domains.GROUP_ORDER) <= set(kg.GROUP_COLORS)
+    edges = pd.DataFrame([{"person": "Ana", "domain": "Vader", "tickets": 4},
+                          {"person": "Ana", "domain": "GKE", "tickets": 3},
+                          {"person": "Ben", "domain": "Upwind", "tickets": 3}])
+    fig = kg.skills_figure(edges)
+    assert fig is not None and "Applications domains" in {t.name for t in fig.data}
+    assert kg.skills_figure(edges, group="Applications") is not None

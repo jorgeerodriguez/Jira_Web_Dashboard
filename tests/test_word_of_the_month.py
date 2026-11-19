@@ -105,9 +105,10 @@ def test_only_the_requester_can_chase_and_chasing_is_never_recommended():
 
 
 def test_first_reply_ignores_the_requesters_own_comments():
-    rows = [_issue("T-1", [_comment("Rita", "Adding details", 0), _comment("Ana", "On it", 2)])]
+    rows = [_issue("T-1", [_comment("Rita", "Adding details", 0), _comment("Ana", "On it", 4)])]
     out = _build(rows)
-    # Reply is Ana's comment two calendar days after creation: at least one full business day.
+    # Reply is Ana's comment four calendar days after creation, which always spans at least two weekdays (two days
+    # failed when the ticket was created on a Saturday: Saturday to Monday 00:00 is no business time at all).
     assert out["first_reply_hours"] >= wotm.BUSINESS_HOURS_PER_DAY
 
 

@@ -90,8 +90,10 @@ def terms(text: str, skip: frozenset | set = frozenset()) -> set[str]:
 
 
 def pattern(term: str) -> str:
-    """The regular expression to paste: the term as a whole word or phrase."""
-    return r"\b" + re.escape(term).replace(r"\ ", r"\s") + r"\b"
+    """The regular expression to paste: the term as a whole word or phrase. Words of a phrase may be separated by any
+    punctuation, since terms come from words that sit next to each other ("AW - ADTECH - Vader" gives "adtech vader")."""
+    words = [re.escape(w).replace(r"\-", "-") for w in term.split()]
+    return r"\b" + r"\W+".join(words) + r"\b"
 
 
 def _covered(term: str, compiled) -> bool:

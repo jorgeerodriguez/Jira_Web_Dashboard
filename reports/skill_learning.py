@@ -8,8 +8,8 @@
 2. Hidden expertise (hidden_expertise). Evidence of skill beyond being the assignee: commenting on a domain's tickets
    assigned to someone else (not as the requester), and posting MR links on them. A what-if back-test counts that
    help at HELP_WEIGHT of an assigned ticket and reports the top-3 hit rate.
-3. Who knows which application (application_map). The candidate new domains (domain_suggestions.candidate_domains),
-   most of them applications released through CAR tickets, against everyone who worked on or discussed them.
+3. Who knows which application (application_map). The taxonomy's Applications domains, plus candidate new domains
+   not covered yet (domain_suggestions.candidate_domains), against everyone who worked on or discussed them.
 
 DEVOPS and CAR tickets from the last MONTHS months; the back-tests score PE tickets, as the suggestions do.
 """
@@ -219,49 +219,75 @@ def hidden_expertise(df_issues: pd.DataFrame, people: list[str], today: pd.Times
 
 # ── 3. Who knows which application ──────────────────────────────────────────────
 
-def application_map(df_issues: pd.DataFrame, today: pd.Timestamp | None = None, top_people: int = 15) -> dict:
-    """Candidate applications x people: tickets each person worked on (assignee) or discussed (commented)."""
+APP_GROUP = "Applications"
+
+
+def _applications(df_issues: pd.DataFrame, today: pd.Timestamp) -> list[dict]:
+    """The Applications domains of the taxonomy, then candidate themes not covered yet: name, ticket keys, keywords."""
     from reports.domain_suggestions import candidate_domains
+    t = _tickets(df_issues, today)
+    apps = []
+    for d in domains.DOMAIN_PRIORITY:
+        if domains.group_of(d) == APP_GROUP:
+            keys = list(t.loc[t["domains"].map(lambda ds: d in ds), "key"])
+            if keys:
+                apps.append({"name": d, "keys": keys, "keywords": ", ".join(domains.DOMAIN_PATTERNS[d]),
+                             "source": "Domain"})
+    new, candidate_keys = candidate_domains(df_issues, today)
+    for _, r in new.iterrows():
+        apps.append({"name": r["Candidate"], "keys": candidate_keys.get(r["Candidate"], []), "keywords": r["Keywords"],
+                     "source": "Candidate"})
+    return apps
+
+
+def application_map(df_issues: pd.DataFrame, today: pd.Timestamp | None = None, top_people: int = 15) -> dict:
+    """Applications x people: tickets each person worked on (assignee) or discussed (commented).
+
+    Applications are the taxonomy's Applications group (domains.py), plus candidate themes the taxonomy doesn't cover
+    yet (domain_suggestions.candidate_domains), marked by Source.
+    """
+    empty = {"apps_df": pd.DataFrame(), "matrix": pd.DataFrame()}
+    if df_issues is None or df_issues.empty or "summary" not in df_issues.columns:
+        return empty
     today = today if today is not None else ipr.today_local()
-    new, keys = candidate_domains(df_issues, today)
-    if new.empty:
-        return {"apps_df": pd.DataFrame(), "matrix": pd.DataFrame()}
-    by_key = df_issues.set_index("key")
+    apps = _applications(df_issues, today)
+    if not apps:
+        return empty
+    by_key = df_issues.drop_duplicates("key").set_index("key")
     rows = []
-    for app, ks in keys.items():
-        for k in ks:
+    for app in apps:
+        for k in app["keys"]:
             if k not in by_key.index:
                 continue
             r = by_key.loc[k]
-            r = r.iloc[0] if isinstance(r, pd.DataFrame) else r
             owner = r.get("assignee_name")
             if isinstance(owner, str) and owner not in ("Unassigned", "Unknown"):
-                rows.append({"app": app, "person": owner, "key": k, "role": "worked"})
+                rows.append({"app": app["name"], "person": owner, "key": k, "role": "worked"})
             for c in r.get("comments") if isinstance(r.get("comments"), list) else []:
                 if c.get("author") and c.get("author") != owner:
-                    rows.append({"app": app, "person": c["author"], "key": k, "role": "discussed"})
+                    rows.append({"app": app["name"], "person": c["author"], "key": k, "role": "discussed"})
     if not rows:
-        return {"apps_df": pd.DataFrame(), "matrix": pd.DataFrame()}
+        return empty
     ev = pd.DataFrame(rows).drop_duplicates(["app", "person", "key", "role"])
     worked = ev[ev["role"].eq("worked")].groupby(["app", "person"])["key"].nunique()
     discussed = ev[ev["role"].eq("discussed")].groupby(["app", "person"])["key"].nunique()
     score = worked.add(0.5 * discussed, fill_value=0).rename("score").reset_index()
     matrix = score.pivot_table(index="app", columns="person", values="score", fill_value=0.0)
-    matrix = matrix.loc[new["Candidate"][new["Candidate"].isin(matrix.index)]]
+    order = [a["name"] for a in apps if a["name"] in matrix.index]
+    matrix = matrix.loc[order]
     busiest = matrix.sum().sort_values(ascending=False).index[:top_people]
-    apps = []
-    for app, col in matrix.iterrows():
+    info = {a["name"]: a for a in apps}
+    out = []
+    for name, col in matrix.iterrows():
         ranked = col[col > 0].sort_values(ascending=False)
         total = float(ranked.sum())
-        info = new.set_index("Candidate").loc[app]
-        apps.append({"Application": app, "Tickets": int(info["Tickets"]), "People Involved": int(len(ranked)),
-                     "Main Person": ranked.index[0] if len(ranked) else "",
-                     "Main Share %": round(ranked.iloc[0] / total * 100) if total else 0,
-                     "Second": ranked.index[1] if len(ranked) > 1 else "—",
-                     "Worked On (Main)": int(worked.get((app, ranked.index[0]), 0)) if len(ranked) else 0,
-                     "Keywords": info["Keywords"]})
-    apps_df = pd.DataFrame(apps)
-    return {"apps_df": apps_df, "matrix": matrix[busiest]}
+        out.append({"Application": name, "Source": info[name]["source"], "Tickets": len(set(info[name]["keys"])),
+                    "People Involved": int(len(ranked)), "Main Person": ranked.index[0] if len(ranked) else "",
+                    "Main Share %": round(ranked.iloc[0] / total * 100) if total else 0,
+                    "Second": ranked.index[1] if len(ranked) > 1 else "—",
+                    "Worked On (Main)": int(worked.get((name, ranked.index[0]), 0)) if len(ranked) else 0,
+                    "Keywords": info[name]["keywords"]})
+    return {"apps_df": pd.DataFrame(out), "matrix": matrix[busiest]}
 
 
 def application_figure(matrix: pd.DataFrame):

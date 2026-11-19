@@ -44,7 +44,10 @@ AUTOMATION_REQUESTERS = {"agentcore pe", "aws-devops-agent", "automation for jir
 # Categorical palette, fixed order (validated; same slots as the rest of the dashboard).
 CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 OTHER_GREY = "#8891a7"
-GROUP_COLORS = {"GCP": CATEGORICAL[0], "AWS": CATEGORICAL[1], "Security": CATEGORICAL[6], "Other": OTHER_GREY}
+GROUP_COLORS = {"GCP": CATEGORICAL[0], "AWS": CATEGORICAL[1], "Security": CATEGORICAL[6], "Applications": CATEGORICAL[2],
+                "Other": OTHER_GREY}
+# Skills Map ring: GCP, then AWS, then the other groups in the taxonomy's display order (reports/domains.GROUP_ORDER).
+RING_GROUPS = ["GCP", "AWS"] + [g for g in domains.GROUP_ORDER if g not in ("GCP", "AWS")]
 EDGE = "rgba(100,116,139,{a})"
 LABEL_TOP = 18                   # label only the busiest people; the rest show their name on hover
 GROUP_LABELS = 3                 # conversation graph: label the busiest people of each group
@@ -468,7 +471,8 @@ def skills_figure(edges: pd.DataFrame, group: str | None = None, min_tickets: in
     G = _ego(G, ("P:" + focus) if focus and ("P:" + focus) in G else ("D:" + focus) if focus else None)
     strength = dict(G.degree(weight="weight"))
     order = sorted((n for n in G if n.startswith("D:")),
-                   key=lambda n: (["GCP", "AWS", "Security", "Other"].index(domains.group_of(n[2:])), -strength[n]))
+                   key=lambda n: (RING_GROUPS.index(domains.group_of(n[2:])) if domains.group_of(n[2:]) in RING_GROUPS
+                                  else len(RING_GROUPS), -strength[n]))
     pos = _ring_positions(G, order)
     fig = go.Figure(_edge_traces(G, pos))
     people = [n for n in G if n.startswith("P:")]
@@ -478,16 +482,16 @@ def skills_figure(edges: pd.DataFrame, group: str | None = None, min_tickets: in
         hovertext=[n[2:] for n in people], textposition="bottom center", textfont=dict(size=10), name="Engineers",
         marker=dict(size=_sizes([strength[n] for n in people], 7, 22), color=INK, line=dict(color="white", width=1.5)),
         customdata=[strength[n] for n in people], hovertemplate="%{hovertext}: %{customdata} domain-tagged tickets<extra></extra>"))
-    for g in ("GCP", "AWS", "Security", "Other"):
+    for g in RING_GROUPS:
         nodes = [n for n in G if n.startswith("D:") and domains.group_of(n[2:]) == g]
         if not nodes:
             continue
         holders = [sum(1 for _, _, d in G.edges(n, data=True) if d["weight"] >= SKILL_MIN_TICKETS) for n in nodes]
         fig.add_trace(go.Scatter(
             x=[pos[n][0] for n in nodes], y=[pos[n][1] for n in nodes], mode="markers+text", text=[n[2:] for n in nodes],
-            textposition=[_outside(pos[n]) for n in nodes], textfont=dict(size=11, color=GROUP_COLORS[g]),
+            textposition=[_outside(pos[n]) for n in nodes], textfont=dict(size=11, color=GROUP_COLORS.get(g, OTHER_GREY)),
             name=f"{g} domains",
-            marker=dict(size=_sizes([strength[n] for n in nodes], 12, 36), color=GROUP_COLORS[g], symbol="square",
+            marker=dict(size=_sizes([strength[n] for n in nodes], 12, 36), color=GROUP_COLORS.get(g, OTHER_GREY), symbol="square",
                         line=dict(color=["#e34948" if h <= 1 else "white" for h in holders], width=3)),
             customdata=np.stack([[strength[n] for n in nodes], holders], axis=1),
             hovertemplate="%{text}: %{customdata[0]} tickets · %{customdata[1]} people with 3+<extra></extra>"))

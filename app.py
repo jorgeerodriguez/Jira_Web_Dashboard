@@ -3214,7 +3214,7 @@ elif selected == "🕸️  Knowledge Graph":
                   help=f"Domains where at most one person has {kg.SKILL_MIN_TICKETS}+ tickets.")
         c1, c2, c3 = st.columns([3, 2, 3])
         with c1:
-            grp = st.radio("Domain group", ["All", "AWS", "GCP", "Security", "Other"], horizontal=True, key="kg_skill_group")
+            grp = st.radio("Domain group", ["All"] + DOMAIN_GROUP_ORDER, horizontal=True, key="kg_skill_group")
         with c2:
             min_s = st.slider("Hide links with fewer tickets than", 1, 6, kg.SKILL_MIN_TICKETS, key="kg_skill_min")
         with c3:
@@ -3325,8 +3325,9 @@ elif selected == "🕸️  Knowledge Graph":
         from reports import skill_learning as sl
         st.subheader("Who Knows Which Application")
         st.caption(
-            "Applications and other themes learned from the text of DEVOPS and CAR tickets created in the last 12 months "
-            "(the candidate new domains on Suggested Assignments; this tab ignores the window above). Each cell counts "
+            "The Applications domains (reports/domains.py), plus application themes learned from ticket text that aren't "
+            "domains yet (Source: Candidate). DEVOPS and CAR tickets from the last 12 months; this tab ignores the window "
+            "above. Each cell counts "
             "tickets: 1 for working on it as the assignee, 0.5 for discussing it in the comments. The busiest 15 people "
             "are shown. For knowing who to ask and where knowledge is thin, not for rating people.")
         apps_cache = st.session_state.get("kg_apps_cache")

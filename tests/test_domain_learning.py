@@ -4,6 +4,8 @@ Pinned: the loader keeps a cleaned description (links removed, ADF flattened, tr
 description + comments; the back-test only uses work finished before each ticket was created, counts untagged tickets
 as misses, and compares against the busiest-people baseline.
 """
+import re
+
 import pandas as pd
 import pytest
 
@@ -91,6 +93,8 @@ def test_suggestions_find_keywords_and_new_themes():
     row = kw[(kw["Domain"] == "Grafana") & (kw["Add Keyword"] == "zorbex")].iloc[0]
     assert row["Would Add"] == 2 and row["Already In Domain"] == 6 and row["Precision %"] == 75
     assert row["Pattern"] == r"\bzorbex\b" and "DEVOPS-1" in row["Examples"]
+    assert re.search(ds.pattern("adtech vader"), "AW - ADTECH - Vader: scale", re.I)       # punctuation between words
+    assert ds.pattern("entercom-prod") == r"\bentercom-prod\b"
     new = s["new_df"]
     quokka = new[new["Keywords"].str.contains("quokka")].iloc[0]
     assert quokka["Tickets"] == 9 and quokka["CAR"] == 9 and quokka["Untagged"] == 9
@@ -98,7 +102,7 @@ def test_suggestions_find_keywords_and_new_themes():
     assert "fumbleton" not in every and "screenshot" not in every            # names and image markup are ignored
     assert "wibblefish" not in every                                          # a lone word is not a theme
     assert repr(ds.pattern("quokka")) in s["new_snippet"] and "DOMAIN_PRIORITY" in s["new_snippet"]
-    assert ds.pattern("node pool") == r"\bnode\spool\b" and s["what_if"] is None    # no team given: no back-test
+    assert ds.pattern("node pool") == r"\bnode\W+pool\b" and s["what_if"] is None    # no team given: no back-test
 
 
 def test_back_test_can_score_a_subset():
@@ -168,3 +172,23 @@ def test_application_map_links_apps_to_people():
     row = apps["apps_df"].set_index("Application").loc["Quokka"]
     assert row["Main Person"] == "Jo" and row["Worked On (Main)"] == 9 and row["People Involved"] == 2
     assert apps["matrix"].loc["Quokka", "Kim"] == 0.5 and sl.application_figure(apps["matrix"]) is not None
+
+
+def test_every_domain_group_is_displayed_and_apps_come_first():
+    assert set(domains.DOMAIN_GROUP.values()) <= set(domains.GROUP_ORDER)
+    apps = [d for d in domains.DOMAIN_PRIORITY if domains.group_of(d) == "Applications"]
+    assert apps and domains.DOMAIN_PRIORITY[:len(apps)] == apps          # a ticket naming its app is routed by it
+    assert domains.tag("AW - ADTECH - Vader: scale log rotation") == ["Vader"]
+
+
+def test_application_map_uses_the_applications_domains():
+    pytest.importorskip("networkx")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import skill_learning as sl
+    rows = [_ticket(f"CAR-{i}", f"AW - ADTECH - Vader: change {i}", assignee="Jo", project="Release Management")
+            for i in range(4)]
+    rows += [_ticket(f"DEVOPS-{100 + i}", f"filler{i} thing{i}") for i in range(20)]
+    apps = sl.application_map(pd.DataFrame(rows))["apps_df"].set_index("Application")
+    assert apps.loc["Vader", "Source"] == "Domain" and apps.loc["Vader", "Main Person"] == "Jo"
+    assert apps.loc["Vader", "Tickets"] == 4

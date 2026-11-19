@@ -39,7 +39,8 @@ DOMAIN_PATTERNS: dict[str, list[str]] = {'VDI/WorkSpaces': ['vdi', 'workspace', 
              'monitoring',
              '\\btempo\\b',
              'pyroscope',
-             'datadog'],
+             'datadog',
+             '\\bcontact\\W+points?\\b'],
  'Terraform/Terragrunt': ['terraform', 'tf-', 'terragrunt', '\\biac\\b', 'tflint', 'tfstate'],
  'Kubernetes/GitOps': ['kubernetes',
                        '\\bk8s\\b',
@@ -104,11 +105,14 @@ DOMAIN_PATTERNS: dict[str, list[str]] = {'VDI/WorkSpaces': ['vdi', 'workspace', 
  'ECS': ['\\becs\\b', 'fargate'],
  'OpenSearch': ['opensearch', 'elasticsearch'],
  'MSK': ['\\bmsk\\b', 'kafka', 'managed streaming'],
- 'GKE': ['\\bgke\\b'],
- 'VertexAI': ['vertex ai', 'vertexai', '\\bvertex\\b', 'aiplatform'],
+ 'GKE': ['\\bgke\\b', '\\bnode\\W+pool\\b', '\\bcontrol\\W+plane\\b', '\\bai-selfservice-nonprod\\b',
+         '\\bai-initiatives-nonprod\\b'],
+ 'VertexAI': ['vertex ai', 'vertexai', '\\bvertex\\b', 'aiplatform', '\\bworkbench\\b', '\\bdata\\W+hub\\b',
+              '\\blogging\\.logwriter\\b'],
  'Kubeflow Pipelines': ['kubeflow', '\\bkfp\\b'],
- 'Route53': ['route\\s?53', '\\br53\\b', 'tf-sharedservices'],
- 'Fastly': ['fastly'],
+ 'Route53': ['route\\s?53', '\\br53\\b', 'tf-sharedservices', '\\bcname\\b', '\\bapex\\b', '\\bpni\\b',
+             '\\bentercom-prod\\b'],
+ 'Fastly': ['fastly', '\\bwww\\.audacy\\.com\\b', '\\bnameservers\\b'],
  'CloudFront': ['cloud\\s?front'],
  'Upwind': ['upwind'],
  'GCP Agent Platform': ['agent-?platform', 'agent[-_ ]?space'],
@@ -116,9 +120,27 @@ DOMAIN_PATTERNS: dict[str, list[str]] = {'VDI/WorkSpaces': ['vdi', 'workspace', 
  'Firebase': ['firebase'],
  'Looker': ['looker'],
  'Knowledge Catalog': ['knowledge-?catalog', 'knowledge catalog'],
- 'Terraform Modules': ['tf-module', 'terraform module', 'tf module', 'reusable module', 'module release']}
+ 'Terraform Modules': ['tf-module', 'terraform module', 'tf module', 'reusable module', 'module release'],
+ # Applications (mostly AdTech / AmperWave, released through CAR tickets): learned from ticket text, 2026-11.
+ 'Vader': ['\\bvader\\b'],
+ 'Arc': ['\\barc\\b'],
+ 'Clarity': ['\\bclarity\\b'],
+ 'Bifrost': ['\\bbifrost\\b'],
+ 'RAD': ['\\brad\\b'],
+ 'Studio Console': ['\\bstudio\\W+console\\b', '\\baw-awpod\\W+studio\\b'],
+ 'AdTech Insights': ['\\badtech\\W+insights\\b'],
+ 'ads.txt': ['\\b(app-)?ads\\.txt\\b']}
 
-DOMAIN_PRIORITY: list[str] = ['VDI/WorkSpaces',
+# Applications first: a ticket that names its application is routed by it (back-tested 2026-11: +3 top-3 hits).
+DOMAIN_PRIORITY: list[str] = ['Vader',
+ 'Arc',
+ 'Clarity',
+ 'Bifrost',
+ 'RAD',
+ 'Studio Console',
+ 'AdTech Insights',
+ 'ads.txt',
+ 'VDI/WorkSpaces',
  'AI Plugins',
  'AWS Bedrock Agents',
  'GCP Agent Platform',
@@ -154,7 +176,8 @@ DOMAIN_PRIORITY: list[str] = ['VDI/WorkSpaces',
  'Kubernetes/GitOps',
  'GitLab']
 
-# Top-level grouping; domains not listed fall under "Other". Security = SecOps tools.
+# Top-level grouping; domains not listed fall under "Other". Security = SecOps tools. Applications = products the
+# team deploys and supports (not cloud services).
 DOMAIN_GROUP: dict[str, str] = {'GCP Core': 'GCP',
  'BigQuery/Data': 'GCP',
  'Composer': 'GCP',
@@ -176,11 +199,19 @@ DOMAIN_GROUP: dict[str, str] = {'GCP Core': 'GCP',
  'Looker': 'GCP',
  'Knowledge Catalog': 'GCP',
  'CloudFront': 'AWS',
- 'Upwind': 'Security'}
+ 'Upwind': 'Security',
+ 'Vader': 'Applications',
+ 'Arc': 'Applications',
+ 'Clarity': 'Applications',
+ 'Bifrost': 'Applications',
+ 'RAD': 'Applications',
+ 'Studio Console': 'Applications',
+ 'AdTech Insights': 'Applications',
+ 'ads.txt': 'Applications'}
 
 
 # Display order of the groups (darkstar's Intake page shows them in this order).
-GROUP_ORDER: list[str] = ["AWS", "GCP", "Security", "Other"]
+GROUP_ORDER: list[str] = ["AWS", "GCP", "Security", "Applications", "Other"]
 
 @lru_cache(maxsize=1)
 def _compiled() -> list[tuple[str, list[re.Pattern]]]:
