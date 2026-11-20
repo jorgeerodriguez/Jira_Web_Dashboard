@@ -15,13 +15,14 @@ It supports:
 - **Personal Dashboard** with prioritized attention and Epic-only view
 	- **Apparent Tardiness Cost (ATC)** ticket sequencing: suggests a work order that minimizes weighted tardiness across a person's open tickets
 	- a suggested working-day calendar visualizing that sequence, color-coded by priority
-- **Suggested Assignments**: who should take each unassigned or triage ticket — domain experience, availability, SLA fit and team load combined into an assignment plan with reasons, backups and cross-training suggestions, plus a safe-mode **✏️ Assign in Jira** button — see [How Suggested Assignments works](#how-suggested-assignments-works)
+- **Suggested Assignments**: who should take each unassigned or triage ticket — domain experience, availability, SLA fit and team load combined into an assignment plan with reasons, backups and cross-training suggestions, plus a safe-mode **✏️ Assign in Jira** button. A **Learning** section back-tests how well the domains predict who does the work and suggests (never applies) domain improvements learned from ticket text — see [How Suggested Assignments works](#how-suggested-assignments-works) and [Learning](#learning-how-good-are-the-domains-and-how-to-improve-them)
 - **SLA**: the daily view of breached, late and at-risk work. Two breach rates against the **under 10%** goal (SLA came due / completed late), a trend, where breaches come from, what's coming due, and two searchable, filterable action tables (**SLA Detail** and **Breached Tickets**) with the latest human comment and a Jira link — see [How the SLA page works](#how-the-sla-page-works)
 - **Delivery Forecast**: how many tickets PE will likely deliver in the next 4, 8 and 12 weeks with a calibrated range, a "can we commit to a project?" calculator, a demand vs delivery outlook, and the forecast's own track record — see [How the Delivery Forecast works](#how-the-delivery-forecast-works)
 - **In Progress completion forecast**: when each in-progress ticket will finish (P50 likely / P85 safe dates), checked against its **business-day SLA** (Priority × Size) and its Target End Date — see [How the In Progress forecast works](#how-the-in-progress-forecast-works)
 - **Backlog forecast**: when each backlog ticket will *start* and finish, queued behind each person's In Progress work in ATC order, with SLA risk, capacity runway and backlog readiness, plus **safe-mode updates of Jira Target dates** from the forecast — see [How the Backlog forecast works](#how-the-backlog-forecast-works)
 - **Teams Conversations** from human ticket comments: **comment coverage** to track monthly, the friction themes that cost the most time (with suggested process changes), conversation health, and the phrase of the month — see [How Teams Conversations works](#how-teams-conversations-works)
 - **Executive Summary** for leadership: generated headlines, health tiles compared with the previous period, flow of work in vs out, SLA compliance trend, where open work sits and how much is at risk, a short "needs attention" list, and aging — see [How the Executive Summary works](#how-the-executive-summary-works)
+- **Executive Report**: a monthly, self-contained HTML (and PDF) report for leadership — one full month against the month before, with decisions needed and recommendations — built by a script or by a button that only works on the machine running the app — see [Executive Report](#executive-report)
 - Consistent ticket scope: Features and Initiatives are excluded from ticket metrics — see [What counts as a ticket](#what-counts-as-a-ticket-and-as-completed)
 - **Distribution of Ticket's Age**: open-work age against SLA, where work has gone quiet (no human comment), and whether open work is getting older — see [How Distribution of Ticket's Age works](#how-distribution-of-tickets-age-works)
 - **Capacity**: weekly delivery vs demand, a Monte Carlo delivery forecast with a "how long for N more tickets?" calculator, where capacity goes (planned vs reactive, priority), and load balance across the team — see [How Capacity works](#how-capacity-works)
@@ -31,8 +32,8 @@ It supports:
 - **Velocity**: what lead time we can promise a requester (50/85/95%), waiting vs in-progress time by priority, whether sizes predict effort, an SLA reality check per Priority × Size, and what was delivered — see [How Velocity works](#how-velocity-works)
 - **Trend**: an improvement scorecard and 12-month small multiples for delivery, lead and cycle time, predictability, SLA met, urgent and reactive work, comment coverage and people delivering, Target date changes (moves, re-planning after the date passed, SLA clocks set after the fact), plus team contribution over time — see [How Trend works](#how-trend-works)
 - **Validating**: work waiting for the requester to confirm — time waiting since entering Validating, a nudge list, validation time and rework trends, by business lead, SLA impact and policy what-ifs — see [How Validating works](#how-validating-works)
-- **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) a skills map (who holds which domains, single-person domains, skills that go together) and dependencies (what waits on what, from Jira issue links) — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
-- **Status of My Ticket**: everything about one ticket — where it stands in plain English, a timeline of status, assignee, dates and comments, where the time went vs similar tickets, Target date history, the conversation, what it waits on, people involved, similar tickets, posted forecasts vs reality, a shareable `?ticket=KEY` link and a printable summary — see [How Status of My Ticket works](#how-status-of-my-ticket-works)
+- **Knowledge Graph**: relationship graphs built with NetworkX — who asks whom (requester → engineer), who talks to whom (communities and bridges in comment conversations) a skills map (who holds which domains, single-person domains, skills that go together) and dependencies (what waits on what, from Jira issue links) and **who knows which application** — see [How the Knowledge Graph works](#how-the-knowledge-graph-works)
+- **Status of My Ticket**: everything about one ticket — where it stands in plain English, a timeline of status, assignee, dates and comments, where the time went vs similar tickets, Target date history, the conversation, what it waits on, people involved, the GitLab merge requests linked in the ticket, similar tickets, posted forecasts vs reality, a shareable `?ticket=KEY` link and a printable summary — see [How Status of My Ticket works](#how-status-of-my-ticket-works)
 - **Change history**: status and Target date history loaded with every fetch (Jira bulk changelog) — see [Change history](#change-history)
 
 ---
@@ -59,11 +60,15 @@ Jira_Web_Dashboard/
 │   ├── build_dataframe_new.py
 │   ├── fetch_change_history.py  # status / Target date history (bulk changelog)
 │   ├── dashboard_comments.py    # recognise dashboard-posted comments; forecast tag
+│   ├── merge_request_links.py   # GitLab MR links pasted in a ticket's description or comments
 │   ├── fetch_all_tickets_for_devops.py
 │   └── metrics.py
 ├── reports/
 │   ├── __init__.py
-│   ├── assignment_report.py     # Suggested Assignments
+│   ├── assignment_report.py     # Suggested Assignments (+ the domain back-test, domain_accuracy)
+│   ├── domain_suggestions.py    # Learning: keyword additions and candidate new domains, back-tested
+│   ├── skill_learning.py        # Learning: domains to split, hidden expertise, who knows which application
+│   ├── executive_report.py      # monthly Executive Report (HTML + PDF)
 │   ├── welcome.py               # Welcome page content and layout
 │   ├── knowledge_graph.py       # Knowledge Graph (NetworkX analysis, Plotly drawing)
 │   ├── dependency_graph.py      # Knowledge Graph · Dependencies (issue links)
@@ -91,6 +96,10 @@ Jira_Web_Dashboard/
 │   ├── service_level_agreement_report.py
 │   ├── forecast_report.py
 │   └── probability_completion_report.py
+├── docs/
+│   ├── executive_report/
+│   │   └── make_report.py       # build the Executive Report (output/ is git-ignored)
+│   └── whitepaper/              # technical white paper + leadership brief (PDFs git-ignored)
 ├── darkstar/                    # FastAPI v2 dashboards (own requirements.txt, own venv)
 ├── tests/                       # pytest suite (darkstar + reports)
 │   ├── test_in_progress_forecast.py
@@ -115,6 +124,9 @@ Jira_Web_Dashboard/
 │   ├── test_knowledge_graph.py
 │   ├── test_dependency_graph.py
 │   ├── test_ticket_story.py
+│   ├── test_executive_report.py
+│   ├── test_merge_request_links.py
+│   ├── test_domain_learning.py
 │   └── ...
 └── backup/
 ```
@@ -193,9 +205,32 @@ Templates provided:
 - `.streamlit/secrets.toml.example`
 - `.env.example`
 
+### Local-only switches (project `.env`)
+
+Both are off unless set to `true`, are read from the project `.env` (falling back to the environment) each time
+they're used, and only work when the app is opened from **localhost**. Shared copies of the app never show them.
+
+| Setting | Turns on |
+| --- | --- |
+| `JIRA_WRITE_ENABLED=true` | The safe-mode Jira writes: Update Target dates and Post forecast as comments (Backlog), Assign in Jira (Suggested Assignments) |
+| `EXECUTIVE_REPORT_ENABLED=true` | The **📄 Executive Report** panel on the Executive Summary page |
+
 ---
 
 ## Recent updates
+
+November 2026:
+- **Domains updated from the Learning section** (back-tested, then applied): new keywords for GKE, Route53, Fastly,
+  Grafana and VertexAI, and a new **Applications** group (Vader, Arc, Clarity, Bifrost, RAD, Studio Console,
+  AdTech Insights, ads.txt), ranked first. Top-3 hit rate 54.0% → 55.4% on 904 recently completed PE tickets
+- **Suggested Assignments · Learning**: domain tagging now reads ticket **descriptions** (tickets with a domain
+  87% → 97%, top-3 hit rate 47% → 54.5%); a back-test scorecard; suggested keyword additions and new domains;
+  domains to split and hidden expertise (on demand); every suggestion back-tested and shown, never applied
+- **Knowledge Graph · Applications** tab: who knows which application (DEVOPS and CAR tickets)
+- **Status of My Ticket · Merge Requests**: GitLab MR links pasted in the description or comments, on the timeline and
+  in a table (Jira's GitLab integration isn't connected for DEVOPS)
+- **Executive Report**: monthly leadership report (HTML + PDF), by script or a local-only button
+- The Skills Map's groups come from the taxonomy, so a new group can't break it
 
 - Refactored codebase into package folders: `config/`, `data/`, and `reports/`
 - Added/updated report modules under `reports/` and imports in `app.py`
@@ -283,7 +318,8 @@ seeds). Meant for balancing work and cross-training, not for rating people.
 | --- | --- | --- |
 | Who Asks Whom | Requester (Jira reporter) → engineer, requesters left and engineers right, ordered to reduce crossings; or a **Flow** (Sankey) of the 15 busiest requesters | Share of tickets created by the engineer who worked them (not drawn); **Requester Dependency**: requesters with 10+ tickets who send 60%+ to one engineer. Automation requesters are marked |
 | Who Talks to Whom | Two signals from human comments (automation and dashboard-posted comments excluded): **replies** (each time the author changes between consecutive comments on a ticket) and **@mentions** (a comment's author and each person they mention; account ids resolved to names from comment authors, assignees and reporters). Choose Replies, Mentions or both. One cluster per **Louvain community**; **All links** (with a minimum strength) or the **Strongest** top N pairs (1–10), overall or for one person. **Leave out people** (up to 10) removes them before anything is calculated, so groups, bridges and strongest pairs show how everyone else connects. A "How this graph is built" note sits on the tab | **Siloed?** from modularity (near 0 = well mixed); **Strongest Relationships** (strength, replies, mentions, shared tickets); **Bridges**: betweenness centrality, the people who connect groups |
-| Skills Map | Domains on a ring (grouped GCP, AWS, Security, Other), each engineer placed between the domains they work in (generalists in the middle) | **Domains Resting on One Person** (at most one person with 3+ tickets; flags owners who left PE); **Skills That Go Together**: domain pairs with the highest lift, P(a,b) / (P(a) P(b)) |
+| Skills Map | Domains on a ring (grouped GCP, AWS, then the taxonomy's other groups: Security, Applications, Other), each engineer placed between the domains they work in (generalists in the middle) | **Domains Resting on One Person** (at most one person with 3+ tickets; flags owners who left PE); **Skills That Go Together**: domain pairs with the highest lift, P(a,b) / (P(a) P(b)) |
+| Applications | Applications × people heatmap: working on a ticket as the assignee counts 1, discussing it in the comments 0.5. Applications are the taxonomy's **Applications** group plus application themes learned from ticket text that aren't domains yet (Source: Candidate). DEVOPS and CAR tickets from the last 12 months, whatever the window above (`reports/skill_learning.application_map`) | Main person and their share, second person, people involved: where application knowledge rests on one person |
 
 As of 2026-10-20 (12 months): 96 requesters and 30 engineers; 38% of tickets were created by their engineer; 6
 requesters depend on one engineer; 44% of human comments @mention someone (99.8% of 6,440 mentions resolve to a
@@ -343,6 +379,14 @@ drawn, so a jump never swallows the user's next menu click.
 - **Download a one-page summary** (HTML; print to PDF from the browser).
 
 The change history now also includes **assignee** changes, for the assignee lane of the timeline.
+
+**Merge Requests.** Jira's GitLab integration (the Development panel) isn't connected for DEVOPS, so the only MR
+information a ticket carries is links people paste. The fetch reads each ticket's description and every comment
+(automation comments included) and keeps only the GitLab MR links (`data/merge_request_links.py`; links to an MR's
+notes or diffs count as that MR). The page shows them on a **Merge requests** lane of the timeline (links posted
+together share a marker) and in a table with who posted each link, where and when. Dates are when the link was
+posted, not when the MR was opened or merged. As of 2026-11-11, 24% of PE tickets created in the last 90 days had at
+least one MR link.
 
 ---
 
@@ -418,6 +462,30 @@ Each tile compares the last *N* days with the *N* days before, where *N* is the 
 The old per-assignee age chart was removed from this leadership view. People-level detail is on the
 In Progress and Backlog pages. The old business-lead and assignee age charts also showed the
 *youngest* groups because of a sort bug; the new chart shows the oldest first.
+
+---
+
+## Executive Report
+
+A monthly report for leadership: **one full calendar month compared with the month before** (default: the last full
+month), as one self-contained HTML file (charts included, works offline and as an attachment) and a PDF printed with
+local Google Chrome. Code: `reports/executive_report.py`.
+
+- **Contents** (about 10 printed pages): summary page (8 tiles with change vs the previous month, headlines,
+  decisions needed) · delivery and capacity (12-month flow and lead time, capacity, forecast) · SLA (met as recorded,
+  and only counting clocks set before the work finished; tickets completed late) · open work today (risk by stage,
+  Validating, dependencies, needs attention) · requesters and business leads · people and knowledge risk at team
+  level · data quality · recommendations · appendix (definitions, full ticket lists).
+- **Names**: ticket keys and business leads appear; engineers never do (a test checks this).
+- **Numbers** are recomputed for the month with the same rules as the app pages (`executive_summary._facts`, the SLA
+  page's `_judged` / `_rates`), so they match.
+- **Build it** either way:
+  - `.venv/bin/python docs/executive_report/make_report.py [--month 2026-10]` fetches from Jira (read-only) and
+    writes to `docs/executive_report/output/` (git-ignored: the report names tickets and business leads, and this
+    repo is public). `--issues`/`--history` use saved data instead; `--no-pdf` skips Chrome.
+  - The **📄 Executive Report (this machine only)** panel at the bottom of the Executive Summary page: pick a month,
+    **Build report**, then download HTML and PDF. It appears only on localhost with `EXECUTIVE_REPORT_ENABLED=true`
+    in the project `.env`; nothing is saved or sent.
 
 ---
 
@@ -784,7 +852,7 @@ Each candidate is scored for each ticket:
 
 | Signal | How |
 | --- | --- |
-| Domain experience | Recent completed (1.0) and active (0.5) tickets in the ticket's primary domain, halving every 120 days. Domains are tagged from the title **and human comments** (79% of PE tickets get a domain, against 67% from titles alone) |
+| Domain experience | Recent completed (1.0) and active (0.5) tickets in the ticket's primary domain, halving every 120 days. Domains are tagged from the title, the **description** and human comments (`domains.ticket_text`; 97% of recently completed PE tickets get a domain) |
 | Availability and SLA fit | The Backlog queue simulation with the ticket added to the candidate's queue in ATC order, after their In Progress work, at their own speed for that priority. Gives a likely start and a P85 finish, and whether that finish beats the SLA due date (or, with no Target start yet, whether the work fits within the SLA) |
 | Load | A penalty when someone already holds 1.3× their usual WIP, and a smaller one for each ticket the plan has already given them |
 
@@ -794,16 +862,48 @@ before the next ticket is scored, so the plan spreads work. Each ticket shows a 
 the reason, a **Backup**, and a **Stretch** (someone with some experience in the domain, for
 cross-training). **Compare Options** lists every candidate for a ticket.
 
-Also on the page: **Who Knows What** (recent tickets per domain and person, every domain with recent work, filterable by group: AWS, GCP, Security, Other) and **Domains Leaning on
+Also on the page: **Who Knows What** (recent tickets per domain and person, every domain with recent work, filterable by group: AWS, GCP, Security, Applications, Other) and **Domains Leaning on
 One Person** (the top person's share of each domain, for cross-training).
 
-**Taxonomy.** `reports/domains.py` is a copy of darkstar's Intake taxonomy (35 domains, including CloudFront and Upwind);
-`tests/test_assignments.py` fails if the two drift apart, so edit both together.
+**Taxonomy.** `reports/domains.py` is a copy of darkstar's Intake taxonomy (43 domains in 5 groups: AWS, GCP,
+Security, Applications, Other); `tests/test_assignments.py` fails if the two drift apart, so edit both together. The
+**Applications** domains (Vader, Arc, Clarity, Bifrost, RAD, Studio Console, AdTech Insights, ads.txt) rank first in
+`DOMAIN_PRIORITY`, so a ticket that names its application is routed by it. Group names, order and colours used by the
+pages all come from `domains.GROUP_ORDER`.
 
 **Limits.** A back-test (671 tickets, October 2026) found that today's assignee was the top domain expert
 26% of the time and in the top 3 49% of the time, so work isn't routed mainly by expertise today. The
 page balances expertise against availability and the SLA rather than copying past assignments. Whether
-following it improves SLA results can only be measured after using it.
+following it improves SLA results can only be measured after using it. The Learning section below tracks the domain
+part of this over time.
+
+### Learning: how good are the domains, and how to improve them
+
+At the bottom of the page. Everything here is **shown, never applied**: the taxonomy is shared with darkstar's Intake
+page, so accepted changes are made by hand in both files (snippets are provided).
+
+- **Scorecard** (`assignment_report.domain_accuracy`): for each PE ticket completed in the last 90 days by the
+  current team, rank the team on domain experience from work finished **before** the ticket was created, and check
+  whether the person who did it is in the top 3. Compared with a no-domain baseline (the 3 busiest people at the
+  time), with a hit rate per domain (lowest first: where the domains help least). Availability isn't replayed, so it
+  scores the domain part of the suggestions only. As of 2026-11-19: **55.4%** top-3 against a 45.8% baseline (904
+  tickets).
+- **Keywords to add to existing domains** (`reports/domain_suggestions.py`): words and phrases from the title and
+  description of DEVOPS and CAR tickets (last 12 months) that no domain matches, whose tickets mostly sit in one
+  domain (precision ≥ 70%, lift ≥ 3). Each domain's additions are **back-tested**; *Domain Effect* is how many recent
+  tickets gain (+) or lose (−) the right person from the top 3. Some additions hurt (they pull tickets into broad
+  domains), so the snippet includes only domains that help. Stop words, Jira/image markup, release-template phrases
+  and people's names are left out.
+- **Candidate new domains**: terms no domain covers and no single domain owns, common among untagged tickets or
+  rising, grouped by how often they appear on the same tickets (Louvain); a theme needs two terms that go together.
+- **Deeper analysis** (button, about 30 seconds, `reports/skill_learning.py`): **domains to split** (groups of tickets
+  inside a busy domain with their own vocabulary, each back-tested as a sub-domain) and **hidden expertise** (team
+  members who help on a domain's tickets, by commenting or posting MR links, at least as often as they're assigned
+  it). Counting that help toward expertise was back-tested and didn't help, so it's shown for picking backups and
+  cross-training only.
+
+Results are computed once per fetch and cached; grouping and naming are deterministic. Review the suggestions with
+judgement: a term can help in the back-test by chance, and broad words also re-label tickets on the Intake page.
 
 ### Assigning in Jira (safe mode)
 
