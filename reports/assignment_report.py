@@ -10,8 +10,10 @@ CANDIDATE_DAYS days, plus NEW_MEMBERS (new hires, before they have that track re
 (excluded assignees are already left out by prepare_tickets).
 
 Each candidate is scored on what the other pages already measure:
-- Expertise: recency-weighted completed (1.0) and active (0.5) tickets in the ticket's primary domain,
-  tagged from title + description + human comments with the shared taxonomy (reports/domains.py).
+- Expertise: recency-weighted completed (1.0) and active (0.5) tickets in the ticket's domains (the primary at full
+  weight, the others at half, hub domains only as the primary), tagged from title + description + human comments
+  with the shared taxonomy (reports/domains.py), plus credit for finishing similar past tickets from other
+  requesters (reports/expertise_model.py explains the choice and the back-test).
 - Availability and SLA fit: the Backlog queue simulation with the ticket added to the candidate's
   queue in ATC order (their In Progress work first), using their own speed at that priority. Gives a
   likely start and a P85 finish, and whether that finish beats the SLA due date.
@@ -34,6 +36,8 @@ from reports import domains
 from reports import executive_summary as es
 from reports import in_progress_report as ipr
 from reports.atc_sequence import build_atc_sequence
+from reports.expertise_model import (EXPERTISE_HALF_LIFE_DAYS, SIMILAR_K, SIMILAR_WEIGHT, Relations, build_similar,
+                                     domain_weights, expertise_scorer)
 from reports.jira_assign import account_ids
 
 
@@ -48,12 +52,12 @@ DEPARTED_MEMBERS = {"randall puterbaugh", "andriy petryshyn"}
 NEW_MEMBERS = {"Anastasiia Yerchenko"}
 CANDIDATE_DAYS = 90
 MIN_DELIVERED = 5
-EXPERTISE_HALF_LIFE_DAYS = 120
 ACTIVE_WEIGHT = 0.5
 WEIGHT_EXPERTISE, WEIGHT_AVAILABILITY = 0.6, 0.4
 LOAD_PENALTY, LOAD_PENALTY_FROM = 0.15, 1.3      # penalise when current WIP is 1.3x+ the usual
 PLAN_BALANCE_PENALTY = 0.08                      # per ticket already suggested to the same person in this plan
 STRETCH_MAX_SHARE = 0.5                          # stretch = some exposure, but at most half the top expert's
+SIMILAR_NOTE_MIN = 0.1                           # mention similar past tickets in the reason only when they are real evidence
 ACCURACY_DAYS = 90                               # back-test: tickets completed in this window
 ACCURACY_TOP = 3
 INK = ipr.INK
@@ -89,7 +93,7 @@ def expertise_matrix(tickets: pd.DataFrame, today: pd.Timestamp, people: list[st
 
 
 def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str], days: int = ACCURACY_DAYS,
-                    keys=None, extra: pd.DataFrame | None = None) -> dict:
+                    keys=None, extra: pd.DataFrame | None = None, scorer=None) -> dict:
     """How well domain experience predicts who does the work: a back-test on recently completed tickets.
 
     For each PE ticket completed in the last `days` days by a current candidate, rank the candidates on their
@@ -100,6 +104,8 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
     `keys` limits the tickets scored (all earlier work still counts as experience): domain_suggestions uses it to
     re-score only the tickets a taxonomy change can affect. `extra` adds other evidence of experience as rows
     (assignee_name, closed_day = when it happened, domains, weight), e.g. help given on other people's tickets.
+    `scorer` replaces the primary-domain ranking with another way of scoring experience (reports/expertise_model.py:
+    expertise_scorer, which the plan uses); without it the primary domain alone is scored, as the domain what-ifs need.
     """
     done = tickets[tickets["outcome"].eq("Done") & tickets["assignee_name"].isin(people) & tickets["closed_day"].notna()]
     evaluate = done[done["closed_day"] > today - pd.Timedelta(days=days)]
@@ -114,6 +120,9 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
         work = pd.concat([work, extra[["assignee_name", "closed_day", "domains", "weight"]]], ignore_index=True)
     work = work.explode("domains")
     halflife = float(EXPERTISE_HALF_LIFE_DAYS)
+    # Which domains are hubs hardly changes from day to day, so one count over all tickets serves every test ticket
+    # (re-counting before each one gave 58.0% instead of 58.1% on 905 tickets, and was 2 s slower).
+    relations = Relations(tickets["domains"]) if scorer is not None else None
     rows = []
     for _, t in evaluate.iterrows():
         before = done[done["closed_day"] < t["created_day"]]              # one row per ticket, for the baseline
@@ -124,7 +133,11 @@ def domain_accuracy(tickets: pd.DataFrame, today: pd.Timestamp, people: list[str
         base_top = list(busiest.sort_values(ascending=False).index[:ACCURACY_TOP])
         domain = t["domain"] if isinstance(t["domain"], str) else None
         top = []
-        if domain is not None:
+        if scorer is not None:
+            expertise = scorer(t, prior.assign(w=weight), relations)
+            expertise = expertise.reindex(people).fillna(0.0)
+            top = list(expertise[expertise > 0].sort_values(ascending=False).index[:ACCURACY_TOP])
+        elif domain is not None:
             mine = prior["domains"].eq(domain)
             expertise = weight[mine].groupby(prior.loc[mine, "assignee_name"]).sum()
             top = list(expertise[expertise > 0].sort_values(ascending=False).index[:ACCURACY_TOP])
@@ -243,7 +256,9 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     queues = _Queues(t, in_progress, history, effects, wip_factor, typical, today, hol, people)
 
     matrix = expertise_matrix(t, today, people)
-    payload_accuracy = domain_accuracy(t, today, people)
+    similar = build_similar(t, people)
+    payload_accuracy = domain_accuracy(t, today, people, scorer=expertise_scorer(similar))
+    hubs = Relations(t["domains"]).hubs
     wip_now = in_progress.groupby("assignee_name").size()
     load = pd.DataFrame({"Person": people,
                          "In Progress Now": [int(wip_now.get(p, 0)) for p in people],
@@ -270,7 +285,15 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
     given: dict[str, int] = {}
     for _, ticket in queue.iterrows():
         domain = ticket["domain"] if isinstance(ticket["domain"], str) else None
-        column = matrix.loc[domain] if domain is not None and domain in matrix.index else pd.Series(0.0, index=people)
+        own = matrix.loc[domain] if domain is not None and domain in matrix.index else pd.Series(0.0, index=people)
+        column = pd.Series(0.0, index=people)                            # experience in every domain on the ticket
+        for d, w in domain_weights(list(ticket["domains"]), domain, hubs).items():
+            if d in matrix.index:
+                column = column + w * matrix.loc[d]
+        neighbours = similar.neighbours(ticket, SIMILAR_K, other_requesters=True, as_of=today) if similar else pd.DataFrame()
+        credit = (neighbours.groupby("assignee_name")["weight"].sum().reindex(people).fillna(0.0)
+                  if len(neighbours) else pd.Series(0.0, index=people))
+        column = column + SIMILAR_WEIGHT * credit
         top = float(column.max()) if len(column) else 0.0
         trials = {p: queues.try_ticket(p, ticket) for p in people}
         latest = max(v["finish_p85"] for v in trials.values()) or 1.0
@@ -281,13 +304,14 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
             score = (WEIGHT_EXPERTISE * expertise + WEIGHT_AVAILABILITY * availability
                      - (LOAD_PENALTY if p in overloaded else 0) - PLAN_BALANCE_PENALTY * given.get(p, 0))
             scored.append({"person": p, "fits_sla": _sla_fit(ticket, trials[p], today, hol), "score": score,
-                           "expertise": expertise, "domain_weight": float(column.get(p, 0.0)), **trials[p]})
+                           "expertise": expertise, "domain_weight": float(own.get(p, 0.0)),
+                           "similar_credit": float(credit.get(p, 0.0)), **trials[p]})
         ranked = sorted(scored, key=lambda s: (not s["fits_sla"], -s["score"]))
         best = ranked[0]
         backup = next((s for s in ranked[1:]), None)
         stretch = next((s for s in sorted(scored, key=lambda s: (not s["fits_sla"], s["finish_p85"]))
                         if s["person"] not in (best["person"], backup["person"] if backup else None)
-                        and 0 < s["expertise"] <= STRETCH_MAX_SHARE), None) if domain else None
+                        and 0 < s["expertise"] <= STRETCH_MAX_SHARE), None) if top > 0 else None
         queues.add(best["person"], ticket)
         given[best["person"]] = given.get(best["person"], 0) + 1
 
@@ -298,8 +322,13 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
         if domain:
             why.append(f"≈{best['domain_weight']:.0f} recent {domain} tickets" if best["domain_weight"] >= 0.5
                        else f"little {domain} history (chosen for availability)")
+        elif best["similar_credit"] >= SIMILAR_NOTE_MIN:
+            why.append("no domain recognised (chosen on similar past tickets and availability)")
         else:
             why.append("no domain recognised (chosen for availability)")
+        if best["similar_credit"] >= SIMILAR_NOTE_MIN and len(neighbours):
+            mine = neighbours[neighbours["assignee_name"] == best["person"]]
+            why.append(f"finished similar work, e.g. {mine.iloc[0]['key']}")
         why.append(f"likely start {when(best['start_p50']):%b %d}, done by {when(best['finish_p85']):%b %d}")
         if not best["fits_sla"]:
             why.append("no one fits the SLA: earliest finish shown")
@@ -320,7 +349,8 @@ def build_assignment_visuals(df_issues: pd.DataFrame) -> dict:
         })
         options[ticket["key"]] = pd.DataFrame([{
             "Person": s["person"], "Fits SLA": "✓" if s["fits_sla"] else "✖", "Score": round(s["score"], 2),
-            "Domain Experience": round(s["domain_weight"], 1), "Likely Start": when(s["start_p50"]),
+            "Domain Experience": round(s["domain_weight"], 1), "Similar Work": round(s["similar_credit"], 1),
+            "Likely Start": when(s["start_p50"]),
             "Done By (P85)": when(s["finish_p85"]), "Above Usual Load": "yes" if s["person"] in overloaded else "",
         } for s in ranked])
 

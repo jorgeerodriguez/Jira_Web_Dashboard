@@ -131,3 +131,38 @@ def test_new_members_are_candidates_before_they_have_a_track_record(asg, monkeyp
     monkeypatch.setattr(asg, "DEPARTED_MEMBERS", {"nia"})
     out, _ = _plan(asg, rows)
     assert "Nia" not in set(out["load_df"]["Person"])
+
+
+def test_similar_past_tickets_point_to_whoever_finished_them_even_without_a_domain(asg):
+    pytest.importorskip("sklearn")
+    rows = _team()
+    rows = [r for r in rows if not r["key"].startswith("A-")]
+    rows += [_issue(f"A-{i}", "Ana", f"Renew expired wildcard certificate for billing proxy {i}", done_days_ago=5 + i)
+             for i in range(12)]
+    rows.append(_issue("NEW", "Unassigned", "Renew expired wildcard certificate for checkout proxy", status="To Do",
+                       start_in_days=1))
+    out, plan = _plan(asg, rows)
+    assert plan.loc["NEW", "Domain"] == "—"                                   # nothing in the taxonomy matches
+    assert plan.loc["NEW", "Suggested"] == "Ana"
+    assert "finished similar work" in plan.loc["NEW", "Why"] and "similar past tickets" in plan.loc["NEW", "Why"]
+    options = out["options"]["NEW"].set_index("Person")
+    assert options.loc["Ana", "Similar Work"] > options.loc["Ben", "Similar Work"]
+
+
+def test_secondary_domains_count_unless_they_are_hubs(asg):
+    from reports import expertise_model as em
+    assert em.domain_weights(["GKE", "IAM/RBAC", "Grafana"], "GKE", hubs={"IAM/RBAC"}) == {"GKE": 1.0, "Grafana": 0.5}
+    assert em.domain_weights(["IAM/RBAC", "Grafana"], "IAM/RBAC", hubs={"IAM/RBAC"}) == {"IAM/RBAC": 1.0, "Grafana": 0.5}
+    # The scorecard and the plan score experience the same way: a ticket's other domains count in the back-test too.
+    today = pd.Timestamp("2026-11-17")
+    rows = [{"key": f"H{i}", "assignee_name": "Ana", "outcome": "Done", "domains": ["Looker"], "domain": "Looker",
+             "created_day": pd.Timestamp("2026-01-05"), "closed_day": pd.Timestamp("2026-01-10")} for i in range(3)]
+    rows += [{"key": f"F{i}", "assignee_name": "Ben", "outcome": "Done", "domains": [f"D{i % 30}"], "domain": f"D{i % 30}",
+              "created_day": pd.Timestamp("2026-01-05"), "closed_day": pd.Timestamp("2026-01-10")} for i in range(60)]
+    # The test ticket's primary domain is Fastly (nobody has it) but it also carries Looker, which only Ana knows.
+    rows.append({"key": "T", "assignee_name": "Ana", "outcome": "Done", "domains": ["Fastly", "Looker"], "domain": "Fastly",
+                 "created_day": pd.Timestamp("2026-11-01"), "closed_day": pd.Timestamp("2026-11-05")})
+    t = pd.DataFrame(rows)
+    only_primary = asg.domain_accuracy(t, today, ["Ana", "Ben"], days=30)
+    combined = asg.domain_accuracy(t, today, ["Ana", "Ben"], days=30, scorer=em.expertise_scorer(None))
+    assert only_primary["hit"] == 0.0 and combined["hit"] == 1.0

@@ -1848,8 +1848,10 @@ elif selected == "🧭  Suggested Assignments":
                     "(most urgent first).\n"
                     "- **Candidates:** people who completed at least 5 PE tickets in the last 90 days, excluding people "
                     "who have left the team.\n"
-                    "- **Domain experience:** recent tickets in the same domain (from titles and comments, using the same "
-                    "domain list as darkstar's Intake page); recent work counts more.\n"
+                    "- **Domain experience:** recent tickets in the ticket's domains (from titles, descriptions and comments, "
+                    "using the same domain list as darkstar's Intake page); recent work counts more.\n"
+                    "- **Similar past tickets:** credit for finishing tickets that read like this one (title and "
+                    "description), leaving out the same requester's tickets so the plan follows skill, not routing habit.\n"
                     "- **Availability and SLA:** each ticket is tried in each person's queue (their current work first, "
                     "then ATC order, at their own speed) using the Backlog forecast. Owners who would finish within the "
                     "SLA come first.\n"
@@ -1919,7 +1921,8 @@ elif selected == "🧭  Suggested Assignments":
                     f"A back-test on the {acc['n']} PE tickets completed in the last {acc['days']} days by the current team. "
                     f"For each one, the team is ranked on domain experience from work finished *before* the ticket was "
                     f"created. The score is how often the person who actually did it was in the top {acc['top']}. "
-                    f"Availability isn't replayed, so this measures the domain part of the suggestions only. Better domains "
+                    f"Availability isn't replayed, so this measures the experience part of the suggestions only (every domain "
+                    f"on the ticket plus similar past tickets, as in the plan). Better domains "
                     f"(phases 2 and 3 of this section) should move this number up.")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric(f"Top-{acc['top']} Hit Rate", pct(acc["hit"]),

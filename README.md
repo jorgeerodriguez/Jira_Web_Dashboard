@@ -68,6 +68,8 @@ Jira_Web_Dashboard/
 │   ├── assignment_report.py     # Suggested Assignments (+ the domain back-test, domain_accuracy)
 │   ├── domain_suggestions.py    # Learning: keyword additions and candidate new domains, back-tested
 │   ├── skill_learning.py        # Learning: domains to split, hidden expertise, who knows which application
+│   ├── expertise_model.py       # how experience is scored for a ticket: all domains + similar past tickets
+│   ├── assignment_experiments.py # back-test other scorings (read-only, not used by the app)
 │   ├── executive_report.py      # monthly Executive Report (HTML + PDF)
 │   ├── welcome.py               # Welcome page content and layout
 │   ├── knowledge_graph.py       # Knowledge Graph (NetworkX analysis, Plotly drawing)
@@ -99,6 +101,8 @@ Jira_Web_Dashboard/
 ├── docs/
 │   ├── executive_report/
 │   │   └── make_report.py       # build the Executive Report (output/ is git-ignored)
+│   ├── assignment_experiments/
+│   │   └── run.py               # compare ways of scoring experience (prints; writes nothing)
 │   └── whitepaper/              # technical white paper + leadership brief (PDFs git-ignored)
 ├── darkstar/                    # FastAPI v2 dashboards (own requirements.txt, own venv)
 ├── tests/                       # pytest suite (darkstar + reports)
@@ -220,6 +224,11 @@ they're used, and only work when the app is opened from **localhost**. Shared co
 ## Recent updates
 
 November 2026:
+- **Suggested Assignments · better experience scoring**: the plan and the scorecard now count every domain on a ticket
+  (hub domains only as the primary) and credit people for finishing similar past tickets from *other* requesters.
+  Top-3 hit rate 55.1% → 58.1% (905 tickets, better on 39 / worse on 13 in the paired back-test); tickets with no domain
+  can now be routed on similar work. Requester habit is deliberately left out. See
+  [Comparing ways of scoring experience](#comparing-ways-of-scoring-experience)
 - **Domains updated from the Learning section** (back-tested, then applied): new keywords for GKE, Route53, Fastly,
   Grafana and VertexAI, and a new **Applications** group (Vader, Arc, Clarity, Bifrost, RAD, Studio Console,
   AdTech Insights, ads.txt), ranked first. Top-3 hit rate 54.0% → 55.4% on 904 recently completed PE tickets
@@ -852,7 +861,8 @@ Each candidate is scored for each ticket:
 
 | Signal | How |
 | --- | --- |
-| Domain experience | Recent completed (1.0) and active (0.5) tickets in the ticket's primary domain, halving every 120 days. Domains are tagged from the title, the **description** and human comments (`domains.ticket_text`; 97% of recently completed PE tickets get a domain) |
+| Domain experience | Recent completed (1.0) and active (0.5) tickets in **every domain on the ticket**, halving every 120 days: the primary domain counts in full, the others at half, and a *hub* domain (tagged on more than 10% of tickets, like GitLab, Terraform or GCP Core) only counts when it is the primary. Domains are tagged from the title, the **description** and human comments (`domains.ticket_text`; 97% of recently completed PE tickets get a domain) |
+| Similar past tickets | Credit (3× weight) for finishing the 10 most similar earlier tickets, matched on title and description (TF-IDF), by similarity and recency. Tickets from the **same requester are left out**: a requester's tickets read alike and tend to go to the same person, so counting them would copy routing habit (a requester alone "predicts" 75% of top-3s in the back-test) and lock in requesters who lean on one engineer. Works for tickets with no domain; the reason says "finished similar work, e.g. DEVOPS-123". `reports/expertise_model.py` |
 | Availability and SLA fit | The Backlog queue simulation with the ticket added to the candidate's queue in ATC order, after their In Progress work, at their own speed for that priority. Gives a likely start and a P85 finish, and whether that finish beats the SLA due date (or, with no Target start yet, whether the work fits within the SLA) |
 | Load | A penalty when someone already holds 1.3× their usual WIP, and a smaller one for each ticket the plan has already given them |
 
@@ -886,8 +896,10 @@ page, so accepted changes are made by hand in both files (snippets are provided)
   current team, rank the team on domain experience from work finished **before** the ticket was created, and check
   whether the person who did it is in the top 3. Compared with a no-domain baseline (the 3 busiest people at the
   time), with a hit rate per domain (lowest first: where the domains help least). Availability isn't replayed, so it
-  scores the domain part of the suggestions only. As of 2026-11-19: **55.4%** top-3 against a 45.8% baseline (904
-  tickets).
+  scores the experience part of the suggestions only (the same scoring as the plan: all domains plus similar
+  tickets). As of 2026-11-24: **58.1%** top-3 (30.3% first choice) against a 44.6% baseline (905 tickets); the
+  primary-domain-only scoring used before scored 55.1%. The keyword, split and hidden-expertise back-tests below
+  still score the primary domain only, since they test tagging changes.
 - **Keywords to add to existing domains** (`reports/domain_suggestions.py`): words and phrases from the title and
   description of DEVOPS and CAR tickets (last 12 months) that no domain matches, whose tickets mostly sit in one
   domain (precision ≥ 70%, lift ≥ 3). Each domain's additions are **back-tested**; *Domain Effect* is how many recent
@@ -904,6 +916,26 @@ page, so accepted changes are made by hand in both files (snippets are provided)
 
 Results are computed once per fetch and cached; grouping and naming are deterministic. Review the suggestions with
 judgement: a term can help in the back-test by chance, and broad words also re-label tickets on the Intake page.
+
+### Comparing ways of scoring experience
+
+`reports/assignment_experiments.py` and `docs/assignment_experiments/run.py` (read-only; `--save-issues` keeps the
+fetched tickets so re-runs take seconds) back-test other scorings with the same rules as the scorecard and compare
+them ticket by ticket with today's (wins, losses, sign-test p-value). Findings, last 90 days (905 tickets; the
+weights were tried, not tuned, so expect a gain of about +2 to +3 points, not exactly 3):
+
+| Scoring | Top-3 hit |
+| --- | --- |
+| Primary domain only (before 2026-11-24) | 55.1% |
+| All domains, hub domains only as primary | 56.5% (p = 0.08) |
+| **All domains + similar tickets from other requesters (now)** | **58.0%** (better on 39 tickets, worse on 13, p < 0.001) |
+| Credit for related domains (co-occurrence) | 54–55%: no help |
+| Similar tickets including the same requester | 65.3%: mostly routing habit, not used |
+| The requester alone | 74.7%: why the same requester is left out |
+
+Domain families built from co-occurrence (Louvain, hubs excluded) group some domains well (Airflow + Composer,
+Route53 + Fastly + CloudFront, the Applications) and others badly, and sharing credit between them didn't help.
+Hand-written families (Kubernetes ↔ GKE ↔ EKS) are the next step if the scorecard's lowest domains stay low.
 
 ### Assigning in Jira (safe mode)
 

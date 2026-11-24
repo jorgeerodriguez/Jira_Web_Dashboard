@@ -192,3 +192,137 @@ def test_application_map_uses_the_applications_domains():
     apps = sl.application_map(pd.DataFrame(rows))["apps_df"].set_index("Application")
     assert apps.loc["Vader", "Source"] == "Domain" and apps.loc["Vader", "Main Person"] == "Jo"
     assert apps.loc["Vader", "Tickets"] == 4
+
+
+# ── Experiments: other ways of scoring experience ───────────────────────────────
+
+def test_primary_variant_reproduces_the_scorecard_back_test():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import assignment_experiments as ex
+    from reports.assignment_report import domain_accuracy
+    today = pd.Timestamp("2026-11-17")
+    people = ["Ana", "Ben", "Cy", "Dee", "Eve", "Fay"]
+    history = [_done(f"H{i}", "Ana", "Fastly", "2026-01-05", "2026-01-10") for i in range(3)]
+    history += [_done(f"B{i}", p, "GKE", "2026-01-05", "2026-01-12") for i, p in enumerate(["Ben", "Cy", "Dee", "Eve"] * 3)]
+    recent = [_done("R1", "Ana", "Fastly", "2026-11-01", "2026-11-05"), _done("R2", "Eve", "Fastly", "2026-11-01", "2026-11-06"),
+              _done("R3", "Ben", None, "2026-11-01", "2026-11-07"), _done("R5", "Fay", "Looker", "2026-10-01", "2026-10-20"),
+              _done("R4", "Fay", "Looker", "2026-11-02", "2026-11-08")]
+    t = pd.DataFrame(history + recent)
+    ours = ex.backtest(t, today, people, ex.primary, days=90)
+    theirs = domain_accuracy(t, today, people, days=90)
+    assert ours["n"] == theirs["n"] and ours["hit"] == pytest.approx(theirs["hit"]) and ours["first"] == pytest.approx(theirs["first"])
+
+
+def test_related_domains_share_credit_without_peeking_ahead():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import assignment_experiments as ex
+    today = pd.Timestamp("2026-11-17")
+    people = ["Ana", "Ben"]
+
+    def row(key, person, doms, created, closed):
+        return {"key": key, "assignee_name": person, "outcome": "Done", "domains": doms, "domain": doms[0] if doms else None,
+                "created_day": pd.Timestamp(created), "closed_day": pd.Timestamp(closed)}
+
+    # Airflow and Composer travel together (6 tickets, Ben's), plus unrelated filler so the pair beats chance.
+    old = [row(f"A{i}", "Ben", ["Airflow", "Composer"], "2026-01-02", "2026-01-09") for i in range(6)]
+    old += [row(f"F{i}", "Ana", ["Fastly"], "2026-01-02", "2026-01-09") for i in range(10)]
+    old += [row(f"X{i}", "Ana", [f"Other{i % 20}"], "2026-01-02", "2026-01-09") for i in range(80)]   # keeps the pair from being a hub
+    old += [row("C1", "Ana", ["Composer"], "2026-02-01", "2026-02-05")]       # Ana has one Composer ticket, Ben has six
+    test = [row("T1", "Ben", ["Airflow"], "2026-11-01", "2026-11-05")]
+    t = pd.DataFrame(old + test)
+    assert ex.backtest(t, today, people, ex.primary, days=30)["hit"] == 1.0   # Ben already has Airflow experience
+    # A ticket whose domain nobody has worked, but a related one (Composer) is covered by Ben and Ana:
+    t2 = pd.DataFrame(old + [row("T2", "Ben", ["Looker", "Composer"], "2026-11-01", "2026-11-05")])
+    assert ex.backtest(t2, today, people, ex.primary, days=30)["hit"] == 0.0
+    assert ex.backtest(t2, today, people, ex.all_domains, days=30)["hit"] == 1.0
+    # Relations only use tickets created before the test ticket: nothing from the future leaks in.
+    rel = ex.Relations([r["domains"] for r in old])
+    assert rel.of("Airflow").get("Composer", 0) > 0 and "Fastly" not in rel.of("Airflow")
+    # Composer work counts toward an Airflow ticket (related), and nothing counts toward Looker (no related domains).
+    prior = pd.DataFrame({"assignee_name": ["Ben"], "domains": ["Composer"], "w": [1.0]})
+    airflow = pd.Series({"domain": "Airflow", "domains": ["Airflow"]})
+    assert ex.related(1.0, 2)(airflow, prior, rel).get("Ben", 0) > 0.5
+    assert ex.primary(airflow, prior, rel).get("Ben", 0) == 0
+    assert ex.related(1.0, 2)(t2.iloc[-1], prior, rel).get("Ben", 0) == 0
+
+
+def test_hub_domains_are_related_to_nothing():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import assignment_experiments as ex
+    # "Hub" is on every ticket, so it would look tied to everything; Airflow and Composer are a real pair.
+    tagged = [["Hub", "Airflow", "Composer"]] * 6 + [["Hub", f"Other{i % 20}"] for i in range(94)]
+    rel = ex.Relations(tagged)
+    assert "Hub" in rel.hubs and rel.of("Hub") == {} and "Hub" not in rel.of("Airflow")
+    assert list(rel.of("Airflow")) == ["Composer"] and rel.of("Airflow", 1) == rel.of("Airflow")
+
+
+def test_domain_families_group_domains_that_travel_together():
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    pytest.importorskip("networkx")
+    from reports import assignment_experiments as ex
+    tagged = [["Airflow", "Composer"]] * 6 + [["Grafana", "Prometheus"]] * 5 + [[f"Other{i % 20}"] for i in range(80)]
+    fam = ex.domain_families(pd.DataFrame({"domains": tagged}))
+    groups = [set(x.split(" (")[0] for x in d.split(", ")) for d in fam["Domains"]]
+    assert {"Airflow", "Composer"} in groups and {"Grafana", "Prometheus"} in groups
+    assert all(not any(d.startswith("Other") for d in g) for g in groups)
+
+
+def test_similar_tickets_credit_the_person_who_did_alike_work_before():
+    pytest.importorskip("sklearn")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import assignment_experiments as ex
+    people = ["Ana", "Ben"]
+
+    def row(key, person, summary, created, closed):
+        return {"key": key, "assignee_name": person, "outcome": "Done", "summary": summary, "domains": [], "domain": None,
+                "created_day": pd.Timestamp(created), "closed_day": pd.Timestamp(closed)}
+
+    rows = [row(f"A{i}", "Ana", f"Rotate expired certificate for the billing proxy {i}", "2026-01-02", "2026-01-09") for i in range(4)]
+    rows += [row(f"B{i}", "Ben", f"Tune slow BigQuery dashboard query {i}", "2026-01-02", "2026-01-09") for i in range(4)]
+    rows += [row("T1", "Ana", "Rotate expired certificate for the checkout proxy", "2026-11-01", "2026-11-05"),
+             row("T2", "Ana", "Rotate expired certificate for the checkout proxy", "2025-12-01", "2025-12-05")]  # nothing before it
+    t = pd.DataFrame(rows)
+    texts = pd.Series([ex.early_text(r) for _, r in t.iterrows()], index=t["key"])
+    model = ex.SimilarTickets(t, texts, people)
+    credit = model.credit(t[t["key"] == "T1"].iloc[0], 10)
+    assert credit.idxmax() == "Ana" and credit.get("Ben", 0) < credit["Ana"]
+    assert model.credit(t[t["key"] == "T2"].iloc[0], 10).empty          # only earlier finished work counts
+    today = pd.Timestamp("2026-11-17")
+    assert ex.backtest(t, today, people, ex.similar(model, 10), days=30)["hit"] == 1.0      # no domains needed
+    assert ex.backtest(t, today, people, ex.primary, days=30)["hit"] == 0.0
+
+
+def test_similar_tickets_can_leave_out_the_same_requester():
+    pytest.importorskip("sklearn")
+    pytest.importorskip("plotly")
+    pytest.importorskip("holidays")
+    from reports import assignment_experiments as ex
+    people = ["Ana", "Ben"]
+
+    def row(key, person, reporter, created, closed):
+        return {"key": key, "assignee_name": person, "reporter_name": reporter, "outcome": "Done", "domains": [], "domain": None,
+                "summary": "Rotate expired certificate for the billing proxy", "created_day": pd.Timestamp(created),
+                "closed_day": pd.Timestamp(closed)}
+
+    rows = [row(f"A{i}", "Ana", "Req1", "2026-01-02", "2026-01-09") for i in range(3)]      # Req1's tickets go to Ana
+    rows += [row(f"B{i}", "Ben", "Req2", "2026-01-02", "2026-01-09") for i in range(2)]
+    rows += [row("T1", "Ana", "Req1", "2026-11-01", "2026-11-05")]
+    t = pd.DataFrame(rows)
+    texts = pd.Series([ex.early_text(r) for _, r in t.iterrows()], index=t["key"])
+    filler = pd.Series([f"Unrelated {w} request" for w in ["alpha", "beta", "gamma", "delta", "kappa", "sigma"] * 2] * 1,
+                       index=[f"Z{i}" for i in range(12)])
+    t = pd.concat([t, pd.DataFrame({"key": filler.index, "assignee_name": "Ben", "reporter_name": "Req3", "outcome": "Done",
+                                    "domains": [[] for _ in filler], "domain": None, "created_day": pd.Timestamp("2026-01-02"),
+                                    "closed_day": pd.Timestamp("2026-01-09")})], ignore_index=True)
+    texts = pd.concat([texts, filler])
+    model = ex.SimilarTickets(t, texts, people)
+    test = t[t["key"] == "T1"].iloc[0]
+    assert model.credit(test, 10).idxmax() == "Ana"
+    assert model.credit(test, 10, other_requesters=True).index.tolist() == ["Ben"]     # Req1's own history is ignored
+    assert ex.paired({"per_ticket": pd.Series({"a": True, "b": False, "c": False})},
+                     {"per_ticket": pd.Series({"a": True, "b": True, "c": False})}) == {"b_only": 1, "a_only": 0, "p": 1.0}
